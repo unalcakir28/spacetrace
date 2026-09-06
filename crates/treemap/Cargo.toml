@@ -1,0 +1,15 @@
+[package]
+name = "spacetrace-treemap"
+description = "Squarified treemap layout with level-of-detail, for spacetrace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+spacetrace-scan-core.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

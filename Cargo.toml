@@ -6,6 +6,7 @@ members = [
     "crates/diff",
     "crates/cli",
     "crates/agent",
+    "crates/treemap",
 ]
 
 [workspace.package]
@@ -19,6 +20,7 @@ repository = "https://github.com/unalcakir28/spacetrace"
 spacetrace-scan-core = { path = "crates/scan-core", version = "0.1.0" }
 spacetrace-store = { path = "crates/store", version = "0.1.0" }
 spacetrace-diff = { path = "crates/diff", version = "0.1.0" }
+spacetrace-treemap = { path = "crates/treemap", version = "0.1.0" }
 
 anyhow = "1"
 thiserror = "2"
