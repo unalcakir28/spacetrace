@@ -1,14 +1,14 @@
 #!/bin/sh
 # Install the spacetrace agent (and CLI) from a GitHub release.
 #
-#   curl -fsSL https://raw.githubusercontent.com/unalcakir/spacetrace/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/unalcakir28/spacetrace/main/install.sh | sh
 #
 # Deliberately POSIX sh and deliberately boring: this runs on NAS boxes whose
 # shell is busybox ash. It installs binaries and prints what to do next; it does
 # not enable services or write config behind your back.
 set -eu
 
-REPO="unalcakir/spacetrace"
+REPO="unalcakir28/spacetrace"
 VERSION="${SPACETRACE_VERSION:-latest}"
 BIN_DIR="${SPACETRACE_BIN_DIR:-/usr/local/bin}"
 

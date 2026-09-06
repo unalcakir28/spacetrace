@@ -40,7 +40,7 @@ ARCHITECTURE — is English.
 Requires Rust 1.85+ ([rustup.rs](https://rustup.rs)):
 
 ```bash
-git clone https://github.com/unalcakir/spacetrace && cd spacetrace
+git clone https://github.com/unalcakir28/spacetrace && cd spacetrace
 cargo build --release
 ./target/release/spacetrace --help
 ```

@@ -1,6 +1,6 @@
 [Unit]
 Description=spacetrace disk usage agent
-Documentation=https://github.com/unalcakir/spacetrace
+Documentation=https://github.com/unalcakir28/spacetrace
 After=network-online.target
 Wants=network-online.target
 

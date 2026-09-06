@@ -12,7 +12,7 @@ being able to do damage, not by promising it won't.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/unalcakir/spacetrace/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/unalcakir28/spacetrace/main/install.sh | sh
 ```
 
 Or build it: `cargo build --release --bin spacetrace-agent`.
@@ -122,7 +122,7 @@ docker run -d --name spacetrace \
   -v spacetrace-data:/var/lib/spacetrace \
   -v /etc/spacetrace:/etc/spacetrace:ro \
   -p 7878:7878 \
-  ghcr.io/unalcakir/spacetrace
+  ghcr.io/unalcakir28/spacetrace
 ```
 
 ## Use it from the CLI
