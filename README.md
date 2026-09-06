@@ -10,14 +10,21 @@ Aynı ikili masaüstünde, sunucuda, NAS'ta ve konteynerde çalışır.
 
 ## Durum
 
-Faz 1 (çekirdek + CLI) çalışıyor. Yol haritası:
-
 | Faz | Kapsam | Durum |
 |-----|--------|-------|
 | 1 | Tarayıcı, SQLite anlık görüntü, diff, CLI | ✅ çalışıyor |
-| 2 | Ajan (`serve` / `push`), uzak kaynaklar, Docker imajı | ⏳ sırada |
+| 2 | Ajan (`serve` / `push`), uzak kaynaklar, Docker imajı | ⏳ sıradaki iş |
 | 3 | Tauri masaüstü: treemap, uzak kaynak gezgini, diff görünümü | ⏳ |
 | 4 | Merkez servis: çoklu makine panosu, büyüme uyarıları | ⏳ |
+
+## Belgeler
+
+| Belge | İçerik |
+|-------|--------|
+| [docs/WHY.md](docs/WHY.md) | Neden bu proje var: çıkış noktası, pazar boşluğu, hedef kullanıcı, kapsam dışı olanlar |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Fazlar, çıkış kriterleri, sürüm hedefleri |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Kodun nasıl ve neden böyle kurulduğu, teknoloji kararları, bilinen sınırlar |
+| [TODO.md](TODO.md) | Canlı yapılacaklar listesi ve açık kararlar |
 
 ## Kurulum
 
