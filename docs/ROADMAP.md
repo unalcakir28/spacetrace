@@ -36,8 +36,9 @@ karşılaştırılabiliyor.
 çalışır; tarar, saklar, isteyene verir.
 
 - `agent scan` — tek seferlik tarama, snapshot dosyasına yaz
-- `agent serve` — HTTP/gRPC servisi: snapshot listesi, snapshot indirme,
-  tetiklenen tarama; token ile kimlik doğrulama, opsiyonel mTLS
+- `agent serve` — HTTP+JSON servisi (axum, bkz. [DECISIONS.md](DECISIONS.md) K3):
+  snapshot listesi, snapshot indirme, tetiklenen tarama; bearer token ile kimlik
+  doğrulama, opsiyonel TLS
 - `agent push` — snapshot'ı bir merkeze veya başka bir ajana gönder
 - Ajanın kendi zamanlayıcısı (cron ifadesi) — NAS'ta systemd/cron kurcalamamak için
 - Dağıtım: statik ikili (musl), Docker imajı, systemd unit dosyası,

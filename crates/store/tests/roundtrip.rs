@@ -156,3 +156,354 @@ fn ncdu_export_is_valid_json_with_the_expected_shape() {
         .unwrap();
     assert_eq!(a["asize"], 1000);
 }
+
+// ---------------------------------------------------------- snapshot export
+
+/// The exported file is what the agent puts on the wire, so it has to be
+/// openable on its own and carry the original scan's metadata unchanged.
+#[test]
+fn an_exported_snapshot_is_a_standalone_database() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("snap.sqlite");
+
+    let mut store = Store::open(out_dir.path().join("main.sqlite")).unwrap();
+    let id = store.save(&tree, &stats, "srv1", Some("nightly")).unwrap();
+    let original = store.scan(id).unwrap().unwrap();
+
+    store.export_snapshot(id, &out).unwrap();
+
+    let exported = Store::open(&out).unwrap();
+    let scans = exported.list().unwrap();
+    assert_eq!(scans.len(), 1, "export must hold exactly the one scan");
+
+    let (loaded, meta) = exported.load(id).unwrap();
+    assert_eq!(meta.id, original.id);
+    assert_eq!(meta.host, "srv1");
+    assert_eq!(meta.label.as_deref(), Some("nightly"));
+    assert_eq!(
+        meta.started_at, original.started_at,
+        "timestamp must survive"
+    );
+    assert_eq!(meta.duration_ms, original.duration_ms);
+    assert_eq!(meta.scanner_version, original.scanner_version);
+    assert_eq!(loaded.len(), tree.len());
+    assert_eq!(loaded.total_size(), tree.total_size());
+    assert_eq!(loaded.total_alloc(), tree.total_alloc());
+    for node in tree.iter() {
+        assert_eq!(tree.node(node).name, loaded.node(node).name);
+        assert_eq!(tree.node(node).size, loaded.node(node).size);
+    }
+}
+
+#[test]
+fn exporting_picks_out_one_scan_from_a_database_holding_many() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("snap.sqlite");
+
+    let mut store = Store::open(out_dir.path().join("main.sqlite")).unwrap();
+    let first = store.save(&tree, &stats, "srv1", Some("first")).unwrap();
+    let second = store.save(&tree, &stats, "srv2", Some("second")).unwrap();
+    store.save(&tree, &stats, "srv3", Some("third")).unwrap();
+
+    store.export_snapshot(second, &out).unwrap();
+
+    let exported = Store::open(&out).unwrap();
+    let scans = exported.list().unwrap();
+    assert_eq!(scans.len(), 1);
+    assert_eq!(scans[0].label.as_deref(), Some("second"));
+    assert!(exported.scan(first).unwrap().is_none());
+}
+
+#[test]
+fn exporting_over_an_existing_file_replaces_it_rather_than_merging() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("snap.sqlite");
+
+    let mut store = Store::open(out_dir.path().join("main.sqlite")).unwrap();
+    let first = store.save(&tree, &stats, "srv1", Some("first")).unwrap();
+    let second = store.save(&tree, &stats, "srv2", Some("second")).unwrap();
+
+    store.export_snapshot(first, &out).unwrap();
+    store.export_snapshot(second, &out).unwrap();
+
+    let exported = Store::open(&out).unwrap();
+    let scans = exported.list().unwrap();
+    assert_eq!(scans.len(), 1, "the earlier export must not linger");
+    assert_eq!(scans[0].label.as_deref(), Some("second"));
+}
+
+#[test]
+fn exporting_an_unknown_scan_fails_without_leaving_a_file() {
+    let out_dir = tempfile::tempdir().unwrap();
+    let out = out_dir.path().join("snap.sqlite");
+    let store = Store::open(out_dir.path().join("main.sqlite")).unwrap();
+
+    assert!(store.export_snapshot(999, &out).is_err());
+    assert!(
+        !out.exists(),
+        "a failed export must not leave a stub behind"
+    );
+}
+
+/// The connection has to survive a failed export, because the agent keeps
+/// serving from it afterwards.
+#[test]
+fn the_store_is_still_usable_after_a_failed_export() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let out_dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(out_dir.path().join("main.sqlite")).unwrap();
+    let id = store.save(&tree, &stats, "srv1", None).unwrap();
+
+    assert!(store
+        .export_snapshot(999, &out_dir.path().join("a.sqlite"))
+        .is_err());
+
+    let good = out_dir.path().join("b.sqlite");
+    store.export_snapshot(id, &good).unwrap();
+    assert_eq!(Store::open(&good).unwrap().list().unwrap().len(), 1);
+}
+
+// ------------------------------------------------------------ per-target prune
+
+#[test]
+fn pruning_one_target_leaves_other_targets_alone() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let mut store = Store::open_in_memory().unwrap();
+
+    for _ in 0..5 {
+        store.save(&tree, &stats, "srv1", None).unwrap();
+    }
+    for _ in 0..3 {
+        store.save(&tree, &stats, "srv2", None).unwrap();
+    }
+    let root = tree.root_path().to_string_lossy().into_owned();
+
+    let removed = store.prune_target(&root, "srv1", 2).unwrap();
+    assert_eq!(removed, 3);
+
+    let remaining = store.list().unwrap();
+    assert_eq!(remaining.iter().filter(|s| s.host == "srv1").count(), 2);
+    assert_eq!(
+        remaining.iter().filter(|s| s.host == "srv2").count(),
+        3,
+        "the other host's retention policy must not be applied"
+    );
+}
+
+#[test]
+fn pruning_a_target_keeps_the_newest_scans() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let mut store = Store::open_in_memory().unwrap();
+
+    let mut ids = Vec::new();
+    for _ in 0..4 {
+        ids.push(store.save(&tree, &stats, "srv1", None).unwrap());
+    }
+    let root = tree.root_path().to_string_lossy().into_owned();
+
+    store.prune_target(&root, "srv1", 2).unwrap();
+
+    assert!(store.scan(ids[0]).unwrap().is_none());
+    assert!(store.scan(ids[1]).unwrap().is_none());
+    assert!(store.scan(ids[2]).unwrap().is_some());
+    assert!(store.scan(ids[3]).unwrap().is_some());
+}
+
+#[test]
+fn pruning_a_target_with_fewer_scans_than_the_limit_removes_nothing() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let mut store = Store::open_in_memory().unwrap();
+    store.save(&tree, &stats, "srv1", None).unwrap();
+    let root = tree.root_path().to_string_lossy().into_owned();
+
+    assert_eq!(store.prune_target(&root, "srv1", 10).unwrap(), 0);
+    assert_eq!(store.list().unwrap().len(), 1);
+}
+
+// ---------------------------------------------------------- snapshot import
+
+/// A pushed snapshot must land in the receiver's history looking exactly like a
+/// scan it took itself, or diffing against it would compare the wrong things.
+#[test]
+fn an_imported_snapshot_keeps_its_identity_and_gets_a_local_id() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+
+    let mut sender = Store::open(work.path().join("sender.sqlite")).unwrap();
+    let sent = sender.save(&tree, &stats, "srv1", Some("nightly")).unwrap();
+    let original = sender.scan(sent).unwrap().unwrap();
+    let wire = work.path().join("wire.sqlite");
+    sender.export_snapshot(sent, &wire).unwrap();
+
+    // Give the receiver a scan of its own first, so ids genuinely collide.
+    let mut receiver = Store::open(work.path().join("receiver.sqlite")).unwrap();
+    receiver.save(&tree, &stats, "laptop", None).unwrap();
+
+    let imported = receiver.import_snapshot(&wire).unwrap();
+    assert_eq!(imported.len(), 1);
+
+    let meta = receiver.scan(imported[0]).unwrap().unwrap();
+    assert_eq!(meta.host, "srv1");
+    assert_eq!(meta.root, original.root);
+    assert_eq!(meta.started_at, original.started_at);
+    assert_eq!(meta.label.as_deref(), Some("nightly"));
+    assert_eq!(meta.total_size, original.total_size);
+    assert_eq!(meta.scanner_version, original.scanner_version);
+
+    // And the tree itself survived the round trip.
+    let (loaded, _) = receiver.load(imported[0]).unwrap();
+    assert_eq!(loaded.len(), tree.len());
+    assert_eq!(loaded.total_size(), tree.total_size());
+    for node in tree.iter() {
+        assert_eq!(tree.node(node).name, loaded.node(node).name);
+        assert_eq!(tree.rel_path(node), loaded.rel_path(node));
+    }
+    assert_eq!(receiver.list().unwrap().len(), 2);
+}
+
+#[test]
+fn importing_the_same_snapshot_twice_is_a_no_op() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+
+    let mut sender = Store::open(work.path().join("sender.sqlite")).unwrap();
+    let sent = sender.save(&tree, &stats, "srv1", None).unwrap();
+    let wire = work.path().join("wire.sqlite");
+    sender.export_snapshot(sent, &wire).unwrap();
+
+    let mut receiver = Store::open(work.path().join("receiver.sqlite")).unwrap();
+    assert_eq!(receiver.import_snapshot(&wire).unwrap().len(), 1);
+    assert_eq!(
+        receiver.import_snapshot(&wire).unwrap().len(),
+        0,
+        "a re-push must not duplicate the snapshot"
+    );
+    assert_eq!(receiver.list().unwrap().len(), 1);
+}
+
+/// Two hosts scanning the same path are different targets, not duplicates.
+#[test]
+fn snapshots_from_different_hosts_are_not_treated_as_duplicates() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+
+    let mut receiver = Store::open(work.path().join("receiver.sqlite")).unwrap();
+    for host in ["srv1", "srv2"] {
+        let mut sender = Store::open(work.path().join(format!("{host}.sqlite"))).unwrap();
+        let id = sender.save(&tree, &stats, host, None).unwrap();
+        let wire = work.path().join(format!("{host}-wire.sqlite"));
+        sender.export_snapshot(id, &wire).unwrap();
+        assert_eq!(receiver.import_snapshot(&wire).unwrap().len(), 1);
+    }
+    assert_eq!(receiver.list().unwrap().len(), 2);
+}
+
+#[test]
+fn importing_a_missing_file_fails_cleanly() {
+    let work = tempfile::tempdir().unwrap();
+    let mut receiver = Store::open(work.path().join("receiver.sqlite")).unwrap();
+    assert!(receiver
+        .import_snapshot(&work.path().join("nope.sqlite"))
+        .is_err());
+    // The connection must still work afterwards.
+    assert_eq!(receiver.list().unwrap().len(), 0);
+}
+
+/// The whole point of importing: the receiver can diff a pushed snapshot
+/// against a later one from the same machine.
+#[test]
+fn imported_snapshots_participate_in_target_lookups() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+    let root = tree.root_path().to_string_lossy().into_owned();
+
+    let mut receiver = Store::open(work.path().join("receiver.sqlite")).unwrap();
+    for n in 0..2 {
+        if n > 0 {
+            // started_at has one-second resolution and is part of the
+            // duplicate key, so two scans taken inside the same second are
+            // genuinely the same snapshot as far as import is concerned.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+        }
+        let mut sender = Store::open(work.path().join(format!("s{n}.sqlite"))).unwrap();
+        let id = sender.save(&tree, &stats, "srv1", None).unwrap();
+        let wire = work.path().join(format!("w{n}.sqlite"));
+        sender.export_snapshot(id, &wire).unwrap();
+        receiver.import_snapshot(&wire).unwrap();
+    }
+
+    let pair = receiver.last_two_for(&root, Some("srv1")).unwrap();
+    assert_eq!(pair.len(), 2, "both pushed snapshots must be comparable");
+    assert!(pair[0].started_at >= pair[1].started_at);
+}
+
+/// The load path is the trust boundary for any snapshot file, including one
+/// downloaded from an agent. A tampered arena must be an error, not a panic.
+#[test]
+fn a_corrupted_snapshot_is_rejected_rather_than_loaded() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("db.sqlite");
+
+    let id = {
+        let mut store = Store::open(&path).unwrap();
+        store.save(&tree, &stats, "srv1", None).unwrap()
+    };
+
+    // Point the root's children off the end of the arena, the way a truncated
+    // or hand-edited file would.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE entries SET children_len = 9999 WHERE scan_id = ?1 AND id = 0",
+        [id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let store = Store::open(&path).unwrap();
+    let err = store.load(id).unwrap_err();
+    let message = format!("{err:#}");
+    assert!(message.contains("not a usable tree"), "{message}");
+
+    // Metadata still reads, so `scans` can list a snapshot it cannot open.
+    assert!(store.scan(id).unwrap().is_some());
+}
+
+#[test]
+fn a_snapshot_whose_child_points_backwards_is_rejected() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("db.sqlite");
+
+    let id = {
+        let mut store = Store::open(&path).unwrap();
+        store.save(&tree, &stats, "srv1", None).unwrap()
+    };
+
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE entries SET children_start = 0, children_len = 1 WHERE scan_id = ?1 AND id = 0",
+        [id],
+    )
+    .unwrap();
+    drop(conn);
+
+    // Without the check this loops forever walking parent pointers.
+    assert!(Store::open(&path).unwrap().load(id).is_err());
+}

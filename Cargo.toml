@@ -5,6 +5,7 @@ members = [
     "crates/store",
     "crates/diff",
     "crates/cli",
+    "crates/agent",
 ]
 
 [workspace.package]
@@ -28,6 +29,16 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 clap = { version = "4", features = ["derive"] }
 humansize = "2"
 crossbeam-channel = "0.5"
+tempfile = "3"
+
+# Agent (phase 2). HTTP+JSON was chosen over gRPC; see docs/DECISIONS.md K3.
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "sync"] }
+toml = "1"
+zstd = "0.14"
+# webpki-roots rather than the system trust store: the agent ships as a static
+# binary onto NAS boxes whose CA bundle may be absent or years stale.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots", "json", "blocking"] }
 
 [profile.release]
 opt-level = 3

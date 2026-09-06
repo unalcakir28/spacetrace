@@ -11,4 +11,4 @@ mod tree;
 
 pub use meta::{EntryKind, RawMeta};
 pub use scan::{scan, ScanOptions, ScanProgress, ScanStats};
-pub use tree::{Node, NodeId, Tree};
+pub use tree::{Node, NodeId, Tree, TreeError};

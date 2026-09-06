@@ -5,14 +5,15 @@ karşılaştırarak **neyin büyüdüğünü** söyleyen bir araç. Rust workspa
 
 Bağlam okuması (kodda görünmeyen kararlar): [docs/WHY.md](docs/WHY.md) neden bu
 ürün, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) neden bu tasarım,
-[docs/ROADMAP.md](docs/ROADMAP.md) fazlar, [TODO.md](TODO.md) sıradaki iş ve açık
-kararlar. Bir özellik önerisini değerlendirirken WHY.md'deki **kapsam dışı**
-listesine bak.
+[docs/DECISIONS.md](docs/DECISIONS.md) kapanmış fazlar arası kararlar ve
+gerekçeleri, [docs/ROADMAP.md](docs/ROADMAP.md) fazlar, [TODO.md](TODO.md)
+sıradaki iş. Bir özellik önerisini değerlendirirken WHY.md'deki **kapsam dışı**
+listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye bak.
 
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 32 test, hepsi geçmeli
+cargo test --workspace                   # 107 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -45,13 +46,17 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 
 ## Kod ve depo alışkanlıkları
 
-- **Kod yorumları İngilizce, kullanıcıya görünen dizeler Türkçe.** (Arayüz
-  dilinin İngilizceye geçmesi açık bir karar — bkz. TODO.md.)
+- **Her şey İngilizce: kod yorumları, kullanıcıya görünen dizeler, `--help`
+  metinleri, hata mesajları.** i18n katmanı yok ve planlanmıyor (bkz.
+  [docs/DECISIONS.md](docs/DECISIONS.md) K1). Türkçe kalan tek yer: WHY,
+  ROADMAP, TODO, RESEARCH, DECISIONS ve bu dosya — bunlar gerekçe belgeleri.
 - Yorum *ne yaptığını* değil **neden öyle yaptığını** anlatır. Kodun kendisi ne
   yaptığını zaten söylüyor.
-- Bağımlılık eklemekte cimri ol. Şu an tüm workspace 26 crate; bir bağımlılık
-  eklemeden önce standart kütüphaneyle çözülüp çözülmediğine bak. Ajanın tek
-  statik ikili olarak NAS'a kurulabilmesi gerekiyor.
+- Bağımlılık eklemekte cimri ol. Ajanın tek statik ikili olarak NAS'a
+  kurulabilmesi gerekiyor; bir bağımlılık eklemeden önce standart kütüphaneyle
+  çözülüp çözülmediğine bak. Örnek: cron ayrıştırıcısı ve takvim aritmetiği
+  chrono yerine elle yazıldı (~200 satır), çünkü tek ihtiyaç "bir sonraki eşleşen
+  dakika"ydı. axum + tokio bilinçli bir istisna (bkz. DECISIONS K3).
 - Yeni bağımlılıklar `[workspace.dependencies]` içinde sürümlenir, crate'ler
   `foo.workspace = true` ile alır.
 - Commit mesajları Türkçe, gövde **neden** yapıldığını anlatır. Örnek için
@@ -65,19 +70,27 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 | `scan-core` | Tarama, ağaç modeli, platforma özel metadata. Hiçbir şeye bağlı değil. |
 | `store` | SQLite anlık görüntü deposu, ncdu uyumlu dışa aktarım |
 | `diff` | İki görüntüyü karşılaştırma, "suçlu klasör" tespiti |
-| `cli` | `spacetrace` ikilisi |
+| `cli` | `spacetrace` ikilisi (uzak kaynaklar dâhil) |
+| `agent` | `spacetrace-agent` ikilisi: zamanlayıcı + HTTP servisi |
 
-Bağımlılık yönü tek yönlü. Ajan (Faz 2) bu üçünü kullanacak, `cli`'ye
-bağlanmayacak.
+Bağımlılık yönü tek yönlü. Ajan (Faz 2) bu üçünü kullanır, `cli`'ye
+bağlanmaz.
 
-## Sıradaki iş: Faz 2 (ajan)
+## Sıradaki iş: Faz 3 (masaüstü)
 
-Ürünün farklılaştığı yer masaüstü treemap değil, **uzak makine + zaman ekseni**.
-Bu yüzden ajan görsel işlerden önce geliyor. Kırılım TODO.md'de.
+Faz 2 (ajan) çalışıyor: zamanlayıcı, HTTP servisi, push/pull, CLI `--remote`.
+Kalan iki çıkış kriteri yalnızca gerçek makinelerde yapılabilir (bkz. TODO.md).
 
-Faz 2'ye başlamadan TODO.md'nin başındaki **açık kararlar** bölümüne bak:
-arayüz dili, lisans modeli, ajan protokolü (HTTP mi gRPC mi), snapshot'ın telde
-nasıl taşınacağı. Sonradan değiştirmesi pahalı olanlar bunlar.
+Fazlar arası kararlar kapandı ([docs/DECISIONS.md](docs/DECISIONS.md)); yeniden
+açmadan önce oradaki gerekçeyi oku.
+
+Ajanın kodunda dikkat edilecekler:
+
+- Snapshot telde **ham SQLite**. `Store::export_snapshot` ATTACH ile tek taramayı
+  ayrı dosyaya kopyalar; `import_snapshot` kimliği yeniden atar ama host/root/
+  `started_at` üçlüsünü korur — yinelenme kontrolü bu üçlüye dayanıyor.
+- Bir kök aynı anda yalnızca bir kez taranır (`Runner::try_claim`, HTTP'de 409).
+- Zamanlayıcı UTC + sabit offset ile çalışır; saat dilimi veritabanı yok.
 
 ## Bilinen eksikler
 

@@ -105,9 +105,16 @@ TreeSize Personal $50, TreeSize Pro $49/yıl, SpaceObServer $600+/yıl.
 
 | Kademe | Kapsam | Fiyat fikri |
 |--------|--------|-------------|
-| Free | Masaüstü yerel analiz, CLI, SSH ile tek makine, yerel geçmiş | $0 |
-| Pro | Sınırsız ajan, zamanlanmış snapshot, diff/trend, duplicate | $29–39 kalıcı veya $19/yıl |
+| Free | CLI, **ajan** (sınırsız), yerel geçmiş, SSH ile tek makine | $0 |
+| Pro | Masaüstü uygulaması: treemap, uzak kaynak gezgini, diff/zaman çizelgesi, duplicate | $29–39 kalıcı veya $19/yıl |
 | Team | Merkez servis, fleet panosu, uyarılar | $5–8/sunucu/ay |
+
+**Ajan neden Free'de?** İlk taslakta Pro kademesi "sınırsız ajan" idi. Ajan
+Apache-2.0 açık kaynak olduğu için (bkz. [DECISIONS.md](DECISIONS.md) K2) böyle
+bir sınır uygulanamaz — herkes derleyip istediği kadar çalıştırır. Sınırı
+uygulanabilir kılmak ajanı kapatmayı gerektirirdi ve bu, aşağıdaki "ajan güven
+kazanamaz" kaybetme senaryosunu doğrudan tetiklerdi. Para, kullanıcının kolayca
+yeniden yazamayacağı ve ikili olarak dağıtılan şeyden gelir: masaüstü ve merkez.
 
 Bunlar doğrulanmamış hipotez; ilk 100 kullanıcıyla test edilecek. Bir not:
 JAM Software 2025'te TreeSize'ı aboneliğe çevirdi ve Temmuz 2026'da kalıcı lisans

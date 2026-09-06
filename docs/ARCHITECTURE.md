@@ -1,107 +1,114 @@
-# Mimari
+# Architecture
 
-Bu belge kodun nasıl kurulduğunu ve **neden öyle kurulduğunu** anlatır. Ürünün
-gerekçesi için [WHY.md](WHY.md), plan için [ROADMAP.md](ROADMAP.md).
+This document describes how the code is structured and **why it's structured
+that way**. For the product rationale, see [WHY.md](WHY.md); for the plan,
+see [ROADMAP.md](ROADMAP.md).
 
-## Genel şema
+## Overview
 
 ```
-┌──────────────────┐  ┌──────────────┐  ┌───────────────────┐
-│ Masaüstü (Tauri) │  │ CLI          │  │ Merkez (Faz 4)    │
-│ Faz 3            │  │ ✅ Faz 1     │  │ fleet panosu      │
-└────────┬─────────┘  └──────┬───────┘  └─────────┬─────────┘
-         │ süreç içi         │ doğrudan            │ HTTP
-         │                   │                     │
-         │            ┌──────┴──────────┐   ┌──────┴──────┐
-         │            │ Ajan (Faz 2)    │   │  Ajanlar    │
-         │            │ serve / push    │   │  n makine   │
-         │            └──────┬──────────┘   └─────────────┘
-┌────────┴──────────────────┴────────────────────────────────┐
-│  Rust çekirdeği — üç kabuk da aynı kodu kullanır           │
-│  scan-core · store · diff                                   │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────┐  ┌───────────┐  ┌─────────────────┐
+│ Desktop (Tauri) │  │ CLI       │  │ Hub (Phase 4)   │
+│ Phase 3         │  │ ✅ Phase 1 │  │ fleet dashboard │
+└───────┬─────────┘  └─────┬─────┘  └────────┬────────┘
+        │ in-process       │ direct          │ HTTP
+        │                  │                 │
+│                    ┌─────┴───────────┐   ┌─┴──────────┐
+│                    │ Agent (Phase 2) │   │ Agents     │
+│                    │ serve / push    │   │ n machines │
+│                    └─────┬───────────┘   └────────────┘
+┌───────┴──────────────────┴─────────────────────┐
+│ Rust core — all three shells use the same code │
+│ scan-core · store · diff                       │
+└────────────────────────────────────────────────┘
 ```
 
-Tek çekirdek, birden çok paket. Masaüstü uygulaması, ajan ve CLI aynı tarama ve
-karşılaştırma kodunu çalıştırır; aralarındaki fark yalnızca arayüz ve ağ
-katmanıdır. Referans olarak Czkawka'nın `czkawka_core`'u CLI, GTK4 ve Slint
-arayüzleri tarafından aynı şekilde paylaşılıyor.
+One core, multiple packages. The desktop app, the agent, and the CLI all run
+the same scan and comparison code; the only difference between them is the
+UI and network layer. As a reference point, Czkawka's `czkawka_core` is
+shared the same way across its CLI, GTK4, and Slint interfaces.
 
-## Crate'ler
+## Crates
 
-| Crate | Sorumluluk | Bağımlı olduğu |
+| Crate | Responsibility | Depends on |
 |-------|------------|----------------|
-| `scan-core` | Dizin taraması, ağaç modeli, platforma özel arka uçlar | rayon |
-| `store` | SQLite anlık görüntü deposu, ncdu dışa aktarım | scan-core, rusqlite |
-| `diff` | İki anlık görüntüyü karşılaştırma | scan-core |
-| `cli` | `spacetrace` ikilisi | hepsi, clap |
+| `scan-core` | Directory scan, tree model, platform-specific backends | rayon |
+| `store` | SQLite snapshot store, ncdu export | scan-core, rusqlite |
+| `diff` | Comparing two snapshots | scan-core |
+| `cli` | The `spacetrace` binary | all of the above, clap |
 
-Bağımlılık yönü tek yönlü: `scan-core` hiçbir şeye bağlı değil, `store` ve `diff`
-yalnızca ona bakar. Ajan (Faz 2) bu üçünü kullanacak ve `cli`'ye bağlanmayacak.
+The dependency direction is one-way: `scan-core` depends on nothing, and
+`store` and `diff` only look toward it. The agent (Phase 2) will use all
+three and will not depend on `cli`.
 
-## Ağaç modeli: neden arena
+## Tree model: why an arena
 
-Düğüm başına `Vec<Child>` tutan bir ağaç, milyonlarca dosyada hem bellek hem de
-işaretçi takibi yüzünden pahalıdır. Bunun yerine tek bir `Vec<Node>` kullanılır
-ve düğümler **BFS sırasıyla** yerleştirilir. Bunun üç sonucu var:
+A tree that keeps a `Vec<Child>` per node is expensive at millions of files,
+both in memory and in pointer chasing. Instead, a single `Vec<Node>` is used,
+with nodes laid out in **BFS order**. This has three consequences:
 
-1. Bir düğümün çocukları **bitişik** bir indeks aralığındadır
-   (`children_start .. children_start + children_len`), yani düğüm başına ayrı
-   bir liste ayırmaya gerek yok.
-2. Her çocuk, ebeveyninden **büyük** bir indekse sahiptir. Alt ağaç toplamlarını
-   hesaplamak bu yüzden tek bir ters geçiştir (`aggregate`), özyineleme yok.
-3. Treemap yerleşimi ve çizimi diziyi sırayla tarar — önbellek dostu.
+1. A node's children occupy a **contiguous** index range
+   (`children_start .. children_start + children_len`), so there is no need
+   to allocate a separate list per node.
+2. Every child has a **larger** index than its parent. Computing subtree
+   totals is therefore a single reverse pass (`aggregate`), with no
+   recursion.
+3. Treemap layout and rendering scan the array in order — cache-friendly.
 
-Referans: ncdu 2 dosya başına ~25 bayt ile 3.8M dosyayı 162 MB'da tutuyor; hedef
-bu mertebe.
+Reference point: ncdu 2 holds 3.8M files in 162 MB, about ~25 bytes per
+file; that's the order of magnitude we're targeting.
 
-## Tarama
+## Scan
 
-Yürüyüş **paralel DFS**'tir: bir dizinin içeriği tek iş parçacığında okunur
-(çekirdek ardışık `readdir` için en hızlıdır), sonra alt dizinler rayon
-havuzuna dağıtılır. Böylece SSD meşgul tutulurken BFS kuyruğunun bellek şişmesi
-yaşanmaz.
+The tree walk is **parallel DFS**: a directory's contents are read on a
+single thread (the kernel is fastest for sequential `readdir`), then
+subdirectories are dispatched to the rayon pool. This keeps the SSD busy
+without the memory bloat of a BFS queue.
 
-Kararlar:
+Decisions:
 
-- **Sembolik bağlantılar izlenmez.** `DirEntry::metadata()` bağlantıyı takip
-  etmez; bağlantı kendi boyutuyla sayılır. Bu hem döngü riskini sıfırlar hem de
-  bir ağacın iki kez sayılmasını engeller.
-- **Sabit bağlantılar bir kez sayılır.** `nlink > 1` olan dosyalar için
-  `(dev, ino)` çifti paylaşımlı bir kümede tutulur; ikinci kez görülen kopya
-  ağaçta görünür kalır ama 0 bayt katkı yapar. `--no-dedupe` ile kapatılabilir.
-- **Hatalar yutulmaz.** Okunamayan her yol sayılır, ilk 64 tanesi yolu ve hata
-  mesajıyla saklanır. Bir izin hatası taramayı durdurmaz.
-- **`one_filesystem`** kök ile aynı `dev` değerine sahip olmayan dizinlere
-  inmez (`du -x` davranışı).
+- **Symlinks are not followed.** `DirEntry::metadata()` does not follow the
+  link; the link is counted at its own size. This both eliminates cycle risk
+  and prevents a tree from being counted twice.
+- **Hardlinks are counted once.** For files with `nlink > 1`, the
+  `(dev, ino)` pair is kept in a shared set; a copy seen a second time stays
+  visible in the tree but contributes 0 bytes. This can be disabled with
+  `--no-dedupe`.
+- **Errors are not swallowed.** Every unreadable path is counted, and the
+  first 64 are stored with their path and error message. A permission error
+  does not stop the scan.
+- **`one_filesystem`** does not descend into directories that don't share
+  the root's `dev` value (`du -x` behavior).
 
-## Boyut anlambilimi
+## Size semantics
 
-İki ayrı büyüklük raporlanır ve asla karıştırılmaz:
+Two separate sizes are reported, and they are never conflated:
 
-| Alan | Anlamı | Karşılığı |
+| Field | Meaning | Equivalent |
 |------|--------|-----------|
-| `size` | Mantıksal boyut — yalnızca **dosya** baytları | `du -sb` |
-| `alloc` | Diskte tahsis edilen bloklar, **dizin blokları dâhil** | `du -s --block-size=1` |
+| `size` | Logical size — **file** bytes only | `du -sb` |
+| `alloc` | Allocated blocks on disk, **including directory blocks** | `du -s --block-size=1` |
 
-Dizinlerin kendi inode boyutu (`len()`, tipik olarak 4096) mantıksal toplama
-**girmez**: kullanıcı "bu klasördeki dosyalar ne kadar yer tutuyor" beklerken
-dizin defterlerinin eklenmesi rakamı açıklanamaz kılar. Ama bu bloklar diskte
-gerçekten yer kapladığı için `alloc`'a dâhildir.
+A directory's own inode size (`len()`, typically 4096) does **not** enter
+the logical total: when the user expects "how much space do the files in
+this folder take up," adding in the directory's own bookkeeping blocks
+would make the number impossible to explain. But because those blocks
+genuinely take up space on disk, they are included in `alloc`.
 
-Unix'te `alloc`, `st_blocks * 512` üzerinden hesaplanır (POSIX'e göre birim her
-zaman 512 bayttır, dosya sisteminin blok boyutundan bağımsız). Bu sayede seyrek
-(sparse) dosyalar mantıksal boyutlarından az, küçük dosyalar ise blok
-yuvarlaması yüzünden çok görünür — ikisi de doğrudur.
+On Unix, `alloc` is computed as `st_blocks * 512` (per POSIX, the unit is
+always 512 bytes, independent of the filesystem's block size). This is why
+sparse files can show up smaller than their logical size, while small files
+show up larger due to block rounding — both are correct.
 
-**Doğrulama:** `/usr` (141k dosya), `/usr/share` ve `/etc` üzerinde her iki
-toplam da `du` ile tam olarak eşleşiyor. Bu bir test koşuludur.
+**Validation:** on `/usr` (141k files), `/usr/share`, and `/etc`, both
+totals match `du` exactly. This is a test case.
 
-## Anlık görüntü deposu
+## Snapshot store
 
-Arena düzeni SQLite'a **olduğu gibi** yazılır: `entries.id` düğümün indeksidir,
-`children_start`/`children_len` korunur. Sonuç: bir anlık görüntüyü yüklemek
-`ORDER BY id` ile tek sıralı sorgudur, ağaç yeniden kurulmaz.
+The arena layout is written to SQLite **as-is**: `entries.id` is the node's
+index, and `children_start`/`children_len` are preserved. The result:
+loading a snapshot is a single ordered query with `ORDER BY id` — the tree
+is never rebuilt.
 
 ```sql
 scans(id, host, root, started_at, duration_ms, total_size, total_alloc,
@@ -111,100 +118,106 @@ entries(scan_id, id, parent_id, name, kind, size, alloc, mtime, nlink,
         files, dirs, children_start, children_len)   -- WITHOUT ROWID
 ```
 
-`host` + `root` bir **hedefi** tanımlar; karşılaştırma ve `prune` bu ikili
-üzerinden çalışır. `PRAGMA user_version` şema sürümünü tutar; daha yeni bir
-sürümle yazılmış veritabanı açılmaz, sessizce yanlış okunmaz.
+`host` + `root` defines a **target**; comparison and `prune` operate on this
+pair. `PRAGMA user_version` holds the schema version; a database written by
+a newer version is not opened — it is never silently misread.
 
-Ayrıca ncdu uyumlu JSON dışa aktarımı vardır. Sebep pratik: sunucudan aldığın
-bir kaydı henüz masaüstü uygulaması yokken `ncdu -f scan.json` ile
-inceleyebilmek.
+There is also an ncdu-compatible JSON export. The reason is practical: being
+able to inspect a recording pulled from a server with `ncdu -f scan.json`
+before the desktop app even exists.
 
-## Karşılaştırma: "suçlu klasör"
+## Comparison: the "culprit folder"
 
-Naif bir diff, değişen her yolu listeler — bir haftalık çalışmadan sonra binlerce
-satır. İşe yarayan soru "hangi yollar değişti" değil, **"yer nereye gitti"**.
+A naive diff lists every path that changed — thousands of lines after a
+week of work. The question that actually helps isn't "which paths changed,"
+it's **"where did the space go."**
 
-Algoritma kökten aşağı iner ve her dizinde şunu sorar: *bu değişimin neredeyse
-tamamını tek bir alt klasör mü açıklıyor?* Cevap evetse (varsayılan eşik %90) o
-klasöre inilir; hayırsa değişim gerçekten burada dağılmıştır ve bu seviye
-raporlanır. Yalnızca eklenen veya silinen ağaçlar tek satırda, en üst
-seviyelerinde bildirilir.
+The algorithm descends from the root and asks, at every directory: *does a
+single subfolder account for almost all of this change?* If yes (default
+threshold 90%), it descends into that folder; if no, the change is
+genuinely spread out at this level, and this level is reported. Only added
+or removed trees are reported as a single row, at their topmost level.
 
-Pratikte:
+In practice:
 
 ```
-   +40.1 MiB  büyüdü    42.9 MiB  app/logs/     ← app/ ve kök atlandı
-   +14.3 MiB  büyüdü    25.7 MiB  backups/
-    -1.9 MiB  silindi         0 B  uploads/      ← alt ağaç tek satır
+   +40.1 MiB  grew      42.9 MiB  app/logs/     ← app/ and the root were skipped
+   +14.3 MiB  grew      25.7 MiB  backups/
+    -1.9 MiB  removed         0 B  uploads/      ← subtree as a single row
 ```
 
-Çocuklar isme göre **merge-join** ile eşleştirilir (her iki taraf sıralanır),
-yani tüm ağacın hash haritası bellekte tutulmaz.
+Children are matched by name via a **merge-join** (both sides are sorted),
+so a hash map of the entire tree is never kept in memory.
 
-## Platforma özel arka uçlar
+## Platform-specific backends
 
-Şu an tek bir taşınabilir arka uç var (`read_dir` + `symlink_metadata`) ve
-metadata okuma `cfg` ile ayrılmış durumda. Planlanan hızlı yollar:
+Right now there is a single portable backend (`read_dir` +
+`symlink_metadata`), and metadata reading is split out via `cfg`. Planned
+fast paths:
 
-| Platform | Yöntem | Not |
+| Platform | Method | Note |
 |----------|--------|-----|
-| Windows | NTFS **MFT** doğrudan okuma; **USN journal** ile artımlı | Yönetici hakkı gerekir; ReFS'te MFT yok. Faz 3'te zorunlu: WizTree 2 TB'ı ~14 s'de tarıyor. |
-| Windows (yetkisiz) | `NtQueryDirectoryFileEx`, 64 KB buffer, `FileIdBothDirectoryInformation` | Boyut + file id tek çağrıda; hardlink dedupe için ek syscall gerekmez |
-| macOS | `getattrlistbulk` | Boyut/tarih gerektiğinde `readdir + lstat`'tan belirgin hızlı |
-| Linux | `getdents64` + `statx`, thread başına DFS | Mevcut yaklaşım zaten bu modelde |
+| Windows | Direct NTFS **MFT** read; incremental via the **USN journal** | Requires administrator privileges; ReFS has no MFT. Mandatory in Phase 3: WizTree scans 2 TB in ~14 s. |
+| Windows (unprivileged) | `NtQueryDirectoryFileEx`, 64 KB buffer, `FileIdBothDirectoryInformation` | Size + file id in a single call; no extra syscall needed for hardlink dedup |
+| macOS | `getattrlistbulk` | Noticeably faster than `readdir + lstat` when size/date is needed |
+| Linux | `getdents64` + `statx`, DFS per thread | The current approach already follows this model |
 
-`scan-core` içindeki `RawMeta::from_metadata` bu ayrımın sınırıdır; hızlı yollar
-aynı `RawMeta`'yı üreterek devreye girecek.
+`RawMeta::from_metadata` in `scan-core` is the boundary of this split; the
+fast paths will plug in by producing the same `RawMeta`.
 
-**Bilinen eksik:** Windows'ta `alloc` şu an mantıksal boyuta eşitleniyor ve
-hardlink tekilleştirme kapalı (`nlink = 1`). Gerçek değerler için
-`GetFileInformationByHandleEx` (FILE_STANDARD_INFO) ve `FileIdInfo` gerekiyor;
-kod içinde `TODO(win)` ile işaretli.
+**Known gap:** on Windows, `alloc` currently equals the logical size, and
+hardlink dedup is disabled (`nlink = 1`). Real values require
+`GetFileInformationByHandleEx` (FILE_STANDARD_INFO) and `FileIdInfo`; marked
+in the code with `TODO(win)`.
 
-## Neden bu teknoloji seçimleri
+## Why these technology choices
 
-**Rust.** Ajanın tek statik ikili olarak NAS'a ve konteynere kurulabilmesi
-gerekiyor; runtime bağımlılığı olmayan bir dil şart. Ayrıca düşük seviye
-dosya sistemi çağrıları (MFT, getattrlistbulk) için hazır crate ekosistemi en
-geniş burada.
+**Rust.** The agent needs to be deployable to a NAS or a container as a
+single static binary; a language with no runtime dependency is a
+requirement. It also has the widest ready-made crate ecosystem for
+low-level filesystem calls (MFT, getattrlistbulk).
 
-**Tauri v2 (Faz 3).** Mobil kapsamdan çıkınca Flutter'ın "beş platform tek kod"
-avantajı ortadan kalktı. Tauri masaüstünde olgun, kurulum dosyası 3–15 MB
-(Electron'da 50–150 MB), ve Rust çekirdeğini süreç içinde doğrudan çağırır —
-FFI köprüsü yok. Arayüz React/TS olduğu için mevcut web bilgisi doğrudan
-kullanılabilir. Riski Linux'taki WebKitGTK farklılıkları; treemap üç WebView'da
-da test edilmeli.
+**Tauri v2 (Phase 3).** Once mobile dropped out of scope, Flutter's "five
+platforms, one codebase" advantage went away. Tauri is mature on desktop,
+its installer is 3–15 MB (vs. 50–150 MB for Electron), and it calls the
+Rust core in-process, directly — no FFI bridge. Since the UI is React/TS,
+existing web knowledge carries over directly. The risk is WebKitGTK quirks
+on Linux; the treemap needs to be tested across all three WebViews.
 
-**Yedek plan: Avalonia 12 + .NET.** Rust maliyeti kabul edilemez bulunursa
-masaüstü ve ajan uçtan uca C# yazılabilir (NativeAOT ile tek ikili). Mimari ve
-ürün tanımı değişmez.
+**Fallback plan: Avalonia 12 + .NET.** If the cost of Rust turns out to be
+unacceptable, the desktop app and agent could be rewritten end-to-end in C#
+(a single binary via NativeAOT). The architecture and product definition
+would not change.
 
-**SQLite.** Anlık görüntüler dosya olarak taşınabilir olmalı (sunucudan `scp` ile
-al, yerelde aç). Snapshot diff'i bir sorguya dönüşür. Sunucu kurulumu gerekmez.
+**SQLite.** Snapshots need to be portable as a file (pull it from the
+server with `scp`, open it locally). A snapshot diff becomes a single
+query. No server setup is required.
 
-## Bilinen sınırlar ve teknik borç
+## Known limits and technical debt
 
-- Windows `alloc` ve hardlink desteği eksik (yukarıda).
-- btrfs/ZFS'te reflink, sıkıştırma ve dedup yüzünden ağaç yürüyüşü gerçek disk
-  kullanımını yanlış raporlar. Doğrusu için `btdu` gibi örnekleme gerekir;
-  şimdilik "dosya sistemi farkında mod" Faz 5'te.
-- APFS clone'ları henüz tekilleştirilmiyor (macOS'ta `alloc` şişebilir).
-- Tarama tüm ağacı bellekte tutar. 10M+ dosyalı köklerde bellek profili
-  ölçülmeli; gerekirse akışlı yazma eklenecek.
-- `Tree::rel_path` her çağrıda kökten yukarı yürür; derin ağaçlarda sıcak
-  döngüde kullanılmamalı.
-- Arayüz dizeleri Türkçe ve koda gömülü; i18n yok (bkz. ROADMAP, lansman öncesi
-  zorunlular).
+- Windows `alloc` and hardlink support is missing (see above).
+- On btrfs/ZFS, reflinks, compression, and dedup mean the tree walk
+  misreports actual disk usage. Getting it right requires sampling, like
+  `btdu` does; for now, a "filesystem-aware mode" is planned for Phase 5.
+- APFS clones are not yet deduplicated (`alloc` can be inflated on macOS).
+- The scan keeps the entire tree in memory. Memory profile needs to be
+  measured on roots with 10M+ files; streaming writes will be added if
+  needed.
+- `Tree::rel_path` walks up from the root on every call; it should not be
+  used in a hot loop on deep trees.
+- UI strings are in English and embedded in the code; no i18n layer is
+  planned — this is a deliberate scope decision, not debt (see
+  [DECISIONS.md](DECISIONS.md)).
 
-## Geliştirme
+## Development
 
 ```bash
-cargo test --workspace                       # 32 test
-cargo clippy --workspace --all-targets       # uyarısız olmalı
+cargo test --workspace                       # 32 tests
+cargo clippy --workspace --all-targets       # should be warning-free
 cargo fmt --all
 cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc
 ```
 
-Testler geçici dizinlerde gerçek dosya sistemi kullanır: sabit bağlantı,
-sembolik bağlantı, izin hatası, derinlik sınırı ve diff senaryoları dâhil.
-Yeni bir tarama davranışı eklerken `du` ile karşılaştırma testi de eklenmelidir.
+Tests use a real filesystem in temporary directories, including hardlink,
+symlink, permission-error, depth-limit, and diff scenarios. When adding new
+scan behavior, a comparison test against `du` should be added as well.

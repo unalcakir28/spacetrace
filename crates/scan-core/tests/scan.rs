@@ -225,3 +225,107 @@ extern "C" {
     #[link_name = "geteuid"]
     fn libc_geteuid() -> u32;
 }
+
+// ------------------------------------------------- untrusted snapshot loading
+
+/// A snapshot can arrive from another machine, so the arena invariants have to
+/// be checked rather than assumed. Each case here would otherwise panic on an
+/// out-of-range index or loop forever.
+mod untrusted {
+    use spacetrace_scan_core::{EntryKind, Node, Tree, TreeError};
+    use std::path::PathBuf;
+
+    fn node(parent: u32, children_start: u32, children_len: u32) -> Node {
+        Node {
+            parent,
+            name: "n".into(),
+            kind: EntryKind::Dir,
+            size: 0,
+            alloc: 0,
+            own_size: 0,
+            own_alloc: 0,
+            mtime: 0,
+            nlink: 1,
+            files: 0,
+            dirs: 0,
+            children_start,
+            children_len,
+        }
+    }
+
+    fn root(children_start: u32, children_len: u32) -> Node {
+        node(Tree::NO_PARENT, children_start, children_len)
+    }
+
+    #[test]
+    fn a_well_formed_arena_is_accepted() {
+        let nodes = vec![root(1, 2), node(0, 0, 0), node(0, 0, 0)];
+        let tree = Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap();
+        assert_eq!(tree.len(), 3);
+        assert_eq!(tree.children(tree.root()).count(), 2);
+    }
+
+    #[test]
+    fn an_empty_arena_is_rejected() {
+        assert_eq!(
+            Tree::from_parts_checked(vec![], PathBuf::from("/x")).unwrap_err(),
+            TreeError::Empty
+        );
+    }
+
+    #[test]
+    fn children_past_the_end_are_rejected() {
+        // Would index out of bounds on the first traversal.
+        let nodes = vec![root(1, 9), node(0, 0, 0)];
+        assert!(matches!(
+            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
+            TreeError::ChildrenOutOfBounds { .. }
+        ));
+    }
+
+    #[test]
+    fn children_pointing_backwards_are_rejected() {
+        // Would make a cycle: node 1's children include node 1.
+        let nodes = vec![root(1, 1), node(0, 1, 1)];
+        assert!(matches!(
+            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
+            TreeError::ChildrenNotAfterParent { .. }
+        ));
+    }
+
+    #[test]
+    fn a_node_pointing_at_itself_as_a_child_is_rejected() {
+        let nodes = vec![root(0, 1)];
+        assert!(matches!(
+            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
+            TreeError::ChildrenNotAfterParent { .. }
+        ));
+    }
+
+    #[test]
+    fn a_parent_pointer_that_is_not_before_its_child_is_rejected() {
+        // rel_path walks parent pointers upward; this would never terminate.
+        let nodes = vec![root(1, 1), node(2, 0, 0), node(1, 0, 0)];
+        assert!(matches!(
+            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
+            TreeError::ParentNotBeforeChild { .. }
+        ));
+    }
+
+    #[test]
+    fn a_root_claiming_a_parent_is_rejected() {
+        let nodes = vec![node(0, 0, 0)];
+        assert_eq!(
+            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
+            TreeError::RootHasParent
+        );
+    }
+
+    #[test]
+    fn a_childless_node_may_leave_children_start_at_zero() {
+        // children_len == 0 means children_start is meaningless, and the
+        // scanner does leave it at 0 — this must not be mistaken for a cycle.
+        let nodes = vec![root(1, 1), node(0, 0, 0)];
+        assert!(Tree::from_parts_checked(nodes, PathBuf::from("/x")).is_ok());
+    }
+}

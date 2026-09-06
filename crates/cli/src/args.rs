@@ -6,19 +6,28 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "spacetrace",
     version,
-    about = "Disk kullanımını tara, anlık görüntüle ve neyin büyüdüğünü gör",
-    long_about = "spacetrace bir diski veya klasörü tarar, sonucu bir SQLite anlık \
-görüntüsüne yazar ve iki anlık görüntüyü karşılaştırarak alanı neyin yediğini gösterir. \
-Aynı ikili sunucuda, NAS'ta ve konteynerde de çalışır."
+    about = "Scan disk usage, snapshot it, and see what grew",
+    long_about = "spacetrace scans a disk or folder, writes the result to a SQLite \
+snapshot, and compares two snapshots to show what is eating the space. The same binary \
+also runs on a server, a NAS and inside a container."
 )]
 pub struct Cli {
-    /// Anlık görüntü veritabanı (varsayılan: kullanıcı veri klasörü)
-    #[arg(long, global = true, value_name = "DOSYA")]
+    /// Snapshot database (default: user data directory)
+    #[arg(long, global = true, value_name = "FILE")]
     pub db: Option<PathBuf>,
 
-    /// Çıktıyı JSON olarak ver
+    /// Emit output as JSON
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Read snapshots from an agent instead of the local database.
+    /// Takes a URL, or the name of a remote in remotes.toml.
+    #[arg(long, global = true, value_name = "URL|NAME")]
+    pub remote: Option<String>,
+
+    /// Bearer token for --remote (defaults to remotes.toml, then SPACETRACE_TOKEN)
+    #[arg(long, global = true, value_name = "TOKEN")]
+    pub token: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -26,82 +35,95 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Bir yolu tara ve özeti yazdır
+    /// Scan a path and print a summary
     Scan(ScanArgs),
-    /// Bir anlık görüntüde veya taze taramada klasörleri boyuta göre listele
+    /// List folders by size, from a snapshot or a fresh scan
     Ls(LsArgs),
-    /// Kayıtlı anlık görüntüleri listele
+    /// List stored snapshots
     Scans,
-    /// İki anlık görüntüyü karşılaştır: ne büyüdü, ne küçüldü
+    /// Compare two snapshots: what grew, what shrank
     Diff(DiffArgs),
-    /// Bir anlık görüntüyü ncdu uyumlu JSON olarak dışa aktar
+    /// Export a snapshot as ncdu-compatible JSON
     Export(ExportArgs),
-    /// Hedef başına en yeni N anlık görüntü dışındakileri sil
+    /// Delete all but the newest N snapshots per target
     Prune(PruneArgs),
-    /// Bir anlık görüntüyü sil
+    /// Delete a snapshot
     Rm(RmArgs),
+    /// Copy a snapshot from a remote agent into the local database
+    Pull(PullArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct PullArgs {
+    /// Snapshot id on the remote (defaults to its newest)
+    #[arg(long, value_name = "ID")]
+    pub scan: Option<i64>,
+
+    /// Pull the newest snapshot of this root instead
+    #[arg(long, value_name = "PATH", conflicts_with = "scan")]
+    pub root: Option<String>,
 }
 
 #[derive(Args, Debug)]
 pub struct ScanArgs {
-    /// Taranacak yol
+    /// Path to scan
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
-    /// Sonucu veritabanına kaydet
+    /// Store the result in the database
     #[arg(long)]
     pub save: bool,
 
-    /// Kayıt için etiket (ör. "haftalık")
-    #[arg(long, value_name = "METİN")]
+    /// Label for the stored snapshot (e.g. "weekly")
+    #[arg(long, value_name = "TEXT")]
     pub label: Option<String>,
 
     #[command(flatten)]
     pub walk: WalkArgs,
 
-    /// Kaç büyük girdi gösterilsin
+    /// How many large entries to show
     #[arg(long, default_value_t = 15, value_name = "N")]
     pub top: usize,
 
-    /// Sonucu ayrıca ncdu uyumlu JSON olarak bu dosyaya yaz ("-" = stdout)
-    #[arg(long, value_name = "DOSYA")]
+    /// Also write the result as ncdu-compatible JSON to this file ("-" = stdout)
+    #[arg(long, value_name = "FILE")]
     pub ncdu: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
 pub struct WalkArgs {
-    /// Bu adlardaki klasörlere hiç girme (tekrarlanabilir)
-    #[arg(long = "exclude", value_name = "AD")]
+    /// Never descend into folders with this name (repeatable)
+    #[arg(long = "exclude", value_name = "NAME")]
     pub exclude: Vec<String>,
 
-    /// Dosya sistemi sınırlarını aşma (du -x gibi)
+    /// Do not cross filesystem boundaries (like du -x)
     #[arg(short = 'x', long = "one-file-system")]
     pub one_file_system: bool,
 
-    /// Bu derinlikten aşağı inme
+    /// Do not descend below this depth
     #[arg(long, value_name = "N")]
     pub depth: Option<usize>,
 
-    /// Sabit bağlantıları (hardlink) tekilleştirme, her kopyayı say
+    /// Do not deduplicate hardlinks; count every copy
     #[arg(long)]
     pub no_dedupe: bool,
 }
 
 #[derive(Args, Debug)]
 pub struct LsArgs {
-    /// Taranacak yol (--scan verilmediyse)
+    /// Path to scan (when --scan is not given)
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
-    /// Taze tarama yerine kayıtlı anlık görüntüyü kullan
+    /// Use a stored snapshot instead of a fresh scan
     #[arg(long, value_name = "ID")]
     pub scan: Option<i64>,
 
-    /// Anlık görüntü içinde gösterilecek alt yol
-    #[arg(long, value_name = "YOL")]
+    /// Subpath within the snapshot to show
+    #[arg(long, value_name = "PATH")]
     pub subpath: Option<String>,
 
-    /// Kaç satır gösterilsin
+    /// How many rows to show
     #[arg(long, default_value_t = 20, value_name = "N")]
     pub top: usize,
 
@@ -111,64 +133,64 @@ pub struct LsArgs {
 
 #[derive(Args, Debug)]
 pub struct DiffArgs {
-    /// Eski anlık görüntü kimliği
+    /// Id of the older snapshot
     #[arg(long, value_name = "ID")]
     pub from: Option<i64>,
 
-    /// Yeni anlık görüntü kimliği (verilmezse şimdi taranır)
+    /// Id of the newer snapshot (scans now when omitted)
     #[arg(long, value_name = "ID")]
     pub to: Option<i64>,
 
-    /// Bu yolun son iki anlık görüntüsünü karşılaştır
-    #[arg(long, value_name = "YOL")]
+    /// Compare the last two snapshots of this path
+    #[arg(long, value_name = "PATH")]
     pub path: Option<PathBuf>,
 
-    /// Bu yolun son kaydı ile diskin şu anki hâlini karşılaştır
-    #[arg(long, conflicts_with_all = ["from", "to"], value_name = "YOL")]
+    /// Compare the latest snapshot of this path against the disk right now
+    #[arg(long, conflicts_with_all = ["from", "to"], value_name = "PATH")]
     pub since_last: Option<PathBuf>,
 
-    /// Bundan küçük değişiklikleri yok say (ör. 10M, 500K)
-    #[arg(long, default_value = "1M", value_name = "BOYUT")]
+    /// Ignore changes smaller than this (e.g. 10M, 500K)
+    #[arg(long, default_value = "1M", value_name = "SIZE")]
     pub min: String,
 
-    /// Dosyaları da raporla, yalnızca klasörleri değil
+    /// Report files too, not just folders
     #[arg(long)]
     pub files: bool,
 
-    /// Raporda bu derinlikten aşağı inme (suçlu klasörü kaç seviyeye kadar ara)
+    /// Do not descend below this depth when reporting (how far to chase the culprit)
     #[arg(long, value_name = "N")]
     pub depth: Option<usize>,
 
-    /// Kaç satır gösterilsin
+    /// How many rows to show
     #[arg(long, default_value_t = 25, value_name = "N")]
     pub top: usize,
 }
 
 #[derive(Args, Debug)]
 pub struct ExportArgs {
-    /// Dışa aktarılacak anlık görüntü
+    /// Snapshot to export
     #[arg(long, value_name = "ID")]
     pub scan: i64,
 
-    /// Hedef dosya ("-" = stdout)
-    #[arg(long, default_value = "-", value_name = "DOSYA")]
+    /// Destination file ("-" = stdout)
+    #[arg(long, default_value = "-", value_name = "FILE")]
     pub out: PathBuf,
 }
 
 #[derive(Args, Debug)]
 pub struct PruneArgs {
-    /// Hedef başına saklanacak anlık görüntü sayısı
+    /// How many snapshots to keep per target
     #[arg(long, default_value_t = 10, value_name = "N")]
     pub keep: usize,
 }
 
 #[derive(Args, Debug)]
 pub struct RmArgs {
-    /// Silinecek anlık görüntü kimliği
+    /// Id of the snapshot to delete
     pub id: i64,
 }
 
-/// `10M`, `500K`, `2G` ya da düz bayt sayısı.
+/// `10M`, `500K`, `2G` or a plain byte count.
 pub fn parse_size(s: &str) -> anyhow::Result<u64> {
     let s = s.trim();
     let (num, mult) = match s.chars().last() {
@@ -182,8 +204,8 @@ pub fn parse_size(s: &str) -> anyhow::Result<u64> {
     let value: f64 = num
         .trim()
         .parse()
-        .map_err(|_| anyhow::anyhow!("boyut anlaşılamadı: {s:?} (ör. 10M, 500K, 2G)"))?;
-    anyhow::ensure!(value >= 0.0, "boyut negatif olamaz: {s:?}");
+        .map_err(|_| anyhow::anyhow!("cannot parse size: {s:?} (e.g. 10M, 500K, 2G)"))?;
+    anyhow::ensure!(value >= 0.0, "size cannot be negative: {s:?}");
     Ok((value * mult as f64) as u64)
 }
 

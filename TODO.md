@@ -3,25 +3,25 @@
 Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md).
 
-Son güncelleme: 6 Eylül 2026
+Son güncelleme: 7 Eylül 2026
 
 ---
 
-## Açık kararlar
+## Açık kararlar ✅ kapandı
 
-Kod yazmadan önce cevaplanması gerekenler.
+Beşi de 7 Eylül 2026'da karara bağlandı. Gerekçeler ve ölçümler
+[docs/DECISIONS.md](docs/DECISIONS.md) içinde; özet:
 
-- [ ] **Arayüz dili.** CLI ve belgeler şu an Türkçe. Hedef kanallar (HN,
-      r/selfhosted) İngilizce; 1.0 öncesi geçiş şart. Şimdi mi, yoksa ajan
-      bittikten sonra mı? Erken yapmak ucuz.
-- [ ] **Lisans modeli.** Çekirdek + ajan açık kaynak (Apache-2.0), masaüstü
-      ticari mi? Ajanın sunucuya kurulması için açık kaynak olması güven
-      açısından güçlü bir argüman.
-- [ ] **Ajan protokolü:** HTTP+JSON mı, gRPC mi? HTTP daha kolay hata ayıklanır
-      ve curl ile test edilir; gRPC akış (streaming) ve şema disiplini verir.
-- [ ] **Snapshot taşınabilirliği:** ajan SQLite dosyasını mı gönderecek, yoksa
-      ara bir serileştirme formatı mı olacak? (SQLite dosyası basit ama büyük.)
-- [ ] **GitHub deposu** açık mı özel mi başlasın?
+- [x] **Arayüz dili** → İngilizce (K1). CLI, README, ARCHITECTURE çevrildi;
+      gerekçe belgeleri Türkçe kaldı. i18n kapsam dışı ilan edildi.
+- [x] **Lisans modeli** → çekirdek + ajan Apache-2.0 bu monorepo'da; masaüstü ve
+      merkez ayrı depoda ticari (K2). WHY.md'deki "Pro = sınırsız ajan"
+      hipotezi uygulanamaz olduğu için düzeltildi.
+- [x] **Ajan protokolü** → HTTP + JSON, çatı axum; snapshot gövdesi
+      `application/octet-stream` (K3).
+- [x] **Snapshot taşınabilirliği** → ham SQLite, `VACUUM INTO` + zstd (K4).
+      Ölçüldü: girdi başına 49.5 B ham, 12.4 B zstd → 1M dosya ≈ 12 MB.
+- [x] **GitHub deposu** → public (K5).
 
 ---
 
@@ -46,41 +46,48 @@ Kod yazmadan önce cevaplanması gerekenler.
 
 ---
 
-## Faz 2 — Ajan ⏳ sıradaki iş
+## Faz 2 — Ajan ✅ çekirdek tamam
 
 ### Çekirdek
-- [ ] `agent` crate'i (workspace'e ekle, `spacetrace-agent` ikilisi)
-- [ ] `agent scan <yol> --out snap.sqlite` — tek seferlik, ağsız
-- [ ] Yapılandırma dosyası (TOML): kökler, hariç tutulanlar, zamanlama, token
-- [ ] Dahili zamanlayıcı (cron ifadesi) — NAS'ta systemd/cron kurcalamamak için
-- [ ] Snapshot rotasyonu (ajan tarafında `prune`)
+- [x] `agent` crate'i (workspace'e eklendi, `spacetrace-agent` ikilisi)
+- [x] `agent scan` — tek seferlik, ağsız (`--root` ile tek kök)
+- [x] Yapılandırma dosyası (TOML): kökler, hariç tutulanlar, zamanlama, token
+      — bilinmeyen anahtarlar reddediliyor, `agent check` ile ön doğrulama
+- [x] Dahili zamanlayıcı — elle yazılmış 5 alanlı cron (chrono eklenmedi),
+      Vixie'nin dom/dow birleşim kuralı dâhil
+- [x] Snapshot rotasyonu (kök başına `keep`; `store::prune_target`)
 
 ### Ağ
-- [ ] `agent serve` — HTTP servisi
-  - [ ] `GET /health`, `GET /scans`, `GET /scans/:id` (snapshot indir)
-  - [ ] `POST /scans` (tarama tetikle)
-  - [ ] Bearer token doğrulama; token dosyadan veya env'den
-  - [ ] Opsiyonel TLS; ters vekil arkasında çalışabilme
-- [ ] `agent push <url>` — snapshot'ı merkeze/başka ajana gönder
-- [ ] Hız sınırlama ve eşzamanlı tarama kilidi (aynı kök iki kez taranmasın)
+- [x] `agent serve` — axum HTTP servisi
+  - [x] `GET /health` (tokensiz, yalnızca canlılık+sürüm), `GET /status`
+  - [x] `GET /scans`, `GET /scans/:id`, `GET /scans/:id/download`
+  - [x] `POST /scans` (202 + arka planda tarama), `POST /snapshots` (alıcı uç)
+  - [x] Bearer token doğrulama (sabit zamanlı karşılaştırma), dosya/env/config
+  - [x] Gövde boyutu sınırı, SIGTERM ile temiz kapanma
+  - [ ] Opsiyonel yerleşik TLS — şimdilik ters vekil öneriliyor
+- [x] `agent push <url>` — snapshot'ı merkeze/başka ajana gönder (zstd)
+- [x] Eşzamanlı tarama kilidi (aynı kök iki kez taranmıyor → 409)
+- [ ] Hız sınırlama — token zaten gerekli olduğu için ertelendi
 
 ### İstemci tarafı
-- [ ] CLI'da uzak kaynak: `--remote https://host` (scans / ls / diff)
-- [ ] Uzak kaynak tanımlarını yerel yapılandırmada saklama (`~/.config/spacetrace/remotes.toml`)
+- [x] CLI'da uzak kaynak: `--remote <url|ad>` (scans / ls / diff / export)
+- [x] `spacetrace pull` — uzak snapshot'ı yerel veritabanına al
+- [x] Uzak kaynak tanımları `remotes.toml`
 - [ ] SSH modu: kurulum gerektirmeden karşı tarafta geçici ajan çalıştırma
-      (TreeSize'ın SSH taramasının karşılığı)
 
 ### Dağıtım
-- [ ] Statik ikili (musl) — linux/amd64, linux/arm64
-- [ ] Docker imajı (volume'ları read-only mount ile tarar)
-- [ ] systemd unit + örnek yapılandırma
-- [ ] `curl | sh` kurulum betiği
-- [ ] GitHub Releases otomasyonu (tag → build → artefakt)
+- [x] Statik ikili (musl) — linux/amd64, linux/arm64 (release workflow)
+- [x] Docker imajı (host'u read-only mount ile tarar)
+- [x] systemd unit + örnek yapılandırma (sertleştirilmiş, ProtectSystem=strict)
+- [x] `curl | sh` kurulum betiği (POSIX sh, busybox uyumlu)
+- [x] GitHub Releases otomasyonu (tag → build → artefakt + SHA256SUMS)
 
 ### Doğrulama (çıkış kriteri)
-- [ ] Kendi Hetzner sunucularına, Proxmox host'una ve bir konteynere kur
-- [ ] Bir hafta gerçek veri topla
-- [ ] `spacetrace diff --remote <host> --path /var` anlamlı çıktı veriyor mu?
+- [x] Uçtan uca yerel doğrulama: ajan + CLI `--remote diff` anlamlı çıktı
+      veriyor, suçlu klasörü doğru buluyor
+- [ ] **Kendi Hetzner sunucularına, Proxmox host'una ve bir konteynere kur**
+- [ ] **Bir hafta gerçek veri topla** — bu ikisi yalnızca gerçek makinelerde
+      yapılabilir, kod tarafı hazır
 
 ---
 
@@ -125,7 +132,8 @@ Kod yazmadan önce cevaplanması gerekenler.
 - [ ] 10M+ dosyalı köklerde bellek profili ölçülmedi (hedef: ncdu2 mertebesi,
       ~25 B/dosya)
 - [ ] `Tree::rel_path` her çağrıda kökten yürüyor — sıcak döngüde kullanılmamalı
-- [ ] Arayüz dizeleri koda gömülü, i18n yok
+- ~~Arayüz dizeleri koda gömülü, i18n yok~~ → borç değil, karar
+      ([DECISIONS.md](docs/DECISIONS.md) K1). Dizeler İngilizce ve gömülü kalır.
 - [ ] Büyük ağaçlarda `store::save` tek transaction — ilerleme geri bildirimi yok
 
 ---

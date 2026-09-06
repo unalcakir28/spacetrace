@@ -1,28 +1,32 @@
 [package]
-name = "spacetrace-cli"
-description = "spacetrace command line: scan disks, store snapshots, see what grew"
+name = "spacetrace-agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+description = "Unattended disk-usage scanning agent for servers, NAS boxes and containers"
+
+[lib]
+name = "spacetrace_agent"
+path = "src/lib.rs"
 
 [[bin]]
-name = "spacetrace"
+name = "spacetrace-agent"
 path = "src/main.rs"
 
 [dependencies]
 spacetrace-scan-core.workspace = true
 spacetrace-store.workspace = true
-spacetrace-diff.workspace = true
+
 anyhow.workspace = true
+axum.workspace = true
 clap.workspace = true
-humansize.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# Remote sources (phase 2): blocking, because the CLI has no async runtime and
-# does not need one for a handful of sequential requests.
-reqwest.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
 toml.workspace = true
 zstd.workspace = true
-tempfile.workspace = true
+

@@ -59,8 +59,66 @@ impl Tree {
     /// The caller must preserve the BFS layout: a node's children occupy
     /// `children_start .. children_start + children_len`, and every child has a
     /// higher index than its parent. Totals are taken as already aggregated.
+    ///
+    /// Only use this for nodes you produced yourself. Anything that came off a
+    /// disk or a network must go through [`Tree::from_parts_checked`] first.
     pub fn from_parts(nodes: Vec<Node>, root_path: PathBuf) -> Self {
         Tree::new(nodes, root_path)
+    }
+
+    /// Rebuild a tree from nodes that are not trusted, verifying the arena
+    /// invariants before anything walks them.
+    ///
+    /// A snapshot can arrive from another machine (`spacetrace --remote`, or an
+    /// agent receiving a push), and the layout is not self-describing: a bad
+    /// `children_start` indexes out of bounds, and a child pointing backwards
+    /// turns every traversal into an infinite loop. Both are cheap to rule out
+    /// in one linear pass, and doing it here means every consumer is covered.
+    pub fn from_parts_checked(nodes: Vec<Node>, root_path: PathBuf) -> Result<Self, TreeError> {
+        let len = nodes.len();
+        if len == 0 {
+            return Err(TreeError::Empty);
+        }
+        if len > NodeId::MAX as usize {
+            return Err(TreeError::TooLarge(len));
+        }
+        if nodes[ROOT as usize].has_parent() {
+            return Err(TreeError::RootHasParent);
+        }
+
+        for (index, node) in nodes.iter().enumerate() {
+            let id = index as NodeId;
+
+            // Children must sit in bounds...
+            let end = (node.children_start as u64) + (node.children_len as u64);
+            if node.children_len > 0 {
+                if end > len as u64 {
+                    return Err(TreeError::ChildrenOutOfBounds {
+                        node: id,
+                        start: node.children_start,
+                        len: node.children_len,
+                        total: len,
+                    });
+                }
+                // ...and strictly after their parent. This single check is what
+                // makes cycles impossible: indices only ever increase downward.
+                if node.children_start <= id {
+                    return Err(TreeError::ChildrenNotAfterParent {
+                        node: id,
+                        start: node.children_start,
+                    });
+                }
+            }
+
+            if node.has_parent() && node.parent >= id {
+                return Err(TreeError::ParentNotBeforeChild {
+                    node: id,
+                    parent: node.parent,
+                });
+            }
+        }
+
+        Ok(Tree::new(nodes, root_path))
     }
 
     /// The sentinel stored in `Node::parent` for the root.
@@ -239,3 +297,58 @@ impl TreeBuilder {
         Tree::new(self.nodes, root_path)
     }
 }
+
+/// Why a set of stored nodes could not be trusted as a tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TreeError {
+    Empty,
+    TooLarge(usize),
+    RootHasParent,
+    ChildrenOutOfBounds {
+        node: NodeId,
+        start: NodeId,
+        len: NodeId,
+        total: usize,
+    },
+    ChildrenNotAfterParent {
+        node: NodeId,
+        start: NodeId,
+    },
+    ParentNotBeforeChild {
+        node: NodeId,
+        parent: NodeId,
+    },
+}
+
+impl std::fmt::Display for TreeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TreeError::Empty => write!(f, "the snapshot has no entries"),
+            TreeError::TooLarge(n) => write!(
+                f,
+                "the snapshot has {n} entries, more than the arena can address"
+            ),
+            TreeError::RootHasParent => write!(f, "entry 0 is not a root: it claims a parent"),
+            TreeError::ChildrenOutOfBounds {
+                node,
+                start,
+                len,
+                total,
+            } => write!(
+                f,
+                "entry {node} claims children {start}..{} but the snapshot has {total} entries",
+                *start as u64 + *len as u64
+            ),
+            TreeError::ChildrenNotAfterParent { node, start } => write!(
+                f,
+                "entry {node} claims its children start at {start}, which is not after it"
+            ),
+            TreeError::ParentNotBeforeChild { node, parent } => write!(
+                f,
+                "entry {node} claims parent {parent}, which is not before it"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TreeError {}

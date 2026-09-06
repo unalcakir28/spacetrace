@@ -1,141 +1,169 @@
 # spacetrace
 
-Disk kullanımını tara, anlık görüntüsünü sakla, **neyin büyüdüğünü** gör.
+Scan disk usage, keep snapshots, and see **what grew**.
 
-Piyasadaki disk analizörleri (TreeSize, WizTree, DaisyDisk, FreeSize, ncdu) tek bir
-soruyu cevaplıyor: *"şu an önümdeki diskte ne var?"*. spacetrace ikinci soruyu da
-cevaplıyor: *"geçen haftadan beri ne değişti, ve hangi makinede?"*
+Every disk analyser on the market (TreeSize, WizTree, DaisyDisk, FreeSize, ncdu)
+answers one question: *"what is on the disk in front of me right now?"*.
+spacetrace answers the second one too: *"what changed since last week, and on
+which machine?"*
 
-Aynı ikili masaüstünde, sunucuda, NAS'ta ve konteynerde çalışır.
+The same binary runs on your desktop, on a server, on a NAS and inside a
+container.
 
-## Durum
+## Status
 
-| Faz | Kapsam | Durum |
-|-----|--------|-------|
-| 1 | Tarayıcı, SQLite anlık görüntü, diff, CLI | ✅ çalışıyor |
-| 2 | Ajan (`serve` / `push`), uzak kaynaklar, Docker imajı | ⏳ sıradaki iş |
-| 3 | Tauri masaüstü: treemap, uzak kaynak gezgini, diff görünümü | ⏳ |
-| 4 | Merkez servis: çoklu makine panosu, büyüme uyarıları | ⏳ |
+| Phase | Scope | State |
+|-------|-------|-------|
+| 1 | Scanner, SQLite snapshots, diff, CLI | ✅ working |
+| 2 | Agent (`serve` / `push`), remote sources, Docker image | ✅ working |
+| 3 | Tauri desktop: treemap, remote browser, diff view | ⏳ |
+| 4 | Central service: multi-machine dashboard, growth alerts | ⏳ |
 
-## Belgeler
+## Documentation
 
-| Belge | İçerik |
-|-------|--------|
-| [docs/WHY.md](docs/WHY.md) | Neden bu proje var: çıkış noktası, pazar boşluğu, hedef kullanıcı, kapsam dışı olanlar |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Fazlar, çıkış kriterleri, sürüm hedefleri |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Kodun nasıl ve neden böyle kurulduğu, teknoloji kararları, bilinen sınırlar |
-| [docs/RESEARCH.md](docs/RESEARCH.md) | Eylül 2026 pazar ve teknik araştırma özeti: rakipler, framework karşılaştırması, tarama teknikleri, dağıtım maliyetleri |
-| [TODO.md](TODO.md) | Canlı yapılacaklar listesi ve açık kararlar |
-| [CLAUDE.md](CLAUDE.md) | Claude Code için proje notları: komutlar, değişmezler, alışkanlıklar |
+| Document | Contents |
+|----------|----------|
+| [docs/WHY.md](docs/WHY.md) | Why this project exists: the gap it fills, target users, explicit non-goals |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Phases, exit criteria, release targets |
+| [docs/AGENT.md](docs/AGENT.md) | Running the agent: install, configure, the HTTP API, security notes |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the code is built and why, technology decisions, known limits |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Settled cross-cutting decisions and their rationale |
+| [docs/RESEARCH.md](docs/RESEARCH.md) | September 2026 market and technical research summary |
+| [TODO.md](TODO.md) | Live task list |
 
-## Kurulum
+Project documents under `docs/` that record *reasoning* (WHY, ROADMAP, TODO,
+RESEARCH) are kept in Turkish; everything user-facing — the CLI, this README and
+ARCHITECTURE — is English.
 
-Rust 1.85+ gerekir ([rustup.rs](https://rustup.rs)):
+## Install
+
+Requires Rust 1.85+ ([rustup.rs](https://rustup.rs)):
 
 ```bash
-git clone <repo> && cd spacetrace
+git clone https://github.com/unalcakir/spacetrace && cd spacetrace
 cargo build --release
 ./target/release/spacetrace --help
 ```
 
-Tek ikiliyi PATH'e almak için: `cargo install --path crates/cli`
+To put the binary on your PATH: `cargo install --path crates/cli`
 
-## Kullanım
+## Usage
 
 ```bash
-# Tara ve özet gör
+# Scan and print a summary
 spacetrace scan ~/projects
 
-# Tara ve anlık görüntü olarak kaydet
-spacetrace scan /srv --save --label "haftalık"
+# Scan and store the result as a snapshot
+spacetrace scan /srv --save --label "weekly"
 
-# Kayıtlı anlık görüntüler
+# List stored snapshots
 spacetrace scans
 
-# Son iki kaydı karşılaştır: ne büyüdü?
+# Compare the last two snapshots: what grew?
 spacetrace diff --path /srv
 
-# Son kayıt ile diskin şu anki hâlini karşılaştır
+# Compare the latest snapshot against the disk right now
 spacetrace diff --since-last /srv
 
-# Klasörleri boyuta göre listele
+# List folders by size
 spacetrace ls /var/lib --top 20
 spacetrace ls --scan 3 --subpath docker/overlay2
 
-# ncdu ile aç (sunucudan aldığın kaydı yerelde incele)
+# Open in ncdu (inspect a snapshot pulled off a server)
 spacetrace export --scan 3 --out scan.json && ncdu -f scan.json
 ```
 
-Örnek çıktı:
+### Another machine
+
+Point any read-only command at an agent with `--remote`:
+
+```bash
+export SPACETRACE_TOKEN=...
+
+spacetrace --remote https://nas.example.com scans
+spacetrace --remote https://nas.example.com diff --path /var
+spacetrace --remote https://nas.example.com pull --root /var   # keep a local copy
+```
+
+A remote snapshot is downloaded as the same standalone SQLite file the agent
+stores, so listing, browsing and diffing it run the identical code as a local
+one. See [docs/AGENT.md](docs/AGENT.md) to set the agent up.
+
+Example output:
 
 ```
-#1 2026-09-06 17:23 [haftalık]  →  #2 2026-09-06 19:40
-toplam 23.8 MiB → 76.3 MiB   (+52.5 MiB)
+#1 2026-09-06 17:23 [weekly]  →  #2 2026-09-06 19:40
+total 23.8 MiB → 76.3 MiB   (+52.5 MiB)
 
-     DEĞİŞİM  DURUM         YENİ  YOL
-   +40.1 MiB  büyüdü    42.9 MiB  app/logs/
-   +14.3 MiB  büyüdü    25.7 MiB  backups/
-    -1.9 MiB  silindi         0 B  uploads/
+      CHANGE  STATUS          NEW  PATH
+   +40.1 MiB  grew       42.9 MiB  app/logs/
+   +14.3 MiB  grew       25.7 MiB  backups/
+    -1.9 MiB  removed         0 B  uploads/
 ```
 
-Dikkat: rapor `app/` veya `/srv` değil, **`app/logs/`** diyor. Değişimi yalnızca
-aktaran ara klasörler atlanır; suçun gerçekten dağıldığı ilk seviye raporlanır.
+Note what the report says: **`app/logs/`**, not `app/` or `/srv`. Intermediate
+folders that merely pass the change through are skipped; the first level where
+the change genuinely spreads out is the one reported.
 
-### Sık kullanılan seçenekler
+### Common options
 
-| Seçenek | Ne yapar |
-|---------|----------|
-| `--exclude node_modules` | O adı taşıyan klasörlere hiç girme (tekrarlanabilir) |
-| `-x`, `--one-file-system` | Bağlama noktalarını aşma (`du -x` gibi) |
-| `--depth N` | N seviyeden aşağı inme |
-| `--min 10M` | diff'te bundan küçük değişiklikleri yok say |
-| `--files` | diff'te dosyaları da raporla |
-| `--json` | Çıktıyı JSON ver (her komutta) |
-| `--db yol.sqlite` | Farklı anlık görüntü veritabanı |
+| Option | What it does |
+|--------|--------------|
+| `--exclude node_modules` | Never descend into folders with that name (repeatable) |
+| `-x`, `--one-file-system` | Do not cross mount points (like `du -x`) |
+| `--depth N` | Do not descend below N levels |
+| `--min 10M` | Ignore changes smaller than this in a diff |
+| `--files` | Report files in a diff, not just folders |
+| `--json` | Emit JSON (available on every command) |
+| `--db path.sqlite` | Use a different snapshot database |
 
-Varsayılan veritabanı: macOS'ta `~/Library/Application Support/spacetrace/`,
-Linux'ta `$XDG_DATA_HOME/spacetrace/`. `SPACETRACE_HOME` ile değiştirilebilir.
+Default database: `~/Library/Application Support/spacetrace/` on macOS,
+`$XDG_DATA_HOME/spacetrace/` on Linux. Override it with `SPACETRACE_HOME`.
 
-## Mimari
+## Architecture
 
 ```
 crates/
-├── scan-core/   Paralel tarayıcı + arena ağaç modeli (platforma özel arka uçlar)
-├── store/       SQLite anlık görüntü deposu + ncdu uyumlu dışa aktarım
-├── diff/        İki anlık görüntüyü karşılaştırma, "suçlu klasör" tespiti
-└── cli/         spacetrace ikilisi
+├── scan-core/   Parallel scanner + arena tree model (platform-specific backends)
+├── store/       SQLite snapshot store + ncdu-compatible export
+├── diff/        Snapshot comparison, "culprit folder" detection
+├── cli/         the spacetrace binary
+└── agent/       the spacetrace-agent binary: scheduler + HTTP service
 ```
 
-Ağaç, çocukları bitişik indeks aralığında tutan bir **arena** olarak saklanır:
-düğüm başına `Vec` yok, toplama tek ters geçişte biter, treemap yerleşimi için
-önbellek dostu. Bu düzen SQLite'a olduğu gibi yazılır, yani bir anlık görüntüyü
-yüklemek tek sıralı sorgudur, ağaç yeniden kurulmaz.
+The tree is stored as an **arena** whose children occupy a contiguous index
+range: no `Vec` per node, aggregation finishes in a single reverse pass, and the
+layout is cache-friendly for treemap rendering. That same layout is written to
+SQLite as-is, so loading a snapshot is one ordered query — the tree is never
+rebuilt.
 
-Sonraki fazlarda masaüstü uygulaması ve ajan **aynı çekirdeği** kullanacak; ajan
-`scan-core` + `store` ile tek statik ikili olarak paketlenir.
+The desktop app and the agent use the **same core**; the agent ships as a single
+static binary built from `scan-core` + `store`.
 
-### Boyut anlambilimi
+### Size semantics
 
-- **mantıksal (`size`)**: yalnızca dosya baytları. `du -sb` ile birebir aynı.
-- **diskte (`alloc`)**: gerçekten tahsis edilen bloklar, dizin blokları dâhil.
-  `du -s --block-size=1` ile birebir aynı.
-- Sabit bağlantılar (hardlink) varsayılan olarak bir kez sayılır; `--no-dedupe`
-  ile kapatılır. Sembolik bağlantılar asla izlenmez, kendi boyutlarıyla sayılır.
+- **logical (`size`)**: file bytes only. Matches `du -sb` exactly.
+- **on disk (`alloc`)**: blocks actually allocated, directory blocks included.
+  Matches `du -s --block-size=1` exactly.
+- Hardlinks are counted once by default; disable with `--no-dedupe`. Symlinks are
+  never followed and are counted at their own size.
 
-Doğrulama: `/usr` (141k dosya), `/usr/share`, `/etc` üzerinde her iki toplam da
-`du` ile **tam olarak** eşleşiyor.
+Verified: on `/usr` (141k files), `/usr/share` and `/etc`, both totals match `du`
+**exactly**. This is a test condition, not an aspiration.
 
-## Geliştirme
+## Development
 
 ```bash
-cargo test --workspace     # 32 test
+cargo test --workspace     # 107 tests
 cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
 
-Testler geçici dizinlerde gerçek dosya sistemi kullanır: sabit bağlantı,
-sembolik bağlantı, izin hatası ve derinlik senaryoları dâhil.
+Tests use a **real filesystem** in temporary directories — hardlink, symlink,
+permission-error and depth-limit scenarios included. There are no mocks.
 
-## Lisans
+## License
 
-Apache-2.0
+Apache-2.0. The scanning core, the snapshot store, the CLI and the agent are and
+will stay open source — the agent runs on your servers, so you should be able to
+read it. See [docs/DECISIONS.md](docs/DECISIONS.md) for the licensing rationale.

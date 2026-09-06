@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (for a dry run)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # musl so the agent is a single static binary that runs on any glibc
+          # version, including the elderly ones on NAS firmware.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross-compilation tooling
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          cargo install cross --locked
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} \
+              --bin spacetrace --bin spacetrace-agent
+          else
+            cargo build --release --target ${{ matrix.target }} \
+              --bin spacetrace --bin spacetrace-agent
+          fi
+
+      - name: Package
+        shell: bash
+        # The dispatch input reaches the shell through the environment, never
+        # interpolated into the script: it is attacker-controlled text.
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          # GITHUB_REF_NAME is set on every event (it is the branch name for a
+          # manual run), so the explicit input has to win when it is present.
+          version="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          name="spacetrace-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/${{ matrix.target }}/release/spacetrace.exe "dist/${name}/"
+            cp target/${{ matrix.target }}/release/spacetrace-agent.exe "dist/${name}/"
+          else
+            cp target/${{ matrix.target }}/release/spacetrace "dist/${name}/"
+            cp target/${{ matrix.target }}/release/spacetrace-agent "dist/${name}/"
+          fi
+          cp README.md LICENSE "dist/${name}/"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "${name}.zip" "${name}"
+          else
+            # Flat archive: install.sh expects the binaries at the top level.
+            tar -czf "${name}.tar.gz" -C "${name}" .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

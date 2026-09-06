@@ -16,4 +16,5 @@ serde_json.workspace = true
 gethostname = "0.5"
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile = "3"

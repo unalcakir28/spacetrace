@@ -21,7 +21,7 @@ pub type ScanId = i64;
 pub const SCANNER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Everything about a stored scan except its entries.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScanMeta {
     pub id: ScanId,
     pub host: String,
@@ -169,8 +169,11 @@ impl Store {
             })?
             .collect::<rusqlite::Result<Vec<Node>>>()?;
 
-        anyhow::ensure!(!nodes.is_empty(), "scan {scan_id} has no entries");
-        let tree = Tree::from_parts(nodes, PathBuf::from(&meta.root));
+        // Checked rather than trusted: this same code path loads snapshots
+        // downloaded from an agent, and a malformed arena would panic on an
+        // out-of-range index or loop forever on a backwards child pointer.
+        let tree = Tree::from_parts_checked(nodes, PathBuf::from(&meta.root))
+            .map_err(|e| anyhow::anyhow!("scan {scan_id} is not a usable tree: {e}"))?;
         Ok((tree, meta))
     }
 
@@ -225,6 +228,162 @@ impl Store {
             .conn
             .execute("DELETE FROM scans WHERE id = ?1", [scan_id])?;
         Ok(n > 0)
+    }
+
+    /// Drop all but the newest `keep` scans of one target.
+    ///
+    /// The agent needs this because retention is configured per root, so the
+    /// database-wide [`Store::prune`] would apply one machine's policy to every
+    /// other root in the same file.
+    pub fn prune_target(&mut self, root: &str, host: &str, keep: usize) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let removed = tx.execute(
+            "DELETE FROM scans WHERE id IN (
+                 SELECT id FROM (
+                     SELECT id, ROW_NUMBER() OVER (
+                         ORDER BY started_at DESC, id DESC
+                     ) AS rn
+                     FROM scans WHERE root = ?1 AND host = ?2
+                 ) WHERE rn > ?3
+             )",
+            params![root, host, keep as i64],
+        )?;
+        tx.commit()?;
+        Ok(removed)
+    }
+
+    /// Write one snapshot to its own SQLite file, metadata preserved exactly.
+    ///
+    /// This is what goes over the wire (see docs/DECISIONS.md K4). It copies
+    /// rows into an ATTACHed database rather than `VACUUM INTO`, for two
+    /// reasons: the result holds only the requested scan instead of the whole
+    /// history, and the new file gets a default rollback journal instead of
+    /// inheriting WAL, so it is a single self-contained file the moment the
+    /// call returns.
+    pub fn export_snapshot(&self, scan_id: ScanId, out: &Path) -> Result<()> {
+        anyhow::ensure!(
+            self.scan(scan_id)?.is_some(),
+            "no scan with id {scan_id} to export"
+        );
+        // SQLite will happily open an existing file and merge into it, which
+        // would silently produce a snapshot containing someone else's scan.
+        if out.exists() {
+            std::fs::remove_file(out)
+                .with_context(|| format!("replacing existing file {}", out.display()))?;
+        }
+
+        self.conn
+            .execute("ATTACH DATABASE ?1 AS snap", [out.to_string_lossy()])
+            .with_context(|| format!("attaching {}", out.display()))?;
+
+        let result = self.copy_scan_into_attached(scan_id);
+        // Detach whether or not the copy worked, so the connection stays usable.
+        let detached = self.conn.execute_batch("DETACH DATABASE snap");
+        if result.is_err() {
+            let _ = std::fs::remove_file(out);
+        }
+        result?;
+        detached.context("detaching the snapshot database")?;
+        Ok(())
+    }
+
+    /// Take every scan out of a snapshot file and add it to this database.
+    ///
+    /// Ids are reassigned, because the sender's numbering means nothing here.
+    /// Everything else — host, root, timestamps, scanner version — is carried
+    /// across verbatim, since that is what makes a pushed snapshot comparable
+    /// with the rest of the target's history.
+    ///
+    /// A scan already present with the same host, root and start time is
+    /// skipped, so re-pushing is harmless.
+    pub fn import_snapshot(&mut self, incoming: &Path) -> Result<Vec<ScanId>> {
+        anyhow::ensure!(
+            incoming.exists(),
+            "no such snapshot file: {}",
+            incoming.display()
+        );
+        self.conn
+            .execute(
+                "ATTACH DATABASE ?1 AS incoming",
+                [incoming.to_string_lossy()],
+            )
+            .with_context(|| format!("attaching {}", incoming.display()))?;
+
+        let result = self.copy_scans_from_attached();
+        let detached = self.conn.execute_batch("DETACH DATABASE incoming");
+        let imported = result?;
+        detached.context("detaching the incoming database")?;
+        Ok(imported)
+    }
+
+    fn copy_scans_from_attached(&mut self) -> Result<Vec<ScanId>> {
+        let incoming: Vec<(ScanId, String, String, i64)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, host, root, started_at FROM incoming.scans ORDER BY id")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let tx = self.conn.transaction()?;
+        let mut imported = Vec::new();
+        for (source_id, host, root, started_at) in incoming {
+            let already: Option<ScanId> = tx
+                .query_row(
+                    "SELECT id FROM main.scans WHERE host = ?1 AND root = ?2 AND started_at = ?3",
+                    params![host, root, started_at],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if already.is_some() {
+                continue;
+            }
+
+            tx.execute(
+                "INSERT INTO main.scans (host, root, started_at, duration_ms, total_size,
+                                         total_alloc, files, dirs, errors, hardlinks_deduped,
+                                         scanner_version, label)
+                 SELECT host, root, started_at, duration_ms, total_size, total_alloc, files,
+                        dirs, errors, hardlinks_deduped, scanner_version, label
+                 FROM incoming.scans WHERE id = ?1",
+                [source_id],
+            )?;
+            let new_id = tx.last_insert_rowid();
+
+            // Only scan_id is rewritten: `id` is the node's index inside its own
+            // arena and must keep matching children_start/children_len.
+            tx.execute(
+                "INSERT INTO main.entries (scan_id, id, parent_id, name, kind, size, alloc,
+                                           mtime, nlink, files, dirs, children_start, children_len)
+                 SELECT ?1, id, parent_id, name, kind, size, alloc, mtime, nlink, files, dirs,
+                        children_start, children_len
+                 FROM incoming.entries WHERE scan_id = ?2",
+                params![new_id, source_id],
+            )?;
+            imported.push(new_id);
+        }
+        tx.commit()?;
+        Ok(imported)
+    }
+
+    fn copy_scan_into_attached(&self, scan_id: ScanId) -> Result<()> {
+        schema::create_tables(&self.conn, "snap")?;
+        self.conn.execute(
+            "INSERT INTO snap.scans SELECT * FROM main.scans WHERE id = ?1",
+            [scan_id],
+        )?;
+        self.conn.execute(
+            "INSERT INTO snap.entries SELECT * FROM main.entries WHERE scan_id = ?1",
+            [scan_id],
+        )?;
+        self.conn.pragma_update(
+            Some(rusqlite::DatabaseName::Attached("snap")),
+            "user_version",
+            schema::SCHEMA_VERSION,
+        )?;
+        Ok(())
     }
 
     /// Drop all but the newest `keep` scans of each target.

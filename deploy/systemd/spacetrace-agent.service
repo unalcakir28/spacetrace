@@ -1,0 +1,54 @@
+[Unit]
+Description=spacetrace disk usage agent
+Documentation=https://github.com/unalcakir/spacetrace
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/spacetrace-agent --config /etc/spacetrace/agent.toml serve
+Restart=on-failure
+RestartSec=5s
+
+# The agent only ever reads the filesystem and writes its own snapshot
+# database, so it does not need to be root and it does not need write access to
+# anything else. Everything below follows from that.
+User=spacetrace
+Group=spacetrace
+StateDirectory=spacetrace
+ConfigurationDirectory=spacetrace
+
+# Read the whole filesystem, write nothing outside the state directory.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/spacetrace
+ProtectHome=read-only
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+
+# Scanning a large filesystem opens many directories at once.
+LimitNOFILE=65536
+
+# Nice-to-have: a scan should never get in the way of what the machine is for.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

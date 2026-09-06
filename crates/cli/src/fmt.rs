@@ -36,7 +36,7 @@ pub fn duration(ms: u64) -> String {
     } else if ms < 60_000 {
         format!("{:.1} s", ms as f64 / 1000.0)
     } else {
-        format!("{} dk {} s", ms / 60_000, (ms % 60_000) / 1000)
+        format!("{} m {} s", ms / 60_000, (ms % 60_000) / 1000)
     }
 }
 
@@ -126,6 +126,6 @@ mod tests {
     fn durations_switch_units() {
         assert_eq!(duration(250), "250 ms");
         assert_eq!(duration(1500), "1.5 s");
-        assert_eq!(duration(65_000), "1 dk 5 s");
+        assert_eq!(duration(65_000), "1 m 5 s");
     }
 }
