@@ -1,0 +1,15 @@
+[package]
+name = "spacetrace-scan-core"
+description = "Parallel filesystem scanner and arena tree model for spacetrace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rayon.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
