@@ -24,7 +24,9 @@ Aynı ikili masaüstünde, sunucuda, NAS'ta ve konteynerde çalışır.
 | [docs/WHY.md](docs/WHY.md) | Neden bu proje var: çıkış noktası, pazar boşluğu, hedef kullanıcı, kapsam dışı olanlar |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Fazlar, çıkış kriterleri, sürüm hedefleri |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Kodun nasıl ve neden böyle kurulduğu, teknoloji kararları, bilinen sınırlar |
+| [docs/RESEARCH.md](docs/RESEARCH.md) | Eylül 2026 pazar ve teknik araştırma özeti: rakipler, framework karşılaştırması, tarama teknikleri, dağıtım maliyetleri |
 | [TODO.md](TODO.md) | Canlı yapılacaklar listesi ve açık kararlar |
+| [CLAUDE.md](CLAUDE.md) | Claude Code için proje notları: komutlar, değişmezler, alışkanlıklar |
 
 ## Kurulum
 
