@@ -3,7 +3,7 @@
 Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md).
 
-Son güncelleme: 7 Eylül 2026
+Son güncelleme: 7 Eylül 2026 (dört fazın hepsi çalışıyor)
 
 ---
 
@@ -91,30 +91,46 @@ Beşi de 7 Eylül 2026'da karara bağlandı. Gerekçeler ve ölçümler
 
 ---
 
-## Faz 3 — Masaüstü ⏳
+## Faz 3 — Masaüstü ✅
 
-- [ ] Tauri v2 + React/TS iskeleti, Rust çekirdeğini süreç içinde çağırma
-- [ ] Squarified treemap (layout Rust'ta, çizim Canvas2D → gerekirse WebGL)
-- [ ] LOD: ~4–6 px²'den küçük dikdörtgenleri bölme; quadtree ile culling
-      ve hit-test
-- [ ] Klasör ağacı paneli, çift yönlü seçim senkronu
-- [ ] Dosya türüne göre renklendirme, çöpe gönder, Finder/Explorer'da aç
-- [ ] "Uzak kaynak ekle" akışı; uzak snapshot'ı yerelmiş gibi gezme
-- [ ] Diff görünümü ve zaman çizelgesi
+Ayrı depo: [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) (K2).
+Yerleşim motoru burada kaldı (`crates/treemap`), çünkü çekirdek ve test edilebilir.
+
+- [x] Tauri v2 + React/TS iskeleti, Rust çekirdeğini süreç içinde çağırma
+- [x] Squarified treemap — yerleşim Rust'ta (`crates/treemap`), çizim Canvas2D
+- [x] LOD: min_area altındaki dikdörtgenler bölünmüyor; karo sayısı diskin
+      değil ekranın büyüklüğüne bağlı
+- [x] Culling ve hit-test — quadtree yerine hiyerarşinin kendisi kullanıldı
+      (çocuk her zaman ebeveyninin içinde olduğu için ayrı indeks gereksiz)
+- [x] Klasör ağacı paneli (tembel genişleyen), çift yönlü seçim senkronu
+- [x] Dosya türüne göre renklendirme, çöpe gönder, Finder/Explorer'da aç
+- [x] Uzak kaynak akışı: ajandan snapshot indir, yerelmiş gibi gez
+- [x] Diff görünümü (iki snapshot karşılaştırma tablosu)
+- [x] Düğüm kimlikleri generation'a bağlı — eski ağaca ait id reddediliyor
 - [ ] **Windows MFT hızlı yolu** (`usn-journal-rs`) — yönetici arkasında
 - [ ] macOS Full Disk Access onboarding ekranı
-- [ ] Üç WebView'da treemap performans testi (WebKitGTK dâhil)
+- [ ] Zaman çizelgesi görünümü (bir hedefin tüm geçmişi)
+- [ ] Üç WebView'da treemap performans testi (WebKitGTK dâhil) — yalnızca
+      macOS'ta doğrulandı
 
 ---
 
-## Faz 4 — Merkez ⏳
+## Faz 4 — Merkez ✅
 
-- [ ] axum + Postgres/SQLite servisi, self-host
-- [ ] Çoklu ajan panosu
-- [ ] Klasör başına büyüme trendi, eşik uyarıları (e-posta / webhook)
-- [ ] "Bu hızla giderse N gün sonra dolar" tahmini
-- [ ] Ekip erişimi ve token yönetimi
-- [ ] docker-compose ile tek komut kurulum
+Ayrı depo: [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) (K2).
+
+- [x] axum + SQLite servisi, self-host, tek statik ikili
+- [x] Çoklu ajan panosu — aciliyete göre sıralı (önce dolacak olan)
+- [x] Klasör başına büyüme trendi (en küçük kareler, uyum kalitesiyle birlikte)
+- [x] "Bu hızla giderse N gün sonra dolar" tahmini — dayanağı zayıfsa
+      söylenmiyor (≥3 örnek, ≥1 gün, r² ≥ 0.5, ölçülmüş kapasite, ≤10 yıl)
+- [x] Eşik uyarıları: webhook (boş yer, büyüme hızı, dolma ufku) + cooldown
+- [x] Ekip erişimi ve token yönetimi — ajan token'ları hash'li ve iptal
+      edilebilir; ajan token'ı panoyu okuyamaz, admin token'ı push edemez
+- [x] docker-compose ile tek komut kurulum
+- [x] Kapasite ölçümü çekirdeğe eklendi (şema v2) — tahminin ön koşulu
+- [ ] E-posta ile uyarı (şimdilik yalnızca webhook)
+- [ ] Kişi başına hesap (şimdilik tek admin kimliği)
 
 ---
 

@@ -145,6 +145,15 @@ Bir disk aracının tek satmayan özelliği yanlış rakamdır. Bu yüzden:
 - Sabit bağlantılar bir kez sayılır, sembolik bağlantılar izlenmez.
 - Toplamlar `du` ile birebir eşleşmelidir; bu bir test koşuludur, temenni değil.
 - Okunamayan yollar sessizce atlanmaz, sayılır ve raporlanır.
+- Dosya sistemi kapasitesi **boş / toplam** olarak bildirilir, "% dolu" olarak
+  değil. APFS, btrfs ve thin LVM'de alan birimler arasında paylaşıldığı için
+  `toplam - boş` kardeş birimlerin kullanımını da içerir ve aynı mount için
+  `df` ile çelişir. Bu fark geliştirme sırasında ölçülerek yakalandı: aynı disk
+  için araç "70% dolu", `df` ise "6%" diyordu (bkz. DECISIONS.md K6).
+- Bir tahmin, dayanağı zayıfsa **söylenmez**. Merkez servisin "N gün sonra
+  dolar" hesabı yeterli örnek, yeterli zaman açıklığı ve yeterli uyum
+  (r² ≥ 0.5) yoksa boş bırakılır. Kendinden emin yanlış bir tarih, hiç tarih
+  olmamasından kötüdür.
 
 ## Kaynaklar
 

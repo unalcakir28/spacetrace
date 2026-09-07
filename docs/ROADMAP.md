@@ -28,9 +28,9 @@ karşılaştırılabiliyor.
 
 ---
 
-## Faz 2 — Ajan ⏳ sırada
+## Faz 2 — Ajan ✅
 
-**Hedef sürüm:** 0.2.0
+**Durum:** çekirdek çalışıyor · **Sürüm:** 0.2.0
 
 Ürünün farklılaştığı ilk nokta. Aynı ikili sunucuda, NAS'ta ve konteynerde
 çalışır; tarar, saklar, isteyene verir.
@@ -49,41 +49,61 @@ karşılaştırılabiliyor.
 konteynerinde ajan kurulu; her gece tarama alıyor; bir hafta sonra
 `spacetrace diff --remote <host> --path /var` anlamlı çıktı veriyor.
 
+**Karşılanan kısım:** komut zinciri uçtan uca doğrulandı — ajan tarıyor,
+serve ediyor, CLI `--remote diff` suçlu klasörü doğru buluyor. **Kalan:** gerçek
+sunuculara kurulum ve bir haftalık gerçek veri; bunlar yalnızca gerçek
+makinelerde yapılabilir.
+
 **Bilinçli sınır:** Ajan hiçbir şeyi silmez, yalnızca okur. Bu ilk sürümde bir
 özellik eksiği değil, güven kararı.
 
 ---
 
-## Faz 3 — Masaüstü uygulaması ⏳
+## Faz 3 — Masaüstü uygulaması ✅
 
-**Hedef sürüm:** 0.3.0 · **Yığın:** Tauri v2 + React/TS
+**Durum:** çalışıyor · **Depo:** [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) (ayrı, K2)
+**Yığın:** Tauri v2 + React/TS
 
-- Klasör ağacı + zoom'lanabilir squarified treemap
-- Dosya türüne göre renklendirme, çöpe gönder, Finder/Explorer'da aç
-- "Uzak kaynak ekle": ajan URL'i veya SSH; uzak snapshot'ı yerelmiş gibi gezme
-- Diff görünümü: büyüyen/küçülen klasörler, zaman çizelgesi
-- Windows MFT hızlı yolu ("yönetici olarak çalıştır" arkasında), macOS Full Disk
-  Access onboarding ekranı
+- Klasör ağacı + zoom'lanabilir squarified treemap ✅
+- Dosya türüne göre renklendirme, çöpe gönder, Finder/Explorer'da aç ✅
+- "Uzak kaynak ekle": ajan URL'i; uzak snapshot'ı yerelmiş gibi gezme ✅
+- Diff görünümü: büyüyen/küçülen klasörler ✅
+- Windows MFT hızlı yolu, macOS Full Disk Access onboarding, zaman çizelgesi ⏳
+
+Yerleşim motoru bu depoda: `crates/treemap` (squarified + LOD + hiyerarşik
+hit-test), 21 test. Uygulama kabuğu ayrı depoda.
 
 **Çıkış kriteri:** 100k+ dikdörtgenlik bir treemap üç platformda akıcı
 (pan/zoom'da kare düşürmüyor); uzak bir ajanın snapshot'ı yerel diskle aynı
 arayüzde açılıyor.
 
+**Karşılanan kısım:** uzak snapshot yerel diskle aynı arayüzde ve aynı kod
+yolundan açılıyor. **Kalan:** performans yalnızca macOS'ta doğrulandı; Windows
+ve WebKitGTK ölçülmedi.
+
 ---
 
-## Faz 4 — Merkez servis ⏳
+## Faz 4 — Merkez servis ✅
 
-**Hedef sürüm:** 0.4.0
+**Durum:** çalışıyor · **Depo:** [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) (ayrı, K2)
 
 Ekip kademesinin karşılığı. Self-host edilebilir, zorunlu değil.
 
-- Çoklu ajan panosu: hangi makinede ne kadar yer kaldı, ne büyüyor
-- Klasör başına büyüme trendi ve eşik uyarıları (e-posta / webhook)
-- Ekip erişimi, token yönetimi
-- Web görünümü (masaüstündeki aynı React treemap bileşeni)
+- Çoklu ajan panosu: hangi makinede ne kadar yer kaldı, ne büyüyor ✅
+- Klasör başına büyüme trendi ve eşik uyarıları (webhook) ✅
+- Token yönetimi: ajan token'ı panoyu okuyamaz, admin token'ı push edemez ✅
+- E-posta uyarısı ve kişi başına hesap ⏳
+
+Pano sunucu tarafında elle üretiliyor; frontend build adımı yok. Masaüstündeki
+React treemap'i paylaşmak yerine bu seçildi, çünkü self-host edilen bir servisin
+tek statik ikili kalması ops açısından daha değerli.
 
 **Çıkış kriteri:** Beş makineyi izleyen bir kurulum, disk dolmadan önce
 "şu klasör bu hızla giderse 9 gün sonra diski doldurur" uyarısı üretiyor.
+
+**Karşılanan kısım:** mekanizma tek makineyle uçtan uca doğrulandı — 7 günlük
+geçmişte r²=1.0 trend, 4 MiB kalan yer senaryosunda 10.5 gün tahmini, uyarı
+tetiklenip webhook'a gerçekten POST atılıyor. **Kalan:** beş gerçek makine.
 
 ---
 

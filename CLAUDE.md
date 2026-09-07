@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 107 test, hepsi geçmeli
+cargo test --workspace                   # 150 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -72,25 +72,46 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 | `diff` | İki görüntüyü karşılaştırma, "suçlu klasör" tespiti |
 | `cli` | `spacetrace` ikilisi (uzak kaynaklar dâhil) |
 | `agent` | `spacetrace-agent` ikilisi: zamanlayıcı + HTTP servisi |
+| `treemap` | Squarified yerleşim + LOD + hiyerarşik hit-test (masaüstü kullanır) |
 
 Bağımlılık yönü tek yönlü. Ajan (Faz 2) bu üçünü kullanır, `cli`'ye
 bağlanmaz.
 
-## Sıradaki iş: Faz 3 (masaüstü)
+## Depolar
 
-Faz 2 (ajan) çalışıyor: zamanlayıcı, HTTP servisi, push/pull, CLI `--remote`.
-Kalan iki çıkış kriteri yalnızca gerçek makinelerde yapılabilir (bkz. TODO.md).
+Dört fazın hepsi çalışıyor. K2 gereği kod üç depoda:
+
+| Depo | İçerik | Görünürlük |
+|------|--------|------------|
+| bu depo | scan-core, store, diff, treemap, cli, agent | public, Apache-2.0 |
+| [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) | Tauri v2 + React masaüstü | private, ticari |
+| [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) | Filo panosu, trend, uyarılar | private, ticari |
+
+Diğer ikisi bu depoyu **git bağımlılığı** olarak kullanıyor, path değil. Yani
+buradaki genel API'yi bozan bir değişiklik onları sessizce kırar; `main`'e
+push etmeden önce bunu düşün.
+
+## Sıradaki iş
+
+Kalan işler gerçek donanım veya gerçek zaman gerektiriyor (tam liste TODO.md):
+gerçek sunuculara ajan kurulumu ve bir haftalık veri, Windows MFT hızlı yolu,
+macOS Full Disk Access onboarding, WebKitGTK'da treemap performansı.
 
 Fazlar arası kararlar kapandı ([docs/DECISIONS.md](docs/DECISIONS.md)); yeniden
 açmadan önce oradaki gerekçeyi oku.
 
-Ajanın kodunda dikkat edilecekler:
+Kodda dikkat edilecekler:
 
 - Snapshot telde **ham SQLite**. `Store::export_snapshot` ATTACH ile tek taramayı
   ayrı dosyaya kopyalar; `import_snapshot` kimliği yeniden atar ama host/root/
   `started_at` üçlüsünü korur — yinelenme kontrolü bu üçlüye dayanıyor.
+- **`store::load` bir güven sınırı.** Uzaktan indirilen snapshot da bu yoldan
+  geçiyor, bu yüzden `Tree::from_parts_checked` arena değişmezlerini doğruluyor.
+  Doğrulamayı atlayan bir yol ekleme: bozuk `children_start` indeks panic'i,
+  geriye dönük bir çocuk işaretçisi sonsuz döngü demek.
 - Bir kök aynı anda yalnızca bir kez taranır (`Runner::try_claim`, HTTP'de 409).
 - Zamanlayıcı UTC + sabit offset ile çalışır; saat dilimi veritabanı yok.
+- Kapasite **boş/toplam** olarak raporlanır, "% dolu" olarak değil (K6).
 
 ## Bilinen eksikler
 
@@ -102,6 +123,8 @@ Bunlara denk gelirsen bug değil, bilinen borç (tam liste TODO.md'de):
 - APFS clone'ları tekilleştirilmiyor; btrfs/ZFS'te reflink ve sıkıştırma
   yüzünden ağaç yürüyüşü gerçek kullanımı yanlış raporluyor.
 - Tarama tüm ağacı bellekte tutuyor; 10M+ dosyada bellek profili ölçülmedi.
+- Ajanda yerleşik TLS yok; ters vekil öneriliyor. Hız sınırlama da yok (token
+  zaten gerekli olduğu için ertelendi).
 
 ## Bu depo dışındaki bağlam
 

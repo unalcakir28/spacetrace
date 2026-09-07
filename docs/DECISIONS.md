@@ -132,3 +132,45 @@ kullanıcılarını değiştirmeleri gerekir. Ayrıca GitHub Actions public depo
 
 **Sıra.** Önce K1 (İngilizce geçişi), sonra push. İlk izlenim Türkçe README
 olmamalı.
+
+---
+
+## K6 — Kapasite "boş / toplam" olarak bildirilir · 7 Eylül 2026
+
+Dosya sistemi kapasitesi kullanıcıya **boş yer ve toplam** olarak gösterilir;
+"% dolu" olarak değil. `Capacity::unavailable()` hâlâ var ama ne olduğu
+dokümante edildi ve arayüzde kullanılmıyor.
+
+**Neden — ölçümle bulundu.** Faz 4 için kapasite eklendikten sonra CLI
+"filesystem 70% full" yazıyordu. Aynı mount için `df` "6%" diyordu. İkisi de
+aynı `total` ve `available` değerlerini görüyor; fark tanımda: APFS'te (ve btrfs
+subvolume'larında, thin LVM havuzlarında) alan birimler arasında paylaşılır,
+dolayısıyla `total - available` bu birimin değil konteynerin kullanımıdır. `df`
+macOS'ta birimin kendi baytlarını raporlar.
+
+Hangisi "doğru" sorusunun cevabı soruya bağlı: "yerim bitecek mi" için bizim
+rakam, "buraya ne koydum" için `df`'in rakamı. Ama bir disk aracının tek
+satmayan özelliği yanlış rakam olduğu için, `df` ile çelişen bir yüzdeyi
+göstermek kabul edilemez. `available` her iki tarafta da aynı sayı, bu yüzden
+arayüz onu gösteriyor.
+
+**Sonuç.** WHY.md'nin doğruluk sözüne bir madde eklendi.
+
+---
+
+## K7 — Tahmin, dayanağı zayıfsa söylenmez · 7 Eylül 2026
+
+Merkez servisin "N gün sonra dolar" tahmini yalnızca şu koşulların **hepsi**
+sağlandığında gösterilir: ≥3 snapshot, ≥1 gün açıklık, doğrusal uyum r² ≥ 0.5,
+ölçülmüş kapasite, ve cevabın 10 yıl içinde olması.
+
+**Neden.** Disk kullanımı sık sık doğrusal değil. Bir log rotasyonu ya da tek
+seferlik bir restore, eğimi hiçbir şey ifade etmeyen bir doğru üretir. Bir
+saatlik üç örnek gelecek hafta hakkında hiçbir şey söylemez. Kendinden emin
+yanlış bir tarih, hiç tarih olmamasından kötüdür — ve bir uyarı sistemi için
+yanlış alarm, sistemin tamamının kapatılmasına yol açar.
+
+Koşullar sağlanmazsa kolon boş kalır ve hedef sayfası nedenini yazar
+("not extrapolated: 2 samples over 0.3 days, fit 0.12"). Eşikler
+`spacetrace-hub/src/trend.rs` içinde `MIN_SAMPLES`, `MIN_SPAN_DAYS`, `MIN_R2`
+olarak açıkça duruyor.

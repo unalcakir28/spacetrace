@@ -16,8 +16,13 @@ container.
 |-------|-------|-------|
 | 1 | Scanner, SQLite snapshots, diff, CLI | ✅ working |
 | 2 | Agent (`serve` / `push`), remote sources, Docker image | ✅ working |
-| 3 | Tauri desktop: treemap, remote browser, diff view | ⏳ |
-| 4 | Central service: multi-machine dashboard, growth alerts | ⏳ |
+| 3 | Tauri desktop: treemap, remote browser, diff view | ✅ working ([separate repo](https://github.com/unalcakir28/spacetrace-desktop)) |
+| 4 | Hub: fleet dashboard, growth trends, fill-up forecasts, alerts | ✅ working ([separate repo](https://github.com/unalcakir28/spacetrace-hub)) |
+
+The desktop app and the hub live in their own repositories because they are the
+commercial part; the scanning core, snapshot store, CLI and agent here are and
+stay Apache-2.0. The agent runs on your servers, so you should be able to read
+it. See [docs/DECISIONS.md](docs/DECISIONS.md) K2.
 
 ## Documentation
 
@@ -128,7 +133,8 @@ crates/
 ├── store/       SQLite snapshot store + ncdu-compatible export
 ├── diff/        Snapshot comparison, "culprit folder" detection
 ├── cli/         the spacetrace binary
-└── agent/       the spacetrace-agent binary: scheduler + HTTP service
+├── agent/       the spacetrace-agent binary: scheduler + HTTP service
+└── treemap/     squarified layout with level-of-detail, for the desktop app
 ```
 
 The tree is stored as an **arena** whose children occupy a contiguous index
@@ -145,6 +151,11 @@ static binary built from `scan-core` + `store`.
 - **logical (`size`)**: file bytes only. Matches `du -sb` exactly.
 - **on disk (`alloc`)**: blocks actually allocated, directory blocks included.
   Matches `du -s --block-size=1` exactly.
+- **filesystem capacity**: reported as *free of total*, which matches `df`'s
+  Avail column exactly. Deliberately not "% used": on a filesystem whose space
+  is shared between volumes (APFS containers, btrfs subvolumes, thin LVM) the
+  used figure would include the siblings and disagree with `df` on the same
+  mount.
 - Hardlinks are counted once by default; disable with `--no-dedupe`. Symlinks are
   never followed and are counted at their own size.
 
@@ -154,7 +165,7 @@ Verified: on `/usr` (141k files), `/usr/share` and `/etc`, both totals match `du
 ## Development
 
 ```bash
-cargo test --workspace     # 107 tests
+cargo test --workspace     # 150 tests
 cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
