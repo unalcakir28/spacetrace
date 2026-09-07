@@ -507,3 +507,133 @@ fn a_snapshot_whose_child_points_backwards_is_rejected() {
     // Without the check this loops forever walking parent pointers.
     assert!(Store::open(&path).unwrap().load(id).is_err());
 }
+
+// ------------------------------------------------------------- migration
+
+/// A database written by a v1 build must keep working, and its old rows must
+/// read back as "capacity unknown" rather than as a full disk.
+#[test]
+fn a_v1_database_migrates_to_v2_without_losing_anything() {
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("v1.sqlite");
+
+    // Build a v1 database by hand: the v1 schema had no fs_* columns.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE scans (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                host              TEXT    NOT NULL,
+                root              TEXT    NOT NULL,
+                started_at        INTEGER NOT NULL,
+                duration_ms       INTEGER NOT NULL,
+                total_size        INTEGER NOT NULL,
+                total_alloc       INTEGER NOT NULL,
+                files             INTEGER NOT NULL,
+                dirs              INTEGER NOT NULL,
+                errors            INTEGER NOT NULL,
+                hardlinks_deduped INTEGER NOT NULL,
+                scanner_version   TEXT    NOT NULL,
+                label             TEXT
+            );
+            CREATE TABLE entries (
+                scan_id        INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+                id             INTEGER NOT NULL,
+                parent_id      INTEGER,
+                name           TEXT    NOT NULL,
+                kind           INTEGER NOT NULL,
+                size           INTEGER NOT NULL,
+                alloc          INTEGER NOT NULL,
+                mtime          INTEGER NOT NULL,
+                nlink          INTEGER NOT NULL,
+                files          INTEGER NOT NULL,
+                dirs           INTEGER NOT NULL,
+                children_start INTEGER NOT NULL,
+                children_len   INTEGER NOT NULL,
+                PRIMARY KEY (scan_id, id)
+            ) WITHOUT ROWID;
+            "#,
+        )
+        .unwrap();
+        conn.execute_batch(
+            "INSERT INTO scans (host, root, started_at, duration_ms, total_size, total_alloc,
+                                files, dirs, errors, hardlinks_deduped, scanner_version, label)
+             VALUES ('oldhost', '/legacy', 1000, 50, 4096, 8192, 2, 1, 0, 0, '0.1.0', 'v1row');
+             INSERT INTO entries VALUES (1, 0, NULL, 'legacy', 0, 4096, 8192, 1000, 1, 2, 1, 1, 1);
+             INSERT INTO entries VALUES (1, 1, 0, 'a.bin', 1, 4096, 8192, 1000, 1, 1, 0, 0, 0);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 1i64).unwrap();
+    }
+
+    // Opening with the current build migrates it in place.
+    let store = Store::open(&path).unwrap();
+    let scans = store.list().unwrap();
+    assert_eq!(scans.len(), 1, "the v1 row must survive");
+
+    let meta = &scans[0];
+    assert_eq!(meta.host, "oldhost");
+    assert_eq!(meta.root, "/legacy");
+    assert_eq!(meta.started_at, 1000);
+    assert_eq!(meta.total_size, 4096);
+    assert_eq!(meta.label.as_deref(), Some("v1row"));
+    assert!(
+        meta.fs_total.is_none() && meta.fs_available.is_none(),
+        "a v1 snapshot did not measure capacity; it must not claim to"
+    );
+    assert!(meta.fs_free_fraction().is_none());
+
+    // The tree still loads.
+    let (tree, _) = store.load(meta.id).unwrap();
+    assert_eq!(tree.len(), 2);
+
+    // And the file is now v2, so a second open is a no-op.
+    let version: i64 = rusqlite::Connection::open(&path)
+        .unwrap()
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    assert_eq!(Store::open(&path).unwrap().list().unwrap().len(), 1);
+}
+
+/// After migrating, a new scan written into the same file records capacity.
+#[test]
+fn a_migrated_database_records_capacity_for_new_scans() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("db.sqlite");
+
+    let mut store = Store::open(&path).unwrap();
+    let id = store.save(&tree, &stats, "here", None).unwrap();
+    let meta = store.scan(id).unwrap().unwrap();
+
+    // The scan really ran on a real filesystem, so this must be populated.
+    assert!(
+        meta.fs_total.is_some(),
+        "capacity should have been measured"
+    );
+    let fraction = meta.fs_free_fraction().expect("a fraction");
+    assert!(
+        (0.0..=1.0).contains(&fraction),
+        "implausible fraction {fraction}"
+    );
+    assert!(meta.fs_available.unwrap() <= meta.fs_total.unwrap());
+}
+
+/// A newer database must be refused rather than read incorrectly.
+#[test]
+fn a_future_schema_is_refused() {
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("future.sqlite");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.pragma_update(None, "user_version", 99i64).unwrap();
+    }
+    let err = match Store::open(&path) {
+        Ok(_) => panic!("a v99 database must not open"),
+        Err(err) => err.to_string(),
+    };
+    assert!(err.contains("newer spacetrace"), "{err}");
+}

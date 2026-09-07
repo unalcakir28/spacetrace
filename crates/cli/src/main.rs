@@ -96,6 +96,8 @@ fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
             "hardlinks_deduped": stats.hardlinks_deduped,
             "duration_ms": stats.duration_ms,
             "scan_id": saved_id,
+            "fs_total": stats.capacity.map(|c| c.total),
+            "fs_available": stats.capacity.map(|c| c.available),
             "largest": largest_json(&tree, a.top),
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
@@ -622,6 +624,21 @@ fn print_scan_summary(tree: &Tree, stats: &ScanStats) {
             "  {} hardlinks counted once",
             fmt::count(stats.hardlinks_deduped)
         );
+    }
+    // The filesystem's own accounting, which covers more than the scanned root
+    // and is the only thing that can answer "how much room is left".
+    if let Some(capacity) = stats.capacity {
+        if capacity.total > 0 {
+            // Free rather than "% full": on APFS and btrfs the space is
+            // shared between volumes, so "used" would count the siblings and
+            // disagree with df. Available is the same number everywhere.
+            println!(
+                "  filesystem: {} free of {} ({:.0}% available)",
+                fmt::size(capacity.available),
+                fmt::size(capacity.total),
+                capacity.free_fraction() * 100.0,
+            );
+        }
     }
 }
 

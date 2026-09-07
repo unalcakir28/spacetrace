@@ -5,10 +5,12 @@
 //! node), makes aggregation a single reverse pass, and gives cache-friendly
 //! traversal for the treemap layout.
 
+mod capacity;
 mod meta;
 mod scan;
 mod tree;
 
+pub use capacity::Capacity;
 pub use meta::{EntryKind, RawMeta};
 pub use scan::{scan, ScanOptions, ScanProgress, ScanStats};
 pub use tree::{Node, NodeId, Tree, TreeError};

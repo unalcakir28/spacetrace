@@ -37,6 +37,29 @@ pub struct ScanMeta {
     pub hardlinks_deduped: u64,
     pub scanner_version: String,
     pub label: Option<String>,
+    /// Size of the filesystem the root sits on, when it could be measured.
+    /// `None` for snapshots taken before schema v2, or on a platform that
+    /// cannot answer — which is different from zero.
+    #[serde(default)]
+    pub fs_total: Option<u64>,
+    /// Bytes available to the scanning user on that filesystem.
+    #[serde(default)]
+    pub fs_available: Option<u64>,
+}
+
+impl ScanMeta {
+    /// Fraction of the filesystem still available at scan time, `0.0..=1.0`.
+    ///
+    /// Free rather than used on purpose: on a shared-space filesystem (APFS,
+    /// btrfs, thin LVM) "used" would include sibling volumes and disagree with
+    /// what `df` prints, while "available" is the same number on both.
+    pub fn fs_free_fraction(&self) -> Option<f64> {
+        let (total, available) = (self.fs_total?, self.fs_available?);
+        if total == 0 {
+            return None;
+        }
+        Some(available.min(total) as f64 / total as f64)
+    }
 }
 
 impl ScanMeta {
@@ -84,8 +107,9 @@ impl Store {
         let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO scans (host, root, started_at, duration_ms, total_size, total_alloc,
-                                files, dirs, errors, hardlinks_deduped, scanner_version, label)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                files, dirs, errors, hardlinks_deduped, scanner_version, label,
+                                fs_total, fs_available)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 host,
                 tree.root_path().to_string_lossy(),
@@ -99,6 +123,8 @@ impl Store {
                 stats.hardlinks_deduped as i64,
                 SCANNER_VERSION,
                 label,
+                stats.capacity.map(|c| c.total as i64),
+                stats.capacity.map(|c| c.available as i64),
             ],
         )?;
         let scan_id = tx.last_insert_rowid();
@@ -344,9 +370,10 @@ impl Store {
             tx.execute(
                 "INSERT INTO main.scans (host, root, started_at, duration_ms, total_size,
                                          total_alloc, files, dirs, errors, hardlinks_deduped,
-                                         scanner_version, label)
+                                         scanner_version, label, fs_total, fs_available)
                  SELECT host, root, started_at, duration_ms, total_size, total_alloc, files,
-                        dirs, errors, hardlinks_deduped, scanner_version, label
+                        dirs, errors, hardlinks_deduped, scanner_version, label,
+                        fs_total, fs_available
                  FROM incoming.scans WHERE id = ?1",
                 [source_id],
             )?;
@@ -406,7 +433,8 @@ impl Store {
 }
 
 const SELECT_SCAN: &str = "SELECT id, host, root, started_at, duration_ms, total_size,
-        total_alloc, files, dirs, errors, hardlinks_deduped, scanner_version, label FROM scans";
+        total_alloc, files, dirs, errors, hardlinks_deduped, scanner_version, label,
+        fs_total, fs_available FROM scans";
 
 fn row_to_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScanMeta> {
     Ok(ScanMeta {
@@ -423,6 +451,8 @@ fn row_to_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScanMeta> {
         hardlinks_deduped: row.get::<_, i64>(10)? as u64,
         scanner_version: row.get(11)?,
         label: row.get(12)?,
+        fs_total: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
+        fs_available: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
     })
 }
 

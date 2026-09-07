@@ -1479,9 +1479,11 @@ dependencies = [
 name = "spacetrace-scan-core"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rayon",
  "serde",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
 
+use crate::capacity::Capacity;
 use crate::meta::{display_name, EntryKind, RawMeta};
 use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
 
@@ -54,6 +55,12 @@ pub struct ScanStats {
     /// Up to `MAX_REPORTED_ERRORS` paths that could not be read.
     pub error_samples: Vec<(PathBuf, String)>,
     pub duration_ms: u64,
+    /// Capacity of the filesystem the root sits on, when the OS can say.
+    ///
+    /// A scan measures what a folder uses; this is the other half of "when
+    /// does it fill up". `None` means the platform could not answer, which is
+    /// not an error.
+    pub capacity: Option<Capacity>,
 }
 
 struct Ctx {
@@ -160,6 +167,9 @@ pub fn scan(
         hardlinks_deduped: ctx.hardlinks_deduped.load(Ordering::Relaxed),
         error_samples: ctx.errors.into_inner().unwrap(),
         duration_ms: started.elapsed().as_millis() as u64,
+        // Asked once, after the walk: it describes the mount, not the tree,
+        // and a failure here must not fail the scan.
+        capacity: crate::capacity::of(tree.root_path()),
     };
     Ok((tree, stats))
 }

@@ -3,7 +3,11 @@ use rusqlite::Connection;
 
 /// Bumped whenever the on-disk layout changes in a way older binaries cannot
 /// read. Snapshots are cheap to recreate, so migrations may simply refuse.
-pub const SCHEMA_VERSION: i64 = 1;
+///
+/// v2 added `fs_total` / `fs_available`: the capacity of the filesystem the
+/// root sits on, without which "when does this fill up" cannot be answered.
+/// Both are nullable, because a v1 snapshot genuinely does not know.
+pub const SCHEMA_VERSION: i64 = 2;
 
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -23,8 +27,42 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
 
     create_tables(conn, "main")?;
+    migrate_from(conn, found)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
+}
+
+/// Bring an existing database up to the current schema.
+///
+/// `create_tables` only ever creates what is missing, so a database written by
+/// an older build keeps its old columns and needs them added explicitly.
+fn migrate_from(conn: &Connection, found: i64) -> Result<()> {
+    if found >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    // v1 -> v2: filesystem capacity. Existing rows keep NULL, which reads back
+    // as "unknown" rather than as zero — a scan taken before this existed did
+    // not measure a full disk.
+    for column in ["fs_total", "fs_available"] {
+        if !has_column(conn, "scans", column)? {
+            conn.execute_batch(&format!(
+                "ALTER TABLE main.scans ADD COLUMN {column} INTEGER"
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Create the tables in `schema`, which is `main` for the open database or the
@@ -50,7 +88,11 @@ pub fn create_tables(conn: &Connection, schema: &str) -> Result<()> {
             errors            INTEGER NOT NULL,
             hardlinks_deduped INTEGER NOT NULL,
             scanner_version   TEXT    NOT NULL,
-            label             TEXT
+            label             TEXT,
+            -- Capacity of the filesystem the root sits on. NULL when the
+            -- platform could not say, or when the snapshot predates v2.
+            fs_total          INTEGER,
+            fs_available      INTEGER
         );
 
         CREATE INDEX IF NOT EXISTS {schema}.scans_target
