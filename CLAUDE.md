@@ -13,12 +13,17 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 150 test, hepsi geçmeli
+cargo test --workspace                   # 152 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
 cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc
 ```
+
+Windows tip denetimi yalnızca `scan-core` için yapılabiliyor: `agent` ve `cli`
+zstd üzerinden C koduna bağlı ve macOS'ta msvc hedefi için çapraz derleyici yok.
+Onların Windows davranışı ancak CI'da görülür — **CI'ı beklemeden "Windows'ta
+çalışıyor" deme.**
 
 Rust 1.85+ gerekir. Testler geçici dizinlerde **gerçek dosya sistemi** kullanır
 (hardlink, symlink, izin hatası senaryoları dâhil), mock yok.
@@ -27,6 +32,11 @@ Rust 1.85+ gerekir. Testler geçici dizinlerde **gerçek dosya sistemi** kullan�
 
 Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 
+0. **Bir veritabanını açmak yazma kilidi almamalı.** `store::schema::migrate`
+   şema güncelse hiçbir DDL veya kalıcı pragma çalıştırmıyor. Ajan ve hub her
+   istekte bağlantı açtığı için, koşulsuz `CREATE TABLE IF NOT EXISTS` ya da
+   `PRAGMA journal_mode` bir okumanın süren yazmayı SQLITE_BUSY ile devirmesine
+   yol açıyordu (CI'da yakalandı, testi `roundtrip.rs` içinde).
 1. **Boyut anlambilimi.** `size` = yalnızca dosya baytları (`du -sb` ile birebir).
    `alloc` = tahsis edilen bloklar, dizin blokları dâhil (`du -s --block-size=1`
    ile birebir). Dizinlerin kendi inode boyutu mantıksal toplama **girmez**.

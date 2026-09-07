@@ -637,3 +637,93 @@ fn a_future_schema_is_refused() {
     };
     assert!(err.contains("newer spacetrace"), "{err}");
 }
+
+// ------------------------------------------------- concurrent open vs write
+
+/// Opening a store while another connection is mid-write must not fail.
+///
+/// The agent and the hub open a connection per request, so a read can easily
+/// land while a scan is saving. This reproduced a CI failure where the *writer*
+/// was knocked over with SQLITE_BUSY: `Store::open` ran the migration on every
+/// open, and both `PRAGMA journal_mode` and `CREATE TABLE IF NOT EXISTS` take a
+/// write lock even when there is nothing to change.
+#[test]
+fn opening_a_store_while_another_writes_does_not_disturb_either() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("db.sqlite");
+
+    // Create it once so the schema is already current.
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.save(&tree, &stats, "host", None).unwrap();
+    }
+
+    // Hold an open write transaction on one connection...
+    let writer = rusqlite::Connection::open(&path).unwrap();
+    writer
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    writer
+        .execute(
+            "INSERT INTO scans (host, root, started_at, duration_ms, total_size, total_alloc,
+                                files, dirs, errors, hardlinks_deduped, scanner_version, label)
+             VALUES ('h2','/r2',1,1,1,1,1,1,0,0,'t',NULL)",
+            [],
+        )
+        .unwrap();
+
+    // ...and open the store for reading at the same time.
+    let reader = Store::open(&path).expect("opening while a write is in flight must work");
+    assert!(!reader.list().unwrap().is_empty());
+
+    writer.execute_batch("COMMIT").unwrap();
+    assert_eq!(Store::open(&path).unwrap().list().unwrap().len(), 2);
+}
+
+/// And the mirror image: a write must still succeed while readers keep opening.
+#[test]
+fn a_write_survives_readers_opening_the_store_repeatedly() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("db.sqlite");
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.save(&tree, &stats, "host", None).unwrap();
+    }
+
+    let reading = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let stop = std::sync::Arc::clone(&reading);
+    let readers = {
+        let path = path.clone();
+        std::thread::spawn(move || {
+            let mut opens = 0u32;
+            while stop.load(std::sync::atomic::Ordering::Relaxed) {
+                // This is exactly what the agent does per HTTP request.
+                Store::open(&path)
+                    .expect("a reader open must not fail")
+                    .list()
+                    .unwrap();
+                opens += 1;
+            }
+            opens
+        })
+    };
+
+    let mut store = Store::open(&path).unwrap();
+    for _ in 0..8 {
+        store
+            .save(&tree, &stats, "writer", None)
+            .expect("a save must not be knocked over by readers opening");
+    }
+
+    reading.store(false, std::sync::atomic::Ordering::Relaxed);
+    let opens = readers.join().unwrap();
+    assert!(
+        opens > 0,
+        "the reader thread should have opened at least once"
+    );
+}

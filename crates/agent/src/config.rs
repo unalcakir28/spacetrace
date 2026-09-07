@@ -215,6 +215,11 @@ impl Config {
 }
 
 /// Written by `spacetrace-agent init`, and the worked example in the docs.
+///
+/// Platform-specific because `validate` requires absolute root paths and
+/// "absolute" differs: `/var` is not an absolute path on Windows, so a single
+/// Unix-flavoured example would print a config that cannot start there.
+#[cfg(not(windows))]
 pub const EXAMPLE_CONFIG: &str = r#"# spacetrace agent configuration.
 
 # Every root below is stored in this one database.
@@ -242,6 +247,40 @@ keep = 14
 
 [[roots]]
 path = "/srv"
+schedule = "30 3 * * 0"     # 03:30 on Sundays
+keep = 8
+"#;
+
+/// Windows flavour of [`EXAMPLE_CONFIG`]. Paths use TOML literal strings
+/// (single quotes) so backslashes need no escaping.
+#[cfg(windows)]
+pub const EXAMPLE_CONFIG: &str = r#"# spacetrace agent configuration.
+
+# Every root below is stored in this one database.
+db = 'C:\ProgramData\spacetrace\snapshots.sqlite'
+
+# Schedules are matched against UTC plus this offset. The agent ships no
+# timezone database, so DST is not handled: pick the offset you want scans to
+# happen at, or leave it 0 and think in UTC.
+utc_offset_minutes = 0
+
+[server]
+# Loopback by default. Put a reverse proxy in front, or change this to
+# "0.0.0.0:7878" once you have set a token and, ideally, TLS.
+listen = "127.0.0.1:7878"
+# Supply the bearer token by file (recommended) or via SPACETRACE_TOKEN.
+# token_file = 'C:\ProgramData\spacetrace\token'
+
+[[roots]]
+path = 'C:\Users'
+schedule = "0 3 * * *"      # 03:00 every day
+label = "nightly"
+exclude = ["node_modules", ".git", "AppData"]
+one_file_system = true
+keep = 14
+
+[[roots]]
+path = 'C:\ProgramData'
 schedule = "30 3 * * 0"     # 03:30 on Sundays
 keep = 8
 "#;
@@ -275,6 +314,8 @@ mod tests {
         assert!(root.path.to_string_lossy().contains('\u{7}'));
     }
 
+    /// `agent init` prints this, so it has to be startable on the platform it
+    /// was printed on — including the absolute-path rule, which differs.
     #[test]
     fn the_example_config_parses() {
         let cfg: Config = toml::from_str(EXAMPLE_CONFIG).expect("example config must parse");
@@ -282,6 +323,15 @@ mod tests {
         assert_eq!(cfg.roots.len(), 2);
         assert_eq!(cfg.roots[0].keep, Some(14));
         assert!(cfg.roots[0].one_file_system);
+        assert!(
+            cfg.roots.iter().all(|r| r.path.is_absolute()),
+            "every example root must be absolute here: {:?}",
+            cfg.roots.iter().map(|r| &r.path).collect::<Vec<_>>()
+        );
+        assert!(
+            cfg.db.is_absolute(),
+            "the example database path must be absolute"
+        );
         // Defaults apply to roots that do not mention them.
         assert!(cfg.roots[1].dedupe_hardlinks);
         assert!(!cfg.roots[1].one_file_system);

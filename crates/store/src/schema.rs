@@ -9,14 +9,28 @@ use rusqlite::Connection;
 /// Both are nullable, because a v1 snapshot genuinely does not know.
 pub const SCHEMA_VERSION: i64 = 2;
 
+/// Prepare a connection, migrating the file only if it actually needs it.
+///
+/// **Opening an already-current database must not take a write lock.** The
+/// agent and the hub open a connection per request, so a read routinely lands
+/// while a scan is saving. `PRAGMA journal_mode` and `CREATE TABLE IF NOT
+/// EXISTS` both want a write lock even when there is nothing to change, so
+/// doing them unconditionally meant an open could sit out the whole busy
+/// timeout and then knock over the writer with SQLITE_BUSY. Everything below is
+/// therefore guarded by a read first.
 pub fn migrate(conn: &Connection) -> Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    // Connection-local, no lock, no persistence: always safe to set.
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    // The agent opens a connection per request and can be saving a scan while
-    // another request reads. WAL allows one writer at a time; without a busy
-    // timeout the loser gets SQLITE_BUSY immediately instead of waiting.
+    // WAL allows one writer at a time; without a busy timeout the loser gets
+    // SQLITE_BUSY immediately instead of waiting its turn.
     conn.busy_timeout(std::time::Duration::from_secs(30))?;
+
+    // Persistent and lock-taking, so only set it when it is not already right.
+    let journal: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
+    if !journal.eq_ignore_ascii_case("wal") {
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+    }
 
     let found: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if found > SCHEMA_VERSION {
@@ -24,6 +38,10 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             "this database was written by a newer spacetrace (schema v{found}, \
              this build understands v{SCHEMA_VERSION})"
         );
+    }
+    if found == SCHEMA_VERSION {
+        // Already current: nothing to create, nothing to stamp, no lock taken.
+        return Ok(());
     }
 
     create_tables(conn, "main")?;
