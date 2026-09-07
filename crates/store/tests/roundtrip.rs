@@ -727,3 +727,45 @@ fn a_write_survives_readers_opening_the_store_repeatedly() {
         "the reader thread should have opened at least once"
     );
 }
+
+/// The case CI actually hit: a brand-new database being opened by a reader
+/// while a writer is creating and populating it.
+///
+/// This is the agent's normal shape — `POST /scans` starts a scan while the
+/// client polls `GET /scans` — and on a fresh file both sides run the
+/// migration. A writer using a DEFERRED transaction fails here with
+/// SQLITE_BUSY no matter how long the busy timeout is, because SQLite does not
+/// consult the busy handler for a deferred-to-write upgrade.
+#[test]
+fn a_writer_survives_readers_racing_it_on_a_brand_new_database() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("fresh.sqlite");
+
+    let reading = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let stop = std::sync::Arc::clone(&reading);
+    let readers = {
+        let path = path.clone();
+        std::thread::spawn(move || {
+            while stop.load(std::sync::atomic::Ordering::Relaxed) {
+                // The file may not exist yet on the first turns, which is
+                // exactly what the polling client does.
+                if let Ok(store) = Store::open(&path) {
+                    let _ = store.list();
+                }
+            }
+        })
+    };
+
+    let mut store = Store::open(&path).expect("the writer must be able to create it");
+    for _ in 0..6 {
+        store
+            .save(&tree, &stats, "writer", None)
+            .expect("a save must not be knocked over by a racing reader");
+    }
+
+    reading.store(false, std::sync::atomic::Ordering::Relaxed);
+    readers.join().unwrap();
+    assert_eq!(Store::open(&path).unwrap().list().unwrap().len(), 6);
+}

@@ -89,6 +89,19 @@ impl Store {
         Ok(Store { conn })
     }
 
+    /// Begin a write transaction, taking the write lock at `BEGIN`.
+    ///
+    /// Not `transaction()`, which is DEFERRED: that starts as a reader and
+    /// upgrades on the first write, and SQLite answers a failed upgrade with
+    /// SQLITE_BUSY *immediately*, without consulting the busy handler — so
+    /// `busy_timeout` cannot save it. Taking the lock up front is the only way
+    /// a concurrent writer waits its turn instead of failing.
+    fn write_transaction(&mut self) -> Result<rusqlite::Transaction<'_>> {
+        Ok(self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?)
+    }
+
     /// Name this machine reports itself as. Snapshots from different hosts stay
     /// distinguishable in one database.
     pub fn local_host() -> String {
@@ -104,7 +117,7 @@ impl Store {
         label: Option<&str>,
     ) -> Result<ScanId> {
         let started_at = now_unix() - (stats.duration_ms / 1000) as i64;
-        let tx = self.conn.transaction()?;
+        let tx = self.write_transaction()?;
         tx.execute(
             "INSERT INTO scans (host, root, started_at, duration_ms, total_size, total_alloc,
                                 files, dirs, errors, hardlinks_deduped, scanner_version, label,
@@ -262,7 +275,7 @@ impl Store {
     /// database-wide [`Store::prune`] would apply one machine's policy to every
     /// other root in the same file.
     pub fn prune_target(&mut self, root: &str, host: &str, keep: usize) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = self.write_transaction()?;
         let removed = tx.execute(
             "DELETE FROM scans WHERE id IN (
                  SELECT id FROM (
@@ -353,7 +366,7 @@ impl Store {
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
 
-        let tx = self.conn.transaction()?;
+        let tx = self.write_transaction()?;
         let mut imported = Vec::new();
         for (source_id, host, root, started_at) in incoming {
             let already: Option<ScanId> = tx
@@ -415,7 +428,7 @@ impl Store {
 
     /// Drop all but the newest `keep` scans of each target.
     pub fn prune(&mut self, keep: usize) -> Result<usize> {
-        let tx = self.conn.transaction()?;
+        let tx = self.write_transaction()?;
         let removed = tx.execute(
             "DELETE FROM scans WHERE id IN (
                  SELECT id FROM (

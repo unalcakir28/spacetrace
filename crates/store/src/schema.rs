@@ -18,6 +18,10 @@ pub const SCHEMA_VERSION: i64 = 2;
 /// doing them unconditionally meant an open could sit out the whole busy
 /// timeout and then knock over the writer with SQLITE_BUSY. Everything below is
 /// therefore guarded by a read first.
+/// How long to keep retrying an initialisation that lost a lock race.
+const INIT_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+const INIT_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(20);
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     // Connection-local, no lock, no persistence: always safe to set.
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -26,28 +30,104 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     // SQLITE_BUSY immediately instead of waiting its turn.
     conn.busy_timeout(std::time::Duration::from_secs(30))?;
 
-    // Persistent and lock-taking, so only set it when it is not already right.
-    let journal: String = conn.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
+    // Retry, because `busy_timeout` is not enough here. Switching journal mode
+    // needs an exclusive lock, and SQLite does not always route that through
+    // the busy handler — so two connections opening a brand-new file at the
+    // same moment can leave one with SQLITE_BUSY immediately. That is a normal
+    // situation for the agent, whose very first request may arrive while
+    // another is already creating the database, so it is retried rather than
+    // reported.
+    let deadline = std::time::Instant::now() + INIT_RETRY_BUDGET;
+    loop {
+        match initialise(conn) {
+            Ok(()) => return Ok(()),
+            Err(Busy) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(INIT_RETRY_PAUSE);
+            }
+            Err(Busy) => {
+                anyhow::bail!(
+                    "the snapshot database stayed locked for {INIT_RETRY_BUDGET:?} while \
+                     being initialised; another process may be holding it open"
+                )
+            }
+            Err(Fatal(err)) => return Err(err),
+        }
+    }
+}
+
+/// Why one initialisation attempt did not finish.
+enum InitError {
+    /// Lost a lock race; worth trying again.
+    Busy,
+    /// Anything else, including a database from a newer build.
+    Fatal(anyhow::Error),
+}
+use InitError::{Busy, Fatal};
+
+/// One attempt at bringing the file up to the current schema.
+///
+/// Everything that takes a lock is guarded by a read first, so opening an
+/// already-current database does no writing at all — which is what keeps a
+/// reader from disturbing a scan that is saving.
+fn initialise(conn: &Connection) -> Result<(), InitError> {
+    let journal: String = query(conn, "journal_mode")?;
     if !journal.eq_ignore_ascii_case("wal") {
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(classify)?;
     }
 
-    let found: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    let found: i64 = query(conn, "user_version")?;
     if found > SCHEMA_VERSION {
-        anyhow::bail!(
+        return Err(Fatal(anyhow::anyhow!(
             "this database was written by a newer spacetrace (schema v{found}, \
              this build understands v{SCHEMA_VERSION})"
-        );
+        )));
     }
     if found == SCHEMA_VERSION {
         // Already current: nothing to create, nothing to stamp, no lock taken.
         return Ok(());
     }
 
-    create_tables(conn, "main")?;
-    migrate_from(conn, found)?;
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    create_tables(conn, "main").map_err(to_init_error)?;
+    migrate_from(conn, found).map_err(to_init_error)?;
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(classify)?;
     Ok(())
+}
+
+fn query<T: rusqlite::types::FromSql>(conn: &Connection, pragma: &str) -> Result<T, InitError> {
+    conn.pragma_query_value(None, pragma, |row| row.get(0))
+        .map_err(classify)
+}
+
+fn classify(err: rusqlite::Error) -> InitError {
+    if is_busy(&err) {
+        Busy
+    } else {
+        Fatal(err.into())
+    }
+}
+
+/// `anyhow` has already erased the type by the time `create_tables` returns, so
+/// look for the sqlite error underneath it.
+fn to_init_error(err: anyhow::Error) -> InitError {
+    match err.downcast_ref::<rusqlite::Error>() {
+        Some(sqlite) if is_busy(sqlite) => Busy,
+        _ => Fatal(err),
+    }
+}
+
+fn is_busy(err: &rusqlite::Error) -> bool {
+    matches!(
+        err,
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked,
+                ..
+            },
+            _
+        )
+    )
 }
 
 /// Bring an existing database up to the current schema.
