@@ -92,11 +92,18 @@ Paket sayfası → **Package settings** → Change visibility → **Public**.
 `spacetrace` imajı bu public depodan geldiği için zaten public olabilir; yine de
 ilk yayından sonra kontrol et.
 
-### 3. GitHub Pages
+### 3. GitHub Pages — **yapıldı**
 
-`pages.yml` içindeki `actions/configure-pages` `enablement: true` ile çalışıyor,
-yani Pages'i kendisi açıyor. İlk çalıştırmadan sonra site
-<https://unalcakir28.github.io/spacetrace/> adresinde.
+`GITHUB_TOKEN`'ın hiç var olmamış bir Pages sitesini oluşturma izni yok
+("Resource not accessible by integration"), yani `configure-pages` bunu
+kendisi başlatamıyor. Bir kez açıldı:
+
+```bash
+gh api -X POST repos/unalcakir28/spacetrace/pages -f build_type=workflow
+```
+
+Site <https://unalcakir28.github.io/spacetrace/> adresinde. Bir daha
+gerekmiyor; iş akışı bundan sonra yalnızca yapılandırmayı okuyor.
 
 ## Kararlı sürüm kesmek
 
