@@ -218,6 +218,77 @@ impl Tree {
         kids
     }
 
+    /// Record that an entry is gone, and correct every total above it.
+    ///
+    /// This edits the tree in memory only; whatever happened on disk is the
+    /// caller's business. It exists so that deleting one file does not cost a
+    /// rescan: a fresh scan renumbers every node, which means a UI holding node
+    /// ids has to throw away everything it knows — which folders were expanded,
+    /// what was selected, where the user was — to answer a question whose answer
+    /// is already known.
+    ///
+    /// The subtree is zeroed in place rather than spliced out, because the
+    /// arena's layout is exactly what makes an id meaningful: children occupy a
+    /// contiguous range after their parent, so cutting entries out of the middle
+    /// would renumber everything after them and reintroduce the problem this is
+    /// avoiding. The entries stay addressable and report zero bytes, and the
+    /// parent no longer descends into them. The returned ids are the ones the
+    /// caller should stop listing.
+    ///
+    /// Returns `None` for the root, which cannot be removed from its own tree,
+    /// and for an id that does not exist.
+    pub fn remove_subtree(&mut self, id: NodeId) -> Option<Removed> {
+        if id == ROOT || id as usize >= self.nodes.len() {
+            return None;
+        }
+
+        let mut nodes = Vec::new();
+        let mut stack = vec![id];
+        while let Some(current) = stack.pop() {
+            nodes.push(current);
+            stack.extend(self.children(current));
+        }
+
+        let entry = self.node(id);
+        let removed = Removed {
+            size: entry.size,
+            alloc: entry.alloc,
+            files: entry.files,
+            // `dirs` excludes the node itself, so a removed directory takes one
+            // more away from its ancestors than it counted for itself.
+            dirs: entry.dirs + u64::from(entry.is_dir()),
+            nodes,
+        };
+
+        let mut ancestor = entry.parent;
+        while ancestor != NO_PARENT {
+            let node = &mut self.nodes[ancestor as usize];
+            // Saturating, not wrapping: the totals in a snapshot loaded from
+            // disk are only as consistent as the file, and a corrupt one must
+            // not panic here.
+            node.size = node.size.saturating_sub(removed.size);
+            node.alloc = node.alloc.saturating_sub(removed.alloc);
+            node.files = node.files.saturating_sub(removed.files);
+            node.dirs = node.dirs.saturating_sub(removed.dirs);
+            ancestor = node.parent;
+        }
+
+        for &gone in &removed.nodes {
+            let node = &mut self.nodes[gone as usize];
+            node.size = 0;
+            node.alloc = 0;
+            node.own_size = 0;
+            node.own_alloc = 0;
+            node.files = 0;
+            node.dirs = 0;
+            // Nothing descends into it any more, so the entries below are
+            // unreachable and only the entry itself needs hiding.
+            node.children_len = 0;
+        }
+
+        Some(removed)
+    }
+
     /// Resolve a `/`-separated path relative to the root.
     pub fn find(&self, rel: &str) -> Option<NodeId> {
         let mut cur = ROOT;
@@ -296,6 +367,18 @@ impl TreeBuilder {
         self.aggregate();
         Tree::new(self.nodes, root_path)
     }
+}
+
+/// What an entry accounted for before [`Tree::remove_subtree`] took it out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Removed {
+    pub size: u64,
+    pub alloc: u64,
+    pub files: u64,
+    /// Directories that went with it, counting the entry itself when it was one.
+    pub dirs: u64,
+    /// Every id that is now gone, the entry itself first.
+    pub nodes: Vec<NodeId>,
 }
 
 /// Why a set of stored nodes could not be trusted as a tree.

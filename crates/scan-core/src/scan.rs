@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
@@ -35,13 +35,36 @@ impl Default for ScanOptions {
     }
 }
 
-/// Live counters a UI can poll while a scan runs.
+/// Live counters a UI can poll while a scan runs, and the switch that stops it.
 #[derive(Debug, Default)]
 pub struct ScanProgress {
     pub files: AtomicU64,
     pub dirs: AtomicU64,
     pub bytes: AtomicU64,
     pub errors: AtomicU64,
+    /// Set by [`ScanProgress::cancel`] and read once per directory.
+    cancelled: AtomicBool,
+}
+
+impl ScanProgress {
+    /// Ask a running scan to stop.
+    ///
+    /// The walk notices between directories rather than between entries: a
+    /// check per entry would be a shared atomic read in the hottest loop, and
+    /// abandoning a directory already read gains nothing. In practice the
+    /// difference is invisible, because every thread stops descending at once.
+    ///
+    /// The scan then fails with [`std::io::ErrorKind::Interrupted`]. It does not
+    /// return the partial tree: a tree missing an unknowable part of itself
+    /// would report totals that are simply wrong, and nothing good comes of
+    /// storing that next to real snapshots.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
+    }
 }
 
 /// What the scan found, beyond the tree itself.
@@ -142,6 +165,15 @@ pub fn scan(
         None
     };
 
+    // Bail before building anything: a cancelled walk returns empty directories,
+    // so the tree would look complete while silently missing most of the disk.
+    if progress.is_cancelled() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "scan cancelled",
+        ));
+    }
+
     let mut builder = TreeBuilder::with_capacity(1024);
     let root_id = builder.push_root(NewNode {
         name: display_name(&root_path),
@@ -169,12 +201,17 @@ pub fn scan(
         duration_ms: started.elapsed().as_millis() as u64,
         // Asked once, after the walk: it describes the mount, not the tree,
         // and a failure here must not fail the scan.
-        capacity: crate::capacity::of(tree.root_path()),
+        capacity: crate::capacity::capacity_of(tree.root_path()),
     };
     Ok((tree, stats))
 }
 
 fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Vec<RawEntry> {
+    // Checked before the syscall, so a cancelled scan stops issuing I/O
+    // immediately instead of draining whatever rayon had already queued.
+    if ctx.progress.is_cancelled() {
+        return Vec::new();
+    }
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {

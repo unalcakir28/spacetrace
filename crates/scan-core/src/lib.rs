@@ -10,7 +10,7 @@ mod meta;
 mod scan;
 mod tree;
 
-pub use capacity::Capacity;
+pub use capacity::{capacity_of, Capacity};
 pub use meta::{EntryKind, RawMeta};
 pub use scan::{scan, ScanOptions, ScanProgress, ScanStats};
-pub use tree::{Node, NodeId, Tree, TreeError};
+pub use tree::{Node, NodeId, Removed, Tree, TreeError};

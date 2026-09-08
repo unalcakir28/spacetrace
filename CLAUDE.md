@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 152 test, hepsi geçmeli
+cargo test --workspace                   # 163 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -50,8 +50,18 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 3. **Sembolik bağlantılar izlenmez** (kendi boyutlarıyla sayılır), **sabit
    bağlantılar bir kez sayılır** (`(dev, ino)`; ikinci kopya ağaçta görünür ama
    0 bayt katkı yapar).
-4. **Hatalar yutulmaz.** Okunamayan yol sayılır ve örneklenir; tarama durmaz.
-5. **Ajan hiçbir şeyi silmez.** Sunucuya kurulacak yazılımın güven kazanması için
+4. **`Tree::remove_subtree` düğümü sıfırlar, listeden çıkarmaz.** Arena
+   düzeninin anlamı budur: ortadan bir girdi kesmek sonrasındaki her düğümü
+   yeniden numaralandırır ve elinde kimlik tutan her istemciyi (masaüstü) her
+   şeyi unutmaya zorlar. Girdi adreslenebilir kalır ve 0 bayt bildirir;
+   `children_len = 0` yapıldığı için altına inilemez. Dönen kimlik listesi
+   çağıranın artık listelememesi gereken girdilerdir.
+5. **İptal edilen tarama ağaç döndürmez.** `ScanProgress::cancel` sonrası
+   `scan()` `ErrorKind::Interrupted` verir. Kısmi bir ağaç tam görünür ve
+   yanlış toplam bildirir; onu gerçek snapshot'ların yanına yazmak en kötü
+   sonuçtur.
+6. **Hatalar yutulmaz.** Okunamayan yol sayılır ve örneklenir; tarama durmaz.
+7. **Ajan hiçbir şeyi silmez.** Sunucuya kurulacak yazılımın güven kazanması için
    verilmiş bilinçli bir karar, eksik özellik değil.
 
 ## Kod ve depo alışkanlıkları
@@ -122,6 +132,10 @@ Kodda dikkat edilecekler:
 - Bir kök aynı anda yalnızca bir kez taranır (`Runner::try_claim`, HTTP'de 409).
 - Zamanlayıcı UTC + sabit offset ile çalışır; saat dilimi veritabanı yok.
 - Kapasite **boş/toplam** olarak raporlanır, "% dolu" olarak değil (K6).
+  Modül dışına `capacity_of` adıyla açılıyor (`capacity::of` değil).
+- **`ScanProgress` yalnızca sayaç değil, iptal anahtarı da.** Yürüyüş dizin
+  başına bir kez kontrol ediyor — girdi başına kontrol en sıcak döngüye paylaşımlı
+  bir atomik okuma koyardı ve okunmuş bir dizini bırakmak hiçbir şey kazandırmaz.
 
 ## Bilinen eksikler
 

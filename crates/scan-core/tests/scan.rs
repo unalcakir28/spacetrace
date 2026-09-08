@@ -226,6 +226,193 @@ extern "C" {
     fn libc_geteuid() -> u32;
 }
 
+// ------------------------------------------------------------- cancellation
+
+#[test]
+fn a_scan_cancelled_before_it_starts_fails_rather_than_returning_a_stub() {
+    let dir = fixture();
+    let progress = Arc::new(ScanProgress::default());
+    progress.cancel();
+
+    let err = scan(dir.path(), ScanOptions::default(), Arc::clone(&progress)).unwrap_err();
+
+    // The danger a cancelled scan poses is not failing — it is succeeding with
+    // a tree that looks whole and is not. `Interrupted` is what tells the
+    // caller the difference.
+    assert_eq!(err.kind(), std::io::ErrorKind::Interrupted, "{err}");
+    assert!(progress.is_cancelled());
+}
+
+#[test]
+fn cancelling_stops_the_walk_partway_through() {
+    // Deep enough that the cancel lands mid-walk rather than after it.
+    let dir = tempfile::tempdir().unwrap();
+    let mut path = dir.path().to_path_buf();
+    for level in 0..40 {
+        path.push(format!("level{level}"));
+        fs::create_dir(&path).unwrap();
+        for file in 0..40 {
+            fs::write(path.join(format!("f{file}")), b"x").unwrap();
+        }
+    }
+
+    let progress = Arc::new(ScanProgress::default());
+    let watcher = Arc::clone(&progress);
+    // Cancel as soon as the walk is demonstrably running, so the test does not
+    // depend on how fast the machine is.
+    let stopper = std::thread::spawn(move || {
+        while watcher.files.load(std::sync::atomic::Ordering::Relaxed) < 40 {
+            std::thread::yield_now();
+        }
+        watcher.cancel();
+    });
+
+    let err = scan(dir.path(), ScanOptions::default(), Arc::clone(&progress)).unwrap_err();
+    stopper.join().unwrap();
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Interrupted, "{err}");
+    let seen = progress.files.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(seen >= 40, "the walk should have started: {seen}");
+    assert!(
+        seen < 40 * 40,
+        "the walk should not have finished all 1600 files: {seen}"
+    );
+}
+
+#[test]
+fn a_scan_that_is_never_cancelled_is_unaffected() {
+    let dir = fixture();
+    let progress = Arc::new(ScanProgress::default());
+    let (tree, stats) = scan(dir.path(), ScanOptions::default(), Arc::clone(&progress)).unwrap();
+
+    assert!(!progress.is_cancelled());
+    assert_eq!(stats.files, 4);
+    assert_eq!(tree.total_size(), 1000 + 4096 + 10 + 50_000);
+}
+
+// ------------------------------------------------------- removing an entry
+
+/// Deleting a file must not cost a rescan, because a rescan renumbers every
+/// node and a UI holding ids then has to forget everything it knows.
+mod removal {
+    use super::*;
+
+    #[test]
+    fn removing_a_file_corrects_every_total_above_it() {
+        let dir = fixture();
+        let (mut tree, _) = run(dir.path(), ScanOptions::default());
+
+        let before = tree.total_size();
+        let target = tree.find("sub/b.bin").expect("b.bin is in the fixture");
+        let sub = tree.find("sub").unwrap();
+        let sub_before = tree.node(sub).size;
+
+        let removed = tree.remove_subtree(target).expect("a file can be removed");
+
+        assert_eq!(removed.size, 4096);
+        assert_eq!(removed.files, 1);
+        assert_eq!(removed.dirs, 0, "a file is not a directory");
+        assert_eq!(removed.nodes, vec![target]);
+
+        assert_eq!(tree.total_size(), before - 4096);
+        assert_eq!(tree.node(sub).size, sub_before - 4096);
+        assert_eq!(tree.node(target).size, 0);
+    }
+
+    #[test]
+    fn removing_a_directory_takes_its_whole_subtree_with_it() {
+        let dir = fixture();
+        let (mut tree, _) = run(dir.path(), ScanOptions::default());
+
+        let root_files = tree.node(tree.root()).files;
+        let root_dirs = tree.node(tree.root()).dirs;
+        let sub = tree.find("sub").unwrap();
+        let sub_size = tree.node(sub).size;
+
+        let removed = tree.remove_subtree(sub).unwrap();
+
+        // sub, sub/b.bin, sub/deep, sub/deep/c.log
+        assert_eq!(removed.nodes.len(), 4, "{:?}", removed.nodes);
+        assert_eq!(removed.size, sub_size);
+        assert_eq!(removed.files, 2, "b.bin and c.log");
+        assert_eq!(removed.dirs, 2, "sub itself plus sub/deep");
+
+        let root = tree.node(tree.root());
+        assert_eq!(root.files, root_files - 2);
+        assert_eq!(root.dirs, root_dirs - 2);
+
+        // Nothing below it is reachable or counted any more.
+        assert_eq!(tree.children(sub).count(), 0);
+        for gone in removed.nodes {
+            assert_eq!(tree.node(gone).size, 0);
+            assert_eq!(tree.node(gone).files, 0);
+        }
+    }
+
+    #[test]
+    fn ids_outside_the_removed_subtree_still_mean_what_they_meant() {
+        // The whole reason for editing in place rather than rescanning.
+        let dir = fixture();
+        let (mut tree, _) = run(dir.path(), ScanOptions::default());
+
+        let keep = tree.find("a.txt").unwrap();
+        let keep_name = tree.node(keep).name.clone();
+        let keep_size = tree.node(keep).size;
+
+        tree.remove_subtree(tree.find("sub").unwrap()).unwrap();
+
+        assert_eq!(tree.node(keep).name, keep_name);
+        assert_eq!(tree.node(keep).size, keep_size);
+        assert_eq!(tree.rel_path(keep), "a.txt");
+    }
+
+    #[test]
+    fn removing_twice_takes_the_bytes_away_once() {
+        let dir = fixture();
+        let (mut tree, _) = run(dir.path(), ScanOptions::default());
+        let target = tree.find("sub/b.bin").unwrap();
+        let before = tree.total_size();
+
+        tree.remove_subtree(target).unwrap();
+        let after_first = tree.total_size();
+        let second = tree.remove_subtree(target).unwrap();
+
+        assert_eq!(second.size, 0, "it no longer accounts for anything");
+        assert_eq!(tree.total_size(), after_first);
+        assert_eq!(after_first, before - 4096);
+    }
+
+    #[test]
+    fn the_root_cannot_be_removed_from_its_own_tree() {
+        let dir = fixture();
+        let (mut tree, _) = run(dir.path(), ScanOptions::default());
+        assert!(tree.remove_subtree(tree.root()).is_none());
+        assert!(tree.total_size() > 0, "and nothing was changed");
+    }
+
+    #[test]
+    fn an_id_that_does_not_exist_is_refused() {
+        let dir = fixture();
+        let (mut tree, _) = run(dir.path(), ScanOptions::default());
+        let past_the_end = tree.len() as u32;
+        assert!(tree.remove_subtree(past_the_end).is_none());
+    }
+
+    #[test]
+    fn the_arena_still_verifies_after_a_removal() {
+        // Removal must not break the invariants that make loading safe, or a
+        // tree edited here could not be trusted afterwards.
+        let dir = fixture();
+        let (mut tree, _) = run(dir.path(), ScanOptions::default());
+        tree.remove_subtree(tree.find("sub").unwrap()).unwrap();
+
+        let nodes = tree.nodes().to_vec();
+        let path = tree.root_path().to_path_buf();
+        spacetrace_scan_core::Tree::from_parts_checked(nodes, path)
+            .expect("the edited arena is still well formed");
+    }
+}
+
 // ------------------------------------------------- untrusted snapshot loading
 
 /// A snapshot can arrive from another machine, so the arena invariants have to

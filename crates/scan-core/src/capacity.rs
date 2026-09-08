@@ -62,7 +62,10 @@ impl Capacity {
 ///
 /// Returns `None` when the platform cannot answer, which callers should treat
 /// as "unknown" rather than as an error.
-pub fn of(path: &Path) -> Option<Capacity> {
+///
+/// Exported as `capacity_of` rather than `capacity::of`, because the module is
+/// private and `of` alone says nothing at a call site.
+pub fn capacity_of(path: &Path) -> Option<Capacity> {
     platform::capacity(path)
 }
 
@@ -158,7 +161,7 @@ mod tests {
     #[test]
     fn the_current_filesystem_reports_a_plausible_capacity() {
         let dir = tempfile::tempdir().unwrap();
-        let capacity = of(dir.path()).expect("every supported platform can answer this");
+        let capacity = capacity_of(dir.path()).expect("every supported platform can answer this");
 
         assert!(capacity.total > 0, "a mounted filesystem has a size");
         assert!(
@@ -173,7 +176,7 @@ mod tests {
 
     #[test]
     fn a_nonexistent_path_reports_unknown_rather_than_panicking() {
-        assert!(of(Path::new("/definitely/not/a/real/mount/point/xyzzy")).is_none());
+        assert!(capacity_of(Path::new("/definitely/not/a/real/mount/point/xyzzy")).is_none());
     }
 
     #[test]
