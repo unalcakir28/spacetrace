@@ -9,3 +9,6 @@ dist/
 
 # Claude Code working notes; TODO.md at the root is the real list.
 tasks/
+
+# Playwright cache directory
+.playwright-mcp/
