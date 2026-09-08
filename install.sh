@@ -53,7 +53,10 @@ target="${arch_tag}-${os_tag}"
 
 if [ "$VERSION" = "latest" ]; then
     echo "Looking up the latest release..."
-    VERSION=$(fetch "https://api.github.com/repos/${REPO}/releases/latest" |
+    # stderr discarded: before the first tagged release this endpoint answers
+    # 404, which is an expected path handled below, not news. A real download
+    # failure further down still reports itself.
+    VERSION=$(fetch "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null |
         sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' | head -n 1)
     # `releases/latest` only ever names a non-prerelease, so before the first
     # tagged release it returns nothing at all. Falling back to the rolling
