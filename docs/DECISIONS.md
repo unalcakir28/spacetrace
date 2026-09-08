@@ -174,3 +174,46 @@ Koşullar sağlanmazsa kolon boş kalır ve hedef sayfası nedenini yazar
 ("not extrapolated: 2 samples over 0.3 days, fit 0.12"). Eşikler
 `spacetrace-hub/src/trend.rs` içinde `MIN_SAMPLES`, `MIN_SPAN_DAYS`, `MIN_R2`
 olarak açıkça duruyor.
+
+---
+
+## K8 — Üç bileşenin indirilebilir dosyaları da public depoda · 8 Eylül 2026
+
+Masaüstü ve hub kendi (private) depolarında derlenir, ama üretilen kurulum
+dosyaları **bu deponun** release'lerine yayınlanır: `desktop-continuous` /
+`desktop-v*` ve `hub-continuous` / `hub-v*` etiketleriyle.
+
+**Neden.** Private bir deponun release varlıkları kimlik doğrulaması olmadan
+indirilemiyor. K2 gereği masaüstü ve hub private, ama bir tanıtım sitesinin
+indirme düğmesi ziyaretçiden token isteyemez. Kaynağın kapalı, dağıtımın açık
+olması gerekiyordu; tek yol varlıkları public bir depoya taşımak.
+
+Aynı yerde olmalarının ikinci bir faydası var: indirme sayfası tek bir GitHub
+API çağrısıyla üç bileşenin de sürümünü öğreniyor.
+
+**Bedeli.** Private depoların CI'ı public depoya yazabilmek için fine-grained
+bir PAT (`RELEASE_TOKEN`) gerektiriyor — `GITHUB_TOKEN` depo dışına yazamıyor.
+Sır yoksa iş akışı düşmüyor, varlıkları kendi deposunda yayınlayıp uyarı basıyor;
+yani eksik sır sessiz bir başarısızlık değil.
+
+**Sonuç.** Etiket ve varlık adları artık bir sözleşme: `website/download.html`
+onlara doğrudan bağlanıyor ve `install.sh` dosya adını verilen sürümden kuruyor.
+Yeniden adlandırmak indirme sayfasını kırar. Ayrıntı: [RELEASING.md](RELEASING.md).
+
+---
+
+## K9 — Her push bir "continuous" sürüm yayınlar · 8 Eylül 2026
+
+`main`'e her push, sabit `continuous` etiketli bir ön-sürümü siler ve yeniden
+oluşturur. Kararlı sürümler ayrıca `v*` etiketiyle kesiliyor.
+
+**Neden.** "En son derleme" sabit bir URL'e sahip olmak zorunda: indirme sayfası
+JavaScript olmadan da çalışan gerçek bağlantılar içeriyor ve `install.sh` dosya
+adını sürümden kuruyor. Etiketi taşımak yerine silip yeniden oluşturmak, hem
+etiketin `main`'i takip etmesini hem de matristen çıkarılan bir varlığın ölü
+bağlantı olarak kalmamasını sağlıyor. Bedeli, yayın başına birkaç saniyelik bir
+404 penceresi — sürekli kanal için kabul edilebilir.
+
+`releases/latest` uç noktası ön-sürüm döndürmediği için `install.sh` kararlı
+sürüm yokken `continuous`'a düşüyor ve bunu ekrana yazıyor. Aksi hâlde ilk
+kararlı etikete kadar belgelenmiş tek satırlık kurulum komutu çalışmazdı.

@@ -1,0 +1,37 @@
+# The release image, assembled from binaries that were already built.
+#
+# The Dockerfile at the repository root compiles from source, which is the right
+# thing for someone reading the code and for `docker build .` to work on a
+# clone. It is the wrong thing for a multi-arch release build: an arm64 image
+# built that way on an amd64 runner compiles Rust under QEMU, which takes tens
+# of minutes and regularly runs out of memory. The release pipeline
+# cross-compiles both musl binaries natively and this file only copies the right
+# one in — buildx sets TARGETARCH per platform.
+FROM alpine:3.21
+
+ARG TARGETARCH
+
+RUN apk add --no-cache ca-certificates \
+    && adduser -S -H -u 10001 spacetrace
+
+COPY bin/${TARGETARCH}/spacetrace-agent /usr/local/bin/spacetrace-agent
+COPY bin/${TARGETARCH}/spacetrace /usr/local/bin/spacetrace
+RUN chmod 755 /usr/local/bin/spacetrace-agent /usr/local/bin/spacetrace
+
+# Snapshots live here; mount a volume over it to keep history across restarts.
+RUN mkdir -p /var/lib/spacetrace && chown spacetrace /var/lib/spacetrace
+VOLUME /var/lib/spacetrace
+
+USER spacetrace
+EXPOSE 7878
+
+# In a container the agent has to listen on all interfaces to be reachable at
+# all, which is why this differs from the loopback default in the config file.
+# Mount the host filesystem read-only at /host and scan that:
+#   docker run -v /:/host:ro -v spacetrace:/var/lib/spacetrace \
+#     -e SPACETRACE_TOKEN=... -p 7878:7878 ghcr.io/unalcakir28/spacetrace
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
+    CMD wget -qO- http://127.0.0.1:7878/health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/spacetrace-agent"]
+CMD ["--config", "/etc/spacetrace/agent.toml", "serve"]

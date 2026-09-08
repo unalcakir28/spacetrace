@@ -1,20 +1,77 @@
 name: Release
 
+# Two channels out of one pipeline.
+#
+#   push to main   -> the `continuous` pre-release, rebuilt and replaced in
+#                     place, so "the latest build" always has a fixed URL
+#   push of a v*   -> a normal, permanent release with generated notes
+#
+# The asset names carry the channel (`spacetrace-continuous-…`) rather than a
+# commit, because install.sh builds the file name from the version it was given
+# and the download page links to one URL that must not move.
+
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+    # A docs-only commit does not change a binary, and a five-target build is
+    # not free.
+    paths-ignore:
+      - "docs/**"
+      - "website/**"
+      - "*.md"
+      - "tasks/**"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build (for a dry run)"
+        description: "Version to build as, e.g. v0.1.0-test"
         required: true
+      publish:
+        description: >-
+          Publish the result. Off by default, so a dispatch is a dry run.
+          Turn it on to release a tag by hand — which is the way out if the
+          paths-ignore filter above skipped a tag push.
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  meta:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      rolling: ${{ steps.pick.outputs.rolling }}
+    steps:
+      - id: pick
+        # The dispatch input reaches the shell through the environment, never
+        # interpolated into the script: it is attacker-controlled text.
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "${INPUT_TAG:-}" ]; then
+            version="$INPUT_TAG"
+            rolling=false
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="$GITHUB_REF_NAME"
+            rolling=false
+          else
+            version=continuous
+            rolling=true
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "rolling=$rolling" >> "$GITHUB_OUTPUT"
+          echo "Building as $version (rolling=$rolling)" >> "$GITHUB_STEP_SUMMARY"
+
   build:
     name: ${{ matrix.target }}
+    needs: meta
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -25,9 +82,11 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             cross: true
+            arch: amd64
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             cross: true
+            arch: arm64
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
@@ -35,7 +94,7 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -65,15 +124,10 @@ jobs:
 
       - name: Package
         shell: bash
-        # The dispatch input reaches the shell through the environment, never
-        # interpolated into the script: it is attacker-controlled text.
         env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
         run: |
-          # GITHUB_REF_NAME is set on every event (it is the branch name for a
-          # manual run), so the explicit input has to win when it is present.
-          version="${INPUT_TAG:-$GITHUB_REF_NAME}"
-          name="spacetrace-${version}-${{ matrix.target }}"
+          name="spacetrace-${VERSION}-${{ matrix.target }}"
           mkdir -p "dist/${name}"
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp target/${{ matrix.target }}/release/spacetrace.exe "dist/${name}/"
@@ -91,29 +145,127 @@ jobs:
             tar -czf "${name}.tar.gz" -C "${name}" .
           fi
 
+      # The raw binaries as well as the archive: the container image copies them
+      # straight in, and unpacking a tarball inside a Docker context to get two
+      # files back out is work for nothing.
+      - name: Stage the binaries for the image
+        if: matrix.arch != ''
+        shell: bash
+        run: |
+          mkdir -p image/bin/${{ matrix.arch }}
+          cp target/${{ matrix.target }}/release/spacetrace \
+             target/${{ matrix.target }}/release/spacetrace-agent \
+             image/bin/${{ matrix.arch }}/
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
+          name: archive-${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.zip
+          if-no-files-found: error
 
-  release:
-    needs: build
+      - uses: actions/upload-artifact@v4
+        if: matrix.arch != ''
+        with:
+          name: image-${{ matrix.arch }}
+          # The directory, not a glob: with `image/**` the artifact's root
+          # becomes image/bin/<arch> and the layout the Dockerfile copies from
+          # is lost.
+          path: image
+          if-no-files-found: error
+
+  publish:
+    name: publish ${{ needs.meta.outputs.version }}
+    needs: [meta, build]
+    # A dispatch is a dry run unless it was asked to publish.
+    if: github.event_name != 'workflow_dispatch' || inputs.publish
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+      packages: write
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: archive-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: image
+          pattern: image-*
           merge-multiple: true
 
       - name: Checksums
         run: |
           cd artifacts
-          sha256sum * > SHA256SUMS
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
+      - name: Publish the rolling build
+        if: needs.meta.outputs.rolling == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Deleted and recreated rather than edited, so the tag follows main and
+        # an asset dropped from the matrix cannot linger as a stale download.
+        run: |
+          cat > notes.md <<EOF
+          Built from \`main\` at \`${GITHUB_SHA:0:7}\` on $(date -u '+%Y-%m-%d %H:%M UTC').
+
+          This is the newest code, not a release: it has passed CI and nothing else.
+          For something stable, use the latest \`v*\` release.
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | SPACETRACE_VERSION=continuous sh
+          \`\`\`
+          EOF
+          gh release delete continuous --cleanup-tag --yes || true
+          gh release create continuous artifacts/* \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Continuous build (main)" \
+            --notes-file notes.md
+
+      - name: Publish the release
+        if: needs.meta.outputs.rolling == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          gh release create "$VERSION" artifacts/* \
+            --title "spacetrace $VERSION" \
+            --generate-notes
+
+      # The agent's container image, which docs/AGENT.md tells people to pull.
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
         with:
-          files: artifacts/*
-          generate_release_notes: true
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags
+        id: tags
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          ROLLING: ${{ needs.meta.outputs.rolling }}
+        run: |
+          if [ "$ROLLING" = "true" ]; then
+            echo "list=${IMAGE}:main,${IMAGE}:edge" >> "$GITHUB_OUTPUT"
+          else
+            echo "list=${IMAGE}:${VERSION},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: image
+          file: .github/docker/Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
+          provenance: false

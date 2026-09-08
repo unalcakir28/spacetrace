@@ -55,7 +55,15 @@ if [ "$VERSION" = "latest" ]; then
     echo "Looking up the latest release..."
     VERSION=$(fetch "https://api.github.com/repos/${REPO}/releases/latest" |
         sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' | head -n 1)
-    [ -n "$VERSION" ] || die "could not determine the latest version; set SPACETRACE_VERSION"
+    # `releases/latest` only ever names a non-prerelease, so before the first
+    # tagged release it returns nothing at all. Falling back to the rolling
+    # build rather than dying is what makes the documented one-liner work from
+    # day one — but it is not a release, so say so out loud.
+    if [ -z "$VERSION" ]; then
+        VERSION=continuous
+        echo "No tagged release yet: installing the continuous build of main." >&2
+        echo "It has passed CI and nothing else. Set SPACETRACE_VERSION=v… for a release." >&2
+    fi
 fi
 
 asset="spacetrace-${VERSION}-${target}.tar.gz"

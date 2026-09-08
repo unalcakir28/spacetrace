@@ -120,6 +120,30 @@ Diğer ikisi bu depoyu **git bağımlılığı** olarak kullanıyor, path değil
 buradaki genel API'yi bozan bir değişiklik onları sessizce kırar; `main`'e
 push etmeden önce bunu düşün.
 
+## Sürüm ve site
+
+Tam anlatım [docs/RELEASING.md](docs/RELEASING.md); kolay bozulan kısımlar:
+
+- **Üç bileşenin indirilebilir dosyaları da bu deponun release'lerinde.** Private
+  bir deponun release varlıkları kimlik doğrulaması olmadan indirilemiyor, o
+  yüzden masaüstü ve hub kendi CI'larında derleyip buraya yayınlıyor
+  (`RELEASE_TOKEN` sırrı ile). Etiketler: `continuous` / `v*` (CLI),
+  `desktop-continuous` / `desktop-v*`, `hub-continuous` / `hub-v*`.
+- **Etiket ve varlık adları sabit sözleşme.** `website/download.html` bunlara
+  doğrudan bağlanıyor ve `install.sh` dosya adını verilen sürümden kuruyor;
+  yeniden adlandırmak indirme sayfasını sessizce kırar.
+- **Konteyner imajları önceden derlenmiş musl ikililerinden kuruluyor**
+  (`.github/docker/Dockerfile.release`), kökteki `Dockerfile`'dan değil. QEMU
+  altında Rust derlemek arm64 imajını dakikalar yerine on dakikalar sürdürüyor.
+  Kökteki Dockerfile duruyor çünkü `docker build .` bir klonda çalışsın diye var.
+- **`website/` yapı adımı olmayan düz HTML** ve JavaScript kapalıyken de çalışan
+  bir indirme sayfası bırakmak zorunda: bağlantılar işaretlemede gerçek dosyalara
+  işaret ediyor, `site.js` yalnızca sürüm/tarih/boyut ekliyor. Renk paleti
+  masaüstünün `theme.css`'inden alınmış — ikinci bir palet icat etmek, ürüne
+  benzemeyen bir site demek.
+- Sürüm iş akışı belge ve site değişikliklerinde çalışmıyor (`paths-ignore`),
+  Pages iş akışı yalnızca `website/**` değişince çalışıyor.
+
 ## Sıradaki iş
 
 Kalan işler gerçek donanım veya gerçek zaman gerektiriyor (tam liste TODO.md):

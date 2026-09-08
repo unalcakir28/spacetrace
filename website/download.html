@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Download spacetrace</title>
+    <meta
+      name="description"
+      content="Downloads and install instructions for the spacetrace CLI and agent, the desktop app, and the self-hosted hub — macOS, Windows, Linux, NAS and Docker."
+    />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="assets/site.css" />
+  </head>
+  <body>
+    <header class="site-head">
+      <div class="wrap">
+        <a class="brand" href="index.html" aria-label="spacetrace, home">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="0" y="0" width="13" height="13" rx="1.6" fill="#45d3ba" />
+            <rect x="0" y="14" width="13" height="10" rx="1.6" fill="#a98cf0" />
+            <rect x="14" y="0" width="10" height="8" rx="1.6" fill="#ffb454" />
+            <rect x="14" y="9" width="10" height="5" rx="1.6" fill="#58b4e8" />
+            <rect x="14" y="15" width="10" height="9" rx="1.6" fill="#7bd88f" />
+          </svg>
+          spacetrace
+        </a>
+        <nav class="site-nav" aria-label="Site">
+          <a href="download.html" aria-current="page">Download</a>
+          <a href="docs.html">Guide</a>
+          <a href="desktop.html">Desktop</a>
+          <a href="hub.html">Hub</a>
+          <a href="https://github.com/unalcakir28/spacetrace">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <div class="wrap dl-hero">
+        <h1>Download</h1>
+        <p class="lede dim">
+          Three things you can install, all built from the same core. Take the
+          one you need; a snapshot written by any of them is readable by the
+          others.
+        </p>
+
+        <!-- Detected platform first, everything else in the tables below. -->
+        <div class="dl-primary" data-for-os="macos">
+          <div class="os">macOS</div>
+          <div class="meta">
+            Universal — Apple silicon and Intel · version
+            <span data-version="desktop">continuous</span> ·
+            <span data-channel="desktop">built from main, not a release</span> ·
+            <span data-published="desktop">not published yet</span>
+          </div>
+          <div class="row">
+            <a
+              class="btn btn-primary"
+              data-dl="desktop"
+              data-match="macos-universal.dmg"
+              href="https://github.com/unalcakir28/spacetrace/releases/download/desktop-continuous/spacetrace-desktop-continuous-macos-universal.dmg"
+              >Download the desktop app (.dmg)</a
+            >
+            <span class="faint mono" data-size></span>
+          </div>
+          <div class="row">
+            <div class="cmd">
+              <code>curl -fsSL https://raw.githubusercontent.com/unalcakir28/spacetrace/main/install.sh | sh</code>
+              <button type="button">Copy</button>
+            </div>
+          </div>
+          <p class="faint" style="margin: 10px 0 0; font-size: 0.88rem">
+            The command installs the CLI and the agent. Both can be used
+            together — they share one snapshot database.
+          </p>
+        </div>
+
+        <div class="dl-primary" data-for-os="windows">
+          <div class="os">Windows</div>
+          <div class="meta">
+            64-bit · version <span data-version="desktop">continuous</span> ·
+            <span data-channel="desktop">built from main, not a release</span> ·
+            <span data-published="desktop">not published yet</span>
+          </div>
+          <div class="row">
+            <a
+              class="btn btn-primary"
+              data-dl="desktop"
+              data-match="windows-x86_64-setup.exe"
+              href="https://github.com/unalcakir28/spacetrace/releases/download/desktop-continuous/spacetrace-desktop-continuous-windows-x86_64-setup.exe"
+              >Download the installer (.exe)</a
+            >
+            <span class="faint mono" data-size></span>
+            <a
+              class="btn"
+              data-dl="cli"
+              data-match="x86_64-pc-windows-msvc.zip"
+              href="https://github.com/unalcakir28/spacetrace/releases/download/continuous/spacetrace-continuous-x86_64-pc-windows-msvc.zip"
+              >CLI and agent (.zip)</a
+            >
+          </div>
+        </div>
+
+        <div class="dl-primary" data-for-os="linux">
+          <div class="os">Linux</div>
+          <div class="meta">
+            Static musl binaries — no runtime to install · version
+            <span data-version="cli">continuous</span> ·
+            <span data-channel="cli">built from main, not a release</span> ·
+            <span data-published="cli">not published yet</span>
+          </div>
+          <div class="row">
+            <div class="cmd">
+              <code>curl -fsSL https://raw.githubusercontent.com/unalcakir28/spacetrace/main/install.sh | sh</code>
+              <button type="button">Copy</button>
+            </div>
+          </div>
+          <div class="row">
+            <a
+              class="btn"
+              data-dl="cli"
+              data-match="x86_64-unknown-linux-musl.tar.gz"
+              href="https://github.com/unalcakir28/spacetrace/releases/download/continuous/spacetrace-continuous-x86_64-unknown-linux-musl.tar.gz"
+              >CLI and agent, x86_64</a
+            >
+            <a
+              class="btn"
+              data-dl="cli"
+              data-match="aarch64-unknown-linux-musl.tar.gz"
+              href="https://github.com/unalcakir28/spacetrace/releases/download/continuous/spacetrace-continuous-aarch64-unknown-linux-musl.tar.gz"
+              >CLI and agent, aarch64</a
+            >
+            <a
+              class="btn"
+              data-dl="desktop"
+              data-match="linux-x86_64.deb"
+              href="https://github.com/unalcakir28/spacetrace/releases/download/desktop-continuous/spacetrace-desktop-continuous-linux-x86_64.deb"
+              >Desktop app (.deb)</a
+            >
+          </div>
+        </div>
+
+        <div class="dl-primary" data-for-os="other">
+          <div class="os">Pick a platform</div>
+          <div class="meta">
+            This browser did not say which machine it is on. The tables below
+            list every file.
+          </div>
+          <div class="row">
+            <a class="btn btn-primary" href="#cli">Go to the file lists</a>
+          </div>
+        </div>
+
+        <div class="note warn" style="margin-top: 26px">
+          <span class="note-title">What “continuous” means</span>
+          <p>
+            Until the first tagged release, every download here is the newest
+            build of <code>main</code>: it has passed CI and nothing else. When
+            a stable release exists this page switches to it automatically and
+            the version above stops saying “latest build”.
+          </p>
+        </div>
+      </div>
+
+      <section class="band" id="cli">
+        <div class="wrap">
+          <div class="band-head">
+            <h2>CLI and agent</h2>
+            <p>
+              One archive holds both binaries: <code>spacetrace</code> for the
+              command line and <code>spacetrace-agent</code> for the service
+              that scans on a schedule and answers over HTTP. Apache-2.0.
+            </p>
+          </div>
+
+          <table class="files">
+            <caption>
+              Linux builds are static musl, so they run on old glibc and inside
+              a scratch container. Every archive also holds the README and the
+              licence.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Platform</th>
+                <th scope="col">File</th>
+                <th scope="col">Size</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">macOS, Apple silicon</th>
+                <td class="file">
+                  <a
+                    data-dl="cli"
+                    data-match="aarch64-apple-darwin.tar.gz"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/continuous/spacetrace-continuous-aarch64-apple-darwin.tar.gz"
+                    ><span data-filename
+                      >spacetrace-continuous-aarch64-apple-darwin.tar.gz</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">M1 and later</td>
+              </tr>
+              <tr>
+                <th scope="row">macOS, Intel</th>
+                <td class="file">
+                  <a
+                    data-dl="cli"
+                    data-match="x86_64-apple-darwin.tar.gz"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/continuous/spacetrace-continuous-x86_64-apple-darwin.tar.gz"
+                    ><span data-filename
+                      >spacetrace-continuous-x86_64-apple-darwin.tar.gz</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">macOS 11+</td>
+              </tr>
+              <tr>
+                <th scope="row">Linux, x86_64</th>
+                <td class="file">
+                  <a
+                    data-dl="cli"
+                    data-match="x86_64-unknown-linux-musl.tar.gz"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/continuous/spacetrace-continuous-x86_64-unknown-linux-musl.tar.gz"
+                    ><span data-filename
+                      >spacetrace-continuous-x86_64-unknown-linux-musl.tar.gz</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">Static; servers and containers</td>
+              </tr>
+              <tr>
+                <th scope="row">Linux, aarch64</th>
+                <td class="file">
+                  <a
+                    data-dl="cli"
+                    data-match="aarch64-unknown-linux-musl.tar.gz"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/continuous/spacetrace-continuous-aarch64-unknown-linux-musl.tar.gz"
+                    ><span data-filename
+                      >spacetrace-continuous-aarch64-unknown-linux-musl.tar.gz</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">Raspberry Pi, ARM servers, most NAS boxes</td>
+              </tr>
+              <tr>
+                <th scope="row">Windows, x86_64</th>
+                <td class="file">
+                  <a
+                    data-dl="cli"
+                    data-match="x86_64-pc-windows-msvc.zip"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/continuous/spacetrace-continuous-x86_64-pc-windows-msvc.zip"
+                    ><span data-filename
+                      >spacetrace-continuous-x86_64-pc-windows-msvc.zip</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">
+                  On-disk size equals logical size here; see
+                  <a href="docs.html#limits">known limits</a>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Checksums</th>
+                <td class="file">
+                  <a
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/continuous/SHA256SUMS"
+                    >SHA256SUMS</a
+                  >
+                </td>
+                <td class="note"></td>
+                <td class="note">One file covering every archive above</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <h3 style="margin-top: 38px">Installing</h3>
+
+          <ol class="steps">
+            <li>
+              <h4>Run the installer, or unpack it yourself</h4>
+              <p>
+                The script picks the right archive, unpacks it and copies both
+                binaries into <code>/usr/local/bin</code>. It uses
+                <code>sudo</code> only when that directory is not already
+                writable, and it does not enable services or write config
+                behind your back.
+              </p>
+              <div class="cmd">
+                <code>curl -fsSL https://raw.githubusercontent.com/unalcakir28/spacetrace/main/install.sh | sh</code>
+                <button type="button">Copy</button>
+              </div>
+              <p>
+                Somewhere else instead:
+                <code>SPACETRACE_BIN_DIR=~/.local/bin</code>. A specific
+                version: <code>SPACETRACE_VERSION=v0.1.0</code>. By hand:
+              </p>
+              <div class="cmd">
+                <code>tar -xzf spacetrace-*.tar.gz &amp;&amp; sudo install -m755 spacetrace spacetrace-agent /usr/local/bin/</code>
+                <button type="button">Copy</button>
+              </div>
+            </li>
+            <li>
+              <h4>Check it runs</h4>
+              <div class="cmd">
+                <code>spacetrace scan ~/Downloads</code>
+                <button type="button">Copy</button>
+              </div>
+              <p>
+                On macOS, scanning outside your home folder needs Full Disk
+                Access for your terminal: System Settings → Privacy &amp;
+                Security → Full Disk Access. Without it the scan still
+                finishes and reports the paths it could not read.
+              </p>
+            </li>
+            <li>
+              <h4>Windows</h4>
+              <p>
+                Unzip it and put <code>spacetrace.exe</code> somewhere on your
+                <code>PATH</code>. There is no installer for the CLI, and
+                nothing is written outside the folder you unpack into and the
+                snapshot database.
+              </p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="band" id="desktop">
+        <div class="wrap">
+          <div class="band-head">
+            <h2>Desktop app</h2>
+            <p>
+              The treemap window. Proprietary, and free to download while it is
+              in phase 3. <a href="desktop.html">What it does</a>.
+            </p>
+          </div>
+
+          <table class="files">
+            <caption>
+              The macOS build is universal, so there is one file for Apple
+              silicon and Intel.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Platform</th>
+                <th scope="col">File</th>
+                <th scope="col">Size</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">macOS 11+</th>
+                <td class="file">
+                  <a
+                    data-dl="desktop"
+                    data-match="macos-universal.dmg"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/desktop-continuous/spacetrace-desktop-continuous-macos-universal.dmg"
+                    ><span data-filename
+                      >spacetrace-desktop-continuous-macos-universal.dmg</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">Universal binary</td>
+              </tr>
+              <tr>
+                <th scope="row">Windows 10 / 11</th>
+                <td class="file">
+                  <a
+                    data-dl="desktop"
+                    data-match="windows-x86_64-setup.exe"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/desktop-continuous/spacetrace-desktop-continuous-windows-x86_64-setup.exe"
+                    ><span data-filename
+                      >spacetrace-desktop-continuous-windows-x86_64-setup.exe</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">NSIS installer, per-user</td>
+              </tr>
+              <tr>
+                <th scope="row">Debian, Ubuntu</th>
+                <td class="file">
+                  <a
+                    data-dl="desktop"
+                    data-match="linux-x86_64.deb"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/desktop-continuous/spacetrace-desktop-continuous-linux-x86_64.deb"
+                    ><span data-filename
+                      >spacetrace-desktop-continuous-linux-x86_64.deb</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">Needs <code>libwebkit2gtk-4.1</code></td>
+              </tr>
+              <tr>
+                <th scope="row">Fedora, RHEL</th>
+                <td class="file">
+                  <a
+                    data-dl="desktop"
+                    data-match="linux-x86_64.rpm"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/desktop-continuous/spacetrace-desktop-continuous-linux-x86_64.rpm"
+                    ><span data-filename
+                      >spacetrace-desktop-continuous-linux-x86_64.rpm</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">Needs <code>webkit2gtk4.1</code></td>
+              </tr>
+              <tr>
+                <th scope="row">Any Linux</th>
+                <td class="file">
+                  <a
+                    data-dl="desktop"
+                    data-match="linux-x86_64.AppImage"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/desktop-continuous/spacetrace-desktop-continuous-linux-x86_64.AppImage"
+                    ><span data-filename
+                      >spacetrace-desktop-continuous-linux-x86_64.AppImage</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">
+                  <code>chmod +x</code> and run; nothing is installed
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="note warn" style="margin-top: 30px">
+            <span class="note-title">Nothing here is code-signed</span>
+            <p>
+              Signing certificates cost money per year and cannot live in a
+              public repository, so macOS and Windows will both stop you the
+              first time. This is worth being suspicious about, which is why
+              the checksums are published beside every file and the source of
+              the build is a workflow you can read.
+            </p>
+          </div>
+
+          <ol class="steps" style="margin-top: 26px">
+            <li>
+              <h4>macOS: “spacetrace can’t be opened”</h4>
+              <p>
+                Open the <code>.dmg</code>, drag the app to Applications, then
+                right-click it and choose <strong>Open</strong> — that gives
+                the one-time permission a double-click does not offer. Or clear
+                the quarantine flag directly:
+              </p>
+              <div class="cmd">
+                <code>xattr -dr com.apple.quarantine /Applications/spacetrace.app</code>
+                <button type="button">Copy</button>
+              </div>
+              <p>
+                Scanning outside your home folder needs Full Disk Access for
+                the app, in System Settings → Privacy &amp; Security.
+              </p>
+            </li>
+            <li>
+              <h4>Windows: SmartScreen</h4>
+              <p>
+                “Windows protected your PC” → <strong>More info</strong> →
+                <strong>Run anyway</strong>. The installer is per-user and
+                needs no administrator rights.
+              </p>
+            </li>
+            <li>
+              <h4>Linux</h4>
+              <div class="cmd">
+                <code>sudo apt install ./spacetrace-desktop-*-linux-x86_64.deb</code>
+                <button type="button">Copy</button>
+              </div>
+              <p>
+                The AppImage needs no install at all:
+                <code>chmod +x spacetrace-*.AppImage &amp;&amp;
+                ./spacetrace-*.AppImage</code>. On Wayland, if the window comes
+                up blank, run it with
+                <code>WEBKIT_DISABLE_DMABUF_RENDERER=1</code> — a WebKitGTK
+                issue rather than an app one.
+              </p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="band" id="hub">
+        <div class="wrap">
+          <div class="band-head">
+            <h2>Hub</h2>
+            <p>
+              The fleet view. One binary, one SQLite file, no database server
+              and no frontend build. <a href="hub.html">How to run it</a>.
+            </p>
+          </div>
+
+          <div class="row" style="margin-bottom: 26px">
+            <div class="cmd">
+              <code>docker pull ghcr.io/unalcakir28/spacetrace-hub:main</code>
+              <button type="button">Copy</button>
+            </div>
+          </div>
+
+          <table class="files">
+            <caption>
+              The container image carries both architectures, so
+              <code>docker pull</code> gets the right one without a tag suffix.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Platform</th>
+                <th scope="col">File</th>
+                <th scope="col">Size</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Linux, x86_64</th>
+                <td class="file">
+                  <a
+                    data-dl="hub"
+                    data-match="x86_64-unknown-linux-musl.tar.gz"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/hub-continuous/spacetrace-hub-continuous-x86_64-unknown-linux-musl.tar.gz"
+                    ><span data-filename
+                      >spacetrace-hub-continuous-x86_64-unknown-linux-musl.tar.gz</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">Static; the usual choice for a server</td>
+              </tr>
+              <tr>
+                <th scope="row">Linux, aarch64</th>
+                <td class="file">
+                  <a
+                    data-dl="hub"
+                    data-match="aarch64-unknown-linux-musl.tar.gz"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/hub-continuous/spacetrace-hub-continuous-aarch64-unknown-linux-musl.tar.gz"
+                    ><span data-filename
+                      >spacetrace-hub-continuous-aarch64-unknown-linux-musl.tar.gz</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">ARM servers and NAS boxes</td>
+              </tr>
+              <tr>
+                <th scope="row">macOS, Apple silicon</th>
+                <td class="file">
+                  <a
+                    data-dl="hub"
+                    data-match="aarch64-apple-darwin.tar.gz"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/hub-continuous/spacetrace-hub-continuous-aarch64-apple-darwin.tar.gz"
+                    ><span data-filename
+                      >spacetrace-hub-continuous-aarch64-apple-darwin.tar.gz</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">For trying it on your own machine first</td>
+              </tr>
+              <tr>
+                <th scope="row">macOS, Intel</th>
+                <td class="file">
+                  <a
+                    data-dl="hub"
+                    data-match="x86_64-apple-darwin.tar.gz"
+                    href="https://github.com/unalcakir28/spacetrace/releases/download/hub-continuous/spacetrace-hub-continuous-x86_64-apple-darwin.tar.gz"
+                    ><span data-filename
+                      >spacetrace-hub-continuous-x86_64-apple-darwin.tar.gz</span
+                    ></a
+                  >
+                </td>
+                <td class="note mono" data-size></td>
+                <td class="note">macOS 11+</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="wrap">
+          <div class="split">
+            <div>
+              <h2>Check what you downloaded</h2>
+              <p>
+                Every release carries a <code>SHA256SUMS</code> file covering
+                its own assets. Verify before you install, especially since
+                none of the binaries are signed.
+              </p>
+              <pre><i># in the folder you downloaded into</i>
+curl -LO https://github.com/unalcakir28/spacetrace/releases/download/continuous/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS</pre>
+              <p class="faint">
+                macOS has no <code>sha256sum</code>; use
+                <code>shasum -a 256 -c</code> instead.
+              </p>
+            </div>
+            <div>
+              <h2>Or build it yourself</h2>
+              <p>
+                The core, the CLI and the agent are Apache-2.0 and need only
+                Rust 1.85 or newer.
+              </p>
+              <pre>git clone https://github.com/unalcakir28/spacetrace
+cd spacetrace
+cargo build --release
+<i># the binaries land in target/release/</i>
+./target/release/spacetrace --help</pre>
+              <p>
+                <code>cargo install --path crates/cli</code> puts
+                <code>spacetrace</code> on your <code>PATH</code>. The desktop
+                app and the hub are not open source, so they cannot be built
+                from source — that is the trade for the core staying
+                permissively licensed.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="cta">
+        <div class="wrap">
+          <h2>Installed. Now take the first snapshot.</h2>
+          <p class="dim">
+            One scan tells you what is there. Two tell you what is happening.
+          </p>
+          <div class="row">
+            <a class="btn btn-primary" href="docs.html">Read the guide</a>
+            <a class="btn" href="docs.html#agent">Set up the agent</a>
+            <a class="btn" href="hub.html">Run the hub</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-foot">
+      <div class="wrap">
+        <p>
+          The scanner, snapshot store, CLI and agent are Apache-2.0. The
+          desktop app and the hub are proprietary.
+        </p>
+        <nav aria-label="Footer">
+          <a href="index.html">Home</a>
+          <a href="docs.html">Guide</a>
+          <a href="desktop.html">Desktop</a>
+          <a href="hub.html">Hub</a>
+          <a href="https://github.com/unalcakir28/spacetrace/releases"
+            >All releases</a
+          >
+        </nav>
+      </div>
+    </footer>
+
+    <script src="assets/site.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Desktop app — spacetrace</title>
+    <meta
+      name="description"
+      content="The spacetrace desktop app: a zoomable treemap coloured by file type, a folder panel that agrees with it, snapshots, remote agents and diffs — on macOS, Windows and Linux."
+    />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="assets/site.css" />
+  </head>
+  <body>
+    <header class="site-head">
+      <div class="wrap">
+        <a class="brand" href="index.html" aria-label="spacetrace, home">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="0" y="0" width="13" height="13" rx="1.6" fill="#45d3ba" />
+            <rect x="0" y="14" width="13" height="10" rx="1.6" fill="#a98cf0" />
+            <rect x="14" y="0" width="10" height="8" rx="1.6" fill="#ffb454" />
+            <rect x="14" y="9" width="10" height="5" rx="1.6" fill="#58b4e8" />
+            <rect x="14" y="15" width="10" height="9" rx="1.6" fill="#7bd88f" />
+          </svg>
+          spacetrace
+        </a>
+        <nav class="site-nav" aria-label="Site">
+          <a href="download.html">Download</a>
+          <a href="docs.html">Guide</a>
+          <a href="desktop.html" aria-current="page">Desktop</a>
+          <a href="hub.html">Hub</a>
+          <a href="https://github.com/unalcakir28/spacetrace">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <div class="wrap hero">
+        <p class="kicker">
+          macOS · Windows · Linux &nbsp;·&nbsp; <b>Tauri and Rust</b>, so the
+          window is small and the scan is native
+        </p>
+        <h1>
+          <span class="given">A map of your disk.</span>
+          <span class="second">Then a map of what changed on it.</span>
+        </h1>
+        <p class="lede">
+          Scan a folder and browse it as a treemap coloured by file type. Or
+          open a snapshot from last week, or one sitting on a server, and put
+          the two side by side.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="download.html#desktop"
+            >Download the app</a
+          >
+          <a class="btn" href="docs.html">Command line instead</a>
+        </div>
+
+        <!-- The window, drawn from the app's own stylesheet values. -->
+        <figure class="appwin" style="margin-top: 40px">
+          <figcaption class="visually-hidden">
+            An illustration of the spacetrace window: a toolbar with an on-disk
+            and logical switch and a free-space meter, a folder panel, a
+            treemap and an inspector.
+          </figcaption>
+          <div class="appwin-toolbar">
+            <span class="name">spacetrace</span>
+            <span class="tag">disk usage over time</span>
+            <span class="fake-btn">Scan folder…</span>
+            <span class="fake-btn">Snapshots…</span>
+            <span class="fake-btn">Remote agent…</span>
+            <span class="spacer"></span>
+            <span class="basis"
+              ><span class="on">On disk</span><span>Logical</span></span
+            >
+            <span class="meter"
+              ><span class="bar"></span>61.0 GiB free of 994.0 GiB</span
+            >
+          </div>
+          <div class="appwin-source">
+            <span class="live">● live scan</span>
+            <span class="path">/Users/you</span>
+            <b>87.4 GiB</b> on disk · 1.1 TiB logical · 412,908 entries
+            <span class="bad">3 unreadable</span>
+          </div>
+          <div class="appwin-body">
+            <div class="folders">
+              <div class="row here">
+                <span class="nm">you/</span>
+                <span class="sz">87.4 GiB</span>
+                <span class="pc"></span>
+                <span class="share"
+                  ><i class="c-other" style="width: 100%"></i
+                ></span>
+              </div>
+              <div class="row">
+                <span class="nm">&nbsp;&nbsp;Library/</span>
+                <span class="sz">38.2 GiB</span>
+                <span class="pc">44%</span>
+                <span class="share"
+                  ><i class="c-other" style="width: 44%"></i
+                ></span>
+              </div>
+              <div class="row">
+                <span class="nm">&nbsp;&nbsp;&nbsp;&nbsp;Containers/</span>
+                <span class="sz">19.4 GiB</span>
+                <span class="pc">22%</span>
+                <span class="share"
+                  ><i class="c-archive" style="width: 22%"></i
+                ></span>
+              </div>
+              <div class="row">
+                <span class="nm">&nbsp;&nbsp;Pictures/</span>
+                <span class="sz">12.7 GiB</span>
+                <span class="pc">15%</span>
+                <span class="share"
+                  ><i class="c-image" style="width: 15%"></i
+                ></span>
+              </div>
+              <div class="row">
+                <span class="nm">&nbsp;&nbsp;projects/</span>
+                <span class="sz">6.1 GiB</span>
+                <span class="pc">7%</span>
+                <span class="share"
+                  ><i class="c-code" style="width: 7%"></i
+                ></span>
+              </div>
+              <div class="row">
+                <span class="nm">&nbsp;&nbsp;Movies/</span>
+                <span class="sz">4.9 GiB</span>
+                <span class="pc">6%</span>
+                <span class="share"
+                  ><i class="c-video" style="width: 6%"></i
+                ></span>
+              </div>
+              <div class="row">
+                <span class="nm">&nbsp;&nbsp;Music/</span>
+                <span class="sz">2.2 GiB</span>
+                <span class="pc">3%</span>
+                <span class="share"
+                  ><i class="c-audio" style="width: 3%"></i
+                ></span>
+              </div>
+              <div class="row">
+                <span class="nm">&nbsp;&nbsp;Downloads/</span>
+                <span class="sz">1.8 GiB</span>
+                <span class="pc">2%</span>
+                <span class="share"
+                  ><i class="c-document" style="width: 2%"></i
+                ></span>
+              </div>
+              <div class="row">
+                <span class="nm">&nbsp;&nbsp;.cache/</span>
+                <span class="sz">1.1 GiB</span>
+                <span class="pc">1%</span>
+                <span class="share"
+                  ><i class="c-cache" style="width: 1.5%"></i
+                ></span>
+              </div>
+            </div>
+
+            <div class="treemap" role="presentation">
+              <div class="tile big on-dark a-big c-other">
+                <span class="n">Library/Containers</span>
+                <span class="s">38.2 GiB</span>
+              </div>
+              <div class="tile a-docker c-archive">
+                <span class="n">Docker.raw</span>
+                <span class="s">19.4 GiB</span>
+                <span class="sparse">~ claims 1 TiB</span>
+              </div>
+              <div class="tile a-photos c-image">
+                <span class="n">Pictures</span>
+                <span class="s">12.7 GiB</span>
+              </div>
+              <div class="tile a-node c-code">
+                <span class="n">node_modules</span>
+                <span class="s">6.1 GiB</span>
+              </div>
+              <div class="tile a-movies c-video">
+                <span class="n">Movies</span>
+                <span class="s">4.9 GiB</span>
+              </div>
+              <div class="tile a-music c-audio">
+                <span class="n">Music</span>
+                <span class="s">2.2 GiB</span>
+              </div>
+              <div class="tile a-downloads c-document">
+                <span class="n">Downloads</span>
+                <span class="s">1.8 GiB</span>
+              </div>
+              <div class="tile a-cache c-cache">
+                <span class="n">.cache</span>
+                <span class="s">1.1 GiB</span>
+              </div>
+            </div>
+
+            <div class="inspector">
+              <h4>Docker.raw</h4>
+              <dl>
+                <dt>On disk</dt>
+                <dd>19.4 GiB</dd>
+                <dt>Logical</dt>
+                <dd>1.0 TiB</dd>
+                <dt>Share</dt>
+                <dd>22% of this scan</dd>
+                <dt>Kind</dt>
+                <dd>archive · sparse</dd>
+                <dt>Path</dt>
+                <dd style="word-break: break-all">
+                  ~/Library/Containers/com.docker.docker/Data
+                </dd>
+              </dl>
+              <p class="sparse-note">
+                Sparse: it reports a length it never allocated. The map is
+                drawn from the on-disk figure.
+              </p>
+            </div>
+          </div>
+          <div class="appwin-foot">
+            <ul class="legend">
+              <li><i class="c-image"></i>image</li>
+              <li><i class="c-video"></i>video</li>
+              <li><i class="c-audio"></i>audio</li>
+              <li><i class="c-document"></i>document</li>
+              <li><i class="c-archive"></i>archive</li>
+              <li><i class="c-code"></i>code</li>
+              <li><i class="c-binary"></i>binary</li>
+              <li><i class="c-cache"></i>cache</li>
+              <li><i class="c-other"></i>other</li>
+            </ul>
+          </div>
+        </figure>
+        <p class="appwin-cap">
+          Drawn from the application's own stylesheet rather than
+          screenshotted, so it stays true as long as the palette does. The real
+          map is a squarified layout on a canvas and holds tens of thousands of
+          tiles.
+        </p>
+      </div>
+
+      <section class="band">
+        <div class="wrap">
+          <div class="band-head">
+            <h2>What it is like to use</h2>
+            <p>
+              The app is a window onto the same Rust core the CLI uses. Its own
+              job is to not get in the way.
+            </p>
+          </div>
+
+          <ul class="claims">
+            <li>
+              <h3>The window never goes away while it works</h3>
+              <div>
+                <p>
+                  A scan reports itself in a strip, not behind a curtain.
+                  Whatever was open stays open and stays usable, and it is only
+                  replaced when the new scan <em>finishes</em>. Stop it, or let
+                  it fail, and the previous scan is still there.
+                </p>
+                <p>
+                  Every command that touches the filesystem or SQLite runs off
+                  the main thread. For a disk analyser, a frozen window would
+                  mean frozen for the whole time it is doing its job.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>Zoom in without losing your place</h3>
+              <div>
+                <p>
+                  Double-click a folder in the map, pick one from the
+                  breadcrumb, or use a folder row's right-click menu.
+                  <kbd>Backspace</kbd> goes back up. A click in the folder panel
+                  never moves the map, so browsing the list cannot lose the view
+                  you were looking at.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>The progress bar admits when it is guessing</h3>
+              <div>
+                <p>
+                  A filesystem walk has no denominator — nothing knows how many
+                  entries are under a folder until it has looked. The one honest
+                  estimate is the last time this app scanned that same folder
+                  with the same options, so that is what it uses, and the strip
+                  prints where the number came from.
+                </p>
+                <p>
+                  A first scan of a folder shows counters and motion but no
+                  percentage. A made-up denominator produces a bar that races to
+                  90% and then sits there.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>Deleting does not reload anything</h3>
+              <div>
+                <p>
+                  Moving an entry to the Trash edits the open tree in place and
+                  corrects the totals above it, so the folders you had expanded
+                  stay expanded, the map stays where you left it and the scroll
+                  position does not move.
+                </p>
+                <p>
+                  A selection of a hundred is the same call as one, with a real
+                  “3 of 11” because a delete was handed a list and does have a
+                  denominator. Partial failure is reported rather than rolled
+                  back: claiming the whole thing failed would be a lie about the
+                  four that went.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>Moving to Trash frees no space, and the app says so</h3>
+              <div>
+                <p>
+                  On every supported platform the Trash is on the same
+                  filesystem, so the folder gets smaller and the disk does not.
+                  The confirmation says it, the notice afterwards says it, and
+                  the free-space readout can be clicked to re-measure once you
+                  have emptied it.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>Sizes always say which measure they are</h3>
+              <div>
+                <p>
+                  On disk by default, with a labelled switch in the toolbar
+                  rather than a buried setting. The ordering, the figure beside
+                  it and the row's colour all come from the same measure, so a
+                  list that says “biggest first” means the same thing as the
+                  number printed on the row.
+                </p>
+                <p>
+                  Rows whose two figures are far apart carry a
+                  <span class="mono">~</span> with both numbers in the tooltip,
+                  and the inspector names the file as sparse.
+                </p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="wrap">
+          <div class="split narrow-left">
+            <div>
+              <h2>Three sources, one window</h2>
+              <p>
+                The app does not care where a tree came from, because a
+                snapshot is the same SQLite file wherever it was written.
+              </p>
+            </div>
+            <div>
+              <dl class="ref">
+                <dt>This machine</dt>
+                <dd>
+                  A live scan. The only source where acting on files is
+                  allowed, because it is the only one where the paths still
+                  mean what they say.
+                </dd>
+                <dt>A stored snapshot</dt>
+                <dd>
+                  From the same database the CLI writes. Save the open scan with
+                  <strong>Save snapshot…</strong> and it shows up in
+                  <code>spacetrace scans</code>.
+                </dd>
+                <dt>A remote agent</dt>
+                <dd>
+                  Point the app at an agent's URL and token and read its
+                  snapshots over HTTP — the server never has to be logged in
+                  to.
+                </dd>
+                <dt>Two of them at once</dt>
+                <dd>
+                  Compare any two snapshots of the same root and see which
+                  folder actually grew, with the same culprit-folder rule the
+                  CLI uses.
+                </dd>
+              </dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="wrap">
+          <div class="split">
+            <div>
+              <h2>What it will not do</h2>
+              <p>
+                The app reads. The single exception is
+                <strong>Move to Trash</strong>, and it is gated four ways: the
+                backend refuses unless the open tree is a live scan of this
+                machine, it refuses the scan root itself, it re-checks that
+                every path still exists, and the window asks first — listing
+                what is about to go when there is more than one.
+              </p>
+              <p>
+                Nothing is ever deleted outright. It goes to the system Trash,
+                where you can put it back.
+              </p>
+              <p>
+                Acting on files is disabled whenever a snapshot is open. A
+                snapshot is a photograph of the past, or of another machine, and
+                a path in it may no longer mean what it says.
+              </p>
+            </div>
+            <div>
+              <h2>Not done yet</h2>
+              <p>Stated rather than discovered:</p>
+              <ul>
+                <li>
+                  The Windows MFT fast path — scans there are a normal directory
+                  walk, so they are slower than WizTree's.
+                </li>
+                <li>
+                  A macOS Full Disk Access onboarding screen. Until then,
+                  granting it is a manual trip to System Settings.
+                </li>
+                <li>
+                  A timeline view of one target's whole history, rather than two
+                  snapshots at a time.
+                </li>
+                <li>
+                  Treemap performance on WebKitGTK, which is the Linux
+                  renderer, has not been tuned.
+                </li>
+              </ul>
+              <p>
+                The app is proprietary; the core it is built on is Apache-2.0
+                and in
+                <a href="https://github.com/unalcakir28/spacetrace">the main
+                  repository</a>.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="cta">
+        <div class="wrap">
+          <h2>Open it on the disk that is nearly full.</h2>
+          <p class="dim">
+            Unsigned, so macOS and Windows will ask once. The download page
+            says exactly what to click.
+          </p>
+          <div class="row">
+            <a class="btn btn-primary" href="download.html#desktop"
+              >Download the app</a
+            >
+            <a class="btn" href="hub.html">See the fleet view</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-foot">
+      <div class="wrap">
+        <p>
+          The scanner, snapshot store, CLI and agent are Apache-2.0. The
+          desktop app and the hub are proprietary.
+        </p>
+        <nav aria-label="Footer">
+          <a href="index.html">Home</a>
+          <a href="download.html">Download</a>
+          <a href="docs.html">Guide</a>
+          <a href="hub.html">Hub</a>
+          <a href="https://github.com/unalcakir28/spacetrace">GitHub</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script src="assets/site.js" defer></script>
+  </body>
+</html>

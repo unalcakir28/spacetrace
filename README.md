@@ -2,6 +2,11 @@
 
 Scan disk usage, keep snapshots, and see **what grew**.
 
+**[unalcakir28.github.io/spacetrace](https://unalcakir28.github.io/spacetrace/)**
+— what it is, [downloads and install
+instructions](https://unalcakir28.github.io/spacetrace/download.html), and the
+[usage guide](https://unalcakir28.github.io/spacetrace/docs.html).
+
 Every disk analyser on the market (TreeSize, WizTree, DaisyDisk, FreeSize, ncdu)
 answers one question: *"what is on the disk in front of me right now?"*.
 spacetrace answers the second one too: *"what changed since last week, and on
@@ -34,6 +39,7 @@ it. See [docs/DECISIONS.md](docs/DECISIONS.md) K2.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the code is built and why, technology decisions, known limits |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Settled cross-cutting decisions and their rationale |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | September 2026 market and technical research summary |
+| [docs/RELEASING.md](docs/RELEASING.md) | How the three components are built, published and downloaded |
 | [TODO.md](TODO.md) | Live task list |
 
 Project documents under `docs/` that record *reasoning* (WHY, ROADMAP, TODO,
@@ -41,6 +47,29 @@ RESEARCH) are kept in Turkish; everything user-facing — the CLI, this README a
 ARCHITECTURE — is English.
 
 ## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/unalcakir28/spacetrace/main/install.sh | sh
+```
+
+Installs `spacetrace` and `spacetrace-agent` into `/usr/local/bin`. Deliberately
+POSIX `sh`, because it also has to run on NAS firmware whose shell is busybox.
+`SPACETRACE_BIN_DIR` and `SPACETRACE_VERSION` override where and what.
+
+Prebuilt archives for Linux (musl, x86_64 and aarch64), macOS (both
+architectures) and Windows are on the
+[download page](https://unalcakir28.github.io/spacetrace/download.html) and in
+[releases](https://github.com/unalcakir28/spacetrace/releases). Two channels:
+
+| Channel | Tag | What it is |
+|---------|-----|------------|
+| stable | `v*` | A tagged release |
+| continuous | `continuous` | The newest `main`, rebuilt on every push. Passed CI and nothing else |
+
+The agent's container image is `ghcr.io/unalcakir28/spacetrace` (amd64 and
+arm64).
+
+### From source
 
 Requires Rust 1.85+ ([rustup.rs](https://rustup.rs)):
 

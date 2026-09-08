@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>spacetrace — see what grew, not just what is there</title>
+    <meta
+      name="description"
+      content="A disk usage scanner that keeps snapshots and tells you which folder grew — on this machine, on a server over HTTP, or across a fleet with a fill-up forecast. CLI, desktop app and self-hosted hub."
+    />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="assets/site.css" />
+    <meta property="og:title" content="spacetrace" />
+    <meta
+      property="og:description"
+      content="Every disk analyser tells you what is on the disk. This one tells you what changed."
+    />
+    <meta property="og:type" content="website" />
+  </head>
+  <body>
+    <header class="site-head">
+      <div class="wrap">
+        <a class="brand" href="index.html" aria-label="spacetrace, home">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="0" y="0" width="13" height="13" rx="1.6" fill="#45d3ba" />
+            <rect x="0" y="14" width="13" height="10" rx="1.6" fill="#a98cf0" />
+            <rect x="14" y="0" width="10" height="8" rx="1.6" fill="#ffb454" />
+            <rect x="14" y="9" width="10" height="5" rx="1.6" fill="#58b4e8" />
+            <rect x="14" y="15" width="10" height="9" rx="1.6" fill="#7bd88f" />
+          </svg>
+          spacetrace
+        </a>
+        <nav class="site-nav" aria-label="Site">
+          <a href="download.html">Download</a>
+          <a href="docs.html">Guide</a>
+          <a href="desktop.html">Desktop</a>
+          <a href="hub.html">Hub</a>
+          <a href="https://github.com/unalcakir28/spacetrace">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <div class="wrap hero">
+        <p class="kicker">
+          One binary · <b>Linux, macOS, Windows, NAS, containers</b> · scanner
+          and agent are Apache-2.0
+        </p>
+        <h1>
+          <span class="given">Every disk analyser tells you what is on the
+            disk.</span>
+          <span class="second">This one tells you what changed.</span>
+        </h1>
+        <p class="lede">
+          Scan a disk, keep the result as a snapshot, and compare two snapshots
+          to see which folder actually grew — here, on a server you never log
+          in to, or across a fleet that reports its own fill-up date.
+        </p>
+
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="download.html">
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path
+                d="M8 1.5v9m0 0L4.5 7M8 10.5 11.5 7M2 13.5h12"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+              />
+            </svg>
+            Download for your machine
+          </a>
+          <div class="cmd">
+            <code>curl -fsSL https://raw.githubusercontent.com/unalcakir28/spacetrace/main/install.sh | sh</code>
+            <button type="button">Copy</button>
+          </div>
+        </div>
+        <p class="hero-note">
+          Installs the CLI and the agent into <code>/usr/local/bin</code>.
+          Deliberately boring POSIX <code>sh</code>, because it also has to run
+          on NAS firmware whose shell is busybox.
+        </p>
+
+        <!-- The instrument. The rest of the page stays quiet. -->
+        <figure class="terminal">
+          <div class="terminal-bar">
+            <span class="dot"></span><span class="dot"></span
+            ><span class="dot"></span>
+            <span>srv-01 — /srv</span>
+          </div>
+          <div class="terminal-body">
+            <div class="prompt" data-step="1">
+              $ <b>spacetrace diff --path /srv</b>
+            </div>
+            <div class="diff-head" data-step="2">
+              #1 2026-09-06 17:23 [weekly] → #2 2026-09-06 19:40
+            </div>
+            <div class="diff-total" data-step="2">
+              total 23.8 MiB → 76.3 MiB <b>(+52.5 MiB)</b>
+            </div>
+            <table class="diff">
+              <thead>
+                <tr data-step="3">
+                  <th scope="col">Change</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">New</th>
+                  <th scope="col">Path</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="grew culprit" data-step="4">
+                  <td class="change">+40.1 MiB</td>
+                  <td class="status">grew</td>
+                  <td>42.9 MiB</td>
+                  <td class="path">app/logs/</td>
+                </tr>
+                <tr class="grew" data-step="5">
+                  <td class="change">+14.3 MiB</td>
+                  <td class="status">grew</td>
+                  <td>25.7 MiB</td>
+                  <td class="path">backups/</td>
+                </tr>
+                <tr class="gone" data-step="6">
+                  <td class="change">−1.9 MiB</td>
+                  <td class="status">removed</td>
+                  <td>0 B</td>
+                  <td class="path">uploads/</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <figcaption class="terminal-foot">
+            Note what the report names: <b>app/logs/</b> — not
+            <span class="mono">app/</span>, not
+            <span class="mono">/srv</span>. Folders that merely pass a change
+            through are skipped, and the first level where it genuinely spreads
+            out is the one reported.
+          </figcaption>
+        </figure>
+      </div>
+
+      <section class="band">
+        <div class="wrap">
+          <div class="split narrow-left">
+            <div>
+              <h2>Question one is solved. Question two is not.</h2>
+            </div>
+            <div>
+              <p>
+                TreeSize, WizTree, DaisyDisk, FreeSize, <code>ncdu</code>,
+                <code>du</code> — they are good tools and they all answer the
+                same question: <em>what is on the disk in front of me right
+                now?</em>
+              </p>
+              <p>
+                The question that actually wakes people up is the second one:
+                <em>what changed since last week, and on which machine?</em>
+                Answering it needs three things a live scan cannot give you — a
+                record of the past, a comparison that points at a culprit
+                rather than a root, and the same tool running somewhere you are
+                not sitting.
+              </p>
+              <p>
+                That is the whole idea. Everything below is in service of it.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="wrap">
+          <div class="band-head">
+            <h2>Three parts, one core</h2>
+            <p>
+              The scanner, the snapshot store, the diff and the treemap layout
+              are one Rust library. The three things you can install are
+              windows onto it, which is why a snapshot taken in one is readable
+              by the others.
+            </p>
+          </div>
+
+          <div class="chain">
+            <div>
+              <h3>CLI and agent <span class="lic">Apache-2.0</span></h3>
+              <p class="role">spacetrace · spacetrace-agent</p>
+              <p>
+                The command line tool, and the same code as a service that
+                scans on a schedule and answers over HTTP. One static binary
+                with no runtime to install.
+              </p>
+              <ul>
+                <li>Scan, store snapshots, diff, list, export to ncdu</li>
+                <li>Point any read-only command at a remote agent</li>
+                <li>Runs on a NAS, in a container, on old glibc</li>
+                <li>The agent reads. It never deletes anything.</li>
+              </ul>
+              <p class="go">
+                <a href="docs.html">Command guide</a>
+              </p>
+            </div>
+            <div>
+              <h3>Desktop <span class="lic">Proprietary</span></h3>
+              <p class="role">macOS · Windows · Linux</p>
+              <p>
+                A zoomable treemap of what is filling your disks, coloured by
+                file type, with the folder list, the map and the inspector all
+                agreeing on which measure they are showing.
+              </p>
+              <ul>
+                <li>Browse live scans, stored snapshots or a remote agent</li>
+                <li>Compare two snapshots and see the folder that grew</li>
+                <li>Move entries to the Trash, without losing your place</li>
+                <li>The window stays usable while a scan runs</li>
+              </ul>
+              <p class="go"><a href="desktop.html">What the app does</a></p>
+            </div>
+            <div>
+              <h3>Hub <span class="lic">Proprietary</span></h3>
+              <p class="role">self-hosted · one binary, one SQLite file</p>
+              <p>
+                Agents push their snapshots to it. It keeps the history, works
+                out what is growing, and tells you before a disk fills up.
+              </p>
+              <ul>
+                <li>Fleet dashboard ordered by urgency, not by name</li>
+                <li>Growth rate and a “fills in N days” forecast</li>
+                <li>Threshold rules with webhook delivery</li>
+                <li>Never touches the machines it watches</li>
+              </ul>
+              <p class="go"><a href="hub.html">Run the hub</a></p>
+            </div>
+          </div>
+          <p class="chain-flow">
+            disk → spacetrace-agent → hub → your webhook<br />
+            snapshot.sqlite → CLI, desktop, hub — the same file, converted
+            nowhere along the way
+          </p>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="wrap">
+          <div class="split narrow-left">
+            <div>
+              <h2>Colour is the reading, not the decoration</h2>
+              <p>
+                On a map of land cover the colours <em>are</em> the
+                information. The same is true of file types, so the palette
+                runs through the whole window — the map, the folder list and
+                the inspector — and a category means one colour everywhere.
+              </p>
+              <p>
+                Sizes read as <strong>on disk</strong> by default. A sparse
+                <code>Docker.raw</code> claims a terabyte and holds nineteen
+                gigabytes, and drawn from its claim it would take 99% of the
+                map and turn everything genuinely large into a sliver.
+              </p>
+              <p><a href="desktop.html">More about the desktop app</a></p>
+            </div>
+            <div>
+              <div class="treemap" role="img"
+                aria-label="A treemap of a home folder: Library/Containers 38.2 GiB, Docker.raw 19.4 GiB, Photos 12.7 GiB, node_modules 6.1 GiB, Movies 4.9 GiB, Music 2.2 GiB, Downloads 1.8 GiB, caches 1.1 GiB.">
+                <div class="tile big on-dark a-big c-other">
+                  <span class="n">Library/Containers</span>
+                  <span class="s">38.2 GiB</span>
+                </div>
+                <div class="tile a-docker c-archive">
+                  <span class="n">Docker.raw</span>
+                  <span class="s">19.4 GiB</span>
+                  <span class="sparse">~ claims 1 TiB</span>
+                </div>
+                <div class="tile a-photos c-image">
+                  <span class="n">Photos</span>
+                  <span class="s">12.7 GiB</span>
+                </div>
+                <div class="tile a-node c-code">
+                  <span class="n">node_modules</span>
+                  <span class="s">6.1 GiB</span>
+                </div>
+                <div class="tile a-movies c-video">
+                  <span class="n">Movies</span>
+                  <span class="s">4.9 GiB</span>
+                </div>
+                <div class="tile a-music c-audio">
+                  <span class="n">Music</span>
+                  <span class="s">2.2 GiB</span>
+                </div>
+                <div class="tile a-downloads c-document">
+                  <span class="n">Downloads</span>
+                  <span class="s">1.8 GiB</span>
+                </div>
+                <div class="tile a-cache c-cache">
+                  <span class="n">caches</span>
+                  <span class="s">1.1 GiB</span>
+                </div>
+              </div>
+              <ul class="legend">
+                <li><i class="c-image"></i>image</li>
+                <li><i class="c-video"></i>video</li>
+                <li><i class="c-audio"></i>audio</li>
+                <li><i class="c-document"></i>document</li>
+                <li><i class="c-archive"></i>archive</li>
+                <li><i class="c-code"></i>code</li>
+                <li><i class="c-binary"></i>binary</li>
+                <li><i class="c-cache"></i>cache</li>
+                <li><i class="c-other"></i>other</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="wrap">
+          <div class="band-head">
+            <h2>Numbers you can check, and silence where you cannot</h2>
+            <p>
+              A disk tool that prints a figure you cannot reconcile with
+              <code>du</code> has lost the argument. These are test conditions
+              in the repository, not aspirations.
+            </p>
+          </div>
+
+          <ul class="claims">
+            <li>
+              <h3>Totals match <code>du</code> exactly</h3>
+              <div>
+                <p>
+                  <strong>Logical</strong> is file bytes only and matches
+                  <code>du -sb</code>. <strong>On disk</strong> is the blocks
+                  actually allocated, directory blocks included, and matches
+                  <code>du -s --block-size=1</code>. Verified on
+                  <code>/usr</code> (141k files), <code>/usr/share</code> and
+                  <code>/etc</code>.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>Free of total, never “% used”</h3>
+              <div>
+                <p>
+                  Filesystem capacity is reported the way <code>df</code>
+                  reports it. On an APFS container, a btrfs subvolume or thin
+                  LVM, a “used” figure includes the siblings and disagrees with
+                  <code>df</code> about the same mount — so it is not printed.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>The forecast is withheld more often than it is shown</h3>
+              <div>
+                <p>
+                  “Fills in N days” appears only with at least three snapshots
+                  spanning a day, a linear fit of r² ≥ 0.5, a capacity that was
+                  actually measured, and an answer inside ten years. A log
+                  rotation will happily produce a fitted line whose slope means
+                  nothing, and a confident wrong date is worse than no date.
+                </p>
+                <p class="faint">
+                  When a condition fails the column is blank and the page says
+                  which one.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>A snapshot is a plain SQLite file</h3>
+              <div>
+                <p>
+                  Not an export format, not a proprietary blob. What the agent
+                  stores is what travels over the wire and what lands on your
+                  laptop, so listing, browsing and diffing a remote snapshot
+                  runs the identical code as a local one. <code>spacetrace
+                  export</code> also writes ncdu's format if you would rather
+                  use that.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>Errors are counted, not swallowed</h3>
+              <div>
+                <p>
+                  An unreadable path is reported and sampled; the scan carries
+                  on. A cancelled scan returns no tree at all, because a
+                  partial tree looks complete and reports a total that was
+                  never true of any disk.
+                </p>
+              </div>
+            </li>
+            <li>
+              <h3>The agent has no delete</h3>
+              <div>
+                <p>
+                  Software you are asked to install on a server earns trust by
+                  not being able to do the frightening thing. This is a
+                  decision, not a missing feature. The desktop app can move
+                  entries to the Trash — only ever on a live scan of the
+                  machine you are sitting at, and only after asking.
+                </p>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="cta">
+        <div class="wrap">
+          <h2>Find out what grew while you were not looking.</h2>
+          <p class="dim">
+            The CLI and the agent are open source and always will be — the
+            agent runs on your servers, so you should be able to read it.
+          </p>
+          <div class="row">
+            <a class="btn btn-primary" href="download.html">Downloads and install</a>
+            <a class="btn" href="docs.html">Read the guide</a>
+            <a class="btn" href="https://github.com/unalcakir28/spacetrace"
+              >Source on GitHub</a
+            >
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-foot">
+      <div class="wrap">
+        <p>
+          The scanner, snapshot store, CLI and agent are Apache-2.0. The
+          desktop app and the hub are proprietary.
+        </p>
+        <nav aria-label="Footer">
+          <a href="download.html">Download</a>
+          <a href="docs.html">Guide</a>
+          <a href="desktop.html">Desktop</a>
+          <a href="hub.html">Hub</a>
+          <a href="https://github.com/unalcakir28/spacetrace">GitHub</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script src="assets/site.js" defer></script>
+  </body>
+</html>
