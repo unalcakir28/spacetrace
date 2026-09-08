@@ -7,6 +7,29 @@ pub type NodeId = u32;
 pub const ROOT: NodeId = 0;
 const NO_PARENT: NodeId = NodeId::MAX;
 
+/// Which of the two measurements a caller wants to rank, lay out or total by.
+///
+/// Both are always recorded and neither is an approximation of the other, so
+/// this is a question about the question being asked, not about accuracy:
+///
+/// * `Logical` answers "how many bytes are in these files" and matches
+///   `du -sb`. It is what a file claims when asked its length.
+/// * `OnDisk` answers "how much of the filesystem is this using" and matches
+///   `du`. It is the only one that can be added up against `df`.
+///
+/// The two diverge in both directions and both are correct: a sparse file
+/// claims a length it never allocated (a 1 TiB VM image holding 19 GiB), and a
+/// tiny file allocates a whole block whatever its length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SizeBasis {
+    /// File bytes only. The historical default, so it stays the default here.
+    #[default]
+    Logical,
+    /// Allocated blocks, including the blocks directories themselves occupy.
+    OnDisk,
+}
+
 /// One entry in the arena. Children of a node occupy the contiguous index
 /// range `children_start .. children_start + children_len`.
 #[derive(Debug, Clone)]
@@ -38,6 +61,14 @@ impl Node {
 
     pub fn has_parent(&self) -> bool {
         self.parent != NO_PARENT
+    }
+
+    /// This subtree's total under the given measure.
+    pub fn measure(&self, basis: SizeBasis) -> u64 {
+        match basis {
+            SizeBasis::Logical => self.size,
+            SizeBasis::OnDisk => self.alloc,
+        }
     }
 }
 
@@ -211,10 +242,15 @@ impl Tree {
         ids
     }
 
-    /// Children of a node sorted by size, biggest first.
-    pub fn children_by_size(&self, id: NodeId) -> Vec<NodeId> {
+    /// Children of a node, biggest first under the given measure.
+    ///
+    /// The measure is a parameter rather than always logical size because the
+    /// order changes: a sparse file that claims 1 TiB and holds 19 GiB belongs
+    /// at the top of one ordering and well down the other, and a list that
+    /// says "biggest first" has to mean the same thing as the figures beside it.
+    pub fn children_by(&self, id: NodeId, basis: SizeBasis) -> Vec<NodeId> {
         let mut kids: Vec<NodeId> = self.children(id).collect();
-        kids.sort_unstable_by_key(|&c| std::cmp::Reverse(self.node(c).size));
+        kids.sort_unstable_by_key(|&c| std::cmp::Reverse(self.node(c).measure(basis)));
         kids
     }
 

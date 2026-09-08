@@ -103,6 +103,35 @@ show up larger due to block rounding — both are correct.
 **Validation:** on `/usr` (141k files), `/usr/share`, and `/etc`, both
 totals match `du` exactly. This is a test case.
 
+### Choosing between them: `SizeBasis`
+
+Both numbers are recorded for every entry, so nothing has to be re-measured to
+change which one is being read. What *does* have to be chosen is which one an
+ordering or an area is proportional to, and that travels as `SizeBasis`
+(`Logical` | `OnDisk`) through `Node::measure`, `Tree::children_by` and
+`LayoutOptions::basis`.
+
+It is a parameter rather than a constant because the two orderings genuinely
+disagree, and the disagreement is largest exactly where it matters most. A
+sparse file reports a length it never allocated — a VM disk image, a database,
+a core dump — and those are among the biggest entries on a real disk. A 1 TiB
+Docker image holding 19 GiB is a factor of fifty, enough to give it 99% of a
+treemap's area and reduce everything genuinely large to a sliver.
+
+Two consequences worth keeping:
+
+- **A list and the figures beside it must share a basis.** "Biggest first" has
+  to mean the same thing as the number printed on the row, so `children_by`
+  takes the basis rather than assuming one.
+- **"Zero" is judged under the basis in force.** The layout drops entries that
+  contribute nothing to the total being drawn, so a few-byte file is absent
+  logically and present on disk. Both are correct for the question asked.
+
+The desktop defaults to `OnDisk` — the question it exists to answer is what is
+filling a disk, and only allocated blocks add up towards what `df` reports as
+gone. The CLI stays on `Logical` and says so at its call sites; its summary
+line prints both totals either way.
+
 ## Snapshot store
 
 The arena layout is written to SQLite **as-is**: `entries.id` is the node's

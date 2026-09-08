@@ -19,7 +19,7 @@
 //! screen. That is what a quadtree would have been for, except the structure is
 //! already there and costs nothing to keep.
 
-use spacetrace_scan_core::{NodeId, Tree};
+use spacetrace_scan_core::{NodeId, SizeBasis, Tree};
 
 /// An axis-aligned rectangle in layout space, y growing downward.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -96,6 +96,13 @@ pub struct LayoutOptions {
     pub padding: f64,
     /// Never go deeper than this many levels below the layout root.
     pub max_depth: Option<u16>,
+    /// Which measurement the rectangles are proportional to.
+    ///
+    /// This decides the whole picture, not a detail of it. A treemap answers
+    /// "what is taking up the space" by area, so with `Logical` a sparse VM
+    /// image that claims 1 TiB and holds 19 GiB is drawn fifty times too large
+    /// and crowds out everything that is genuinely big.
+    pub basis: SizeBasis,
 }
 
 impl Default for LayoutOptions {
@@ -104,6 +111,7 @@ impl Default for LayoutOptions {
             min_area: 6.0,
             padding: 1.0,
             max_depth: None,
+            basis: SizeBasis::Logical,
         }
     }
 }
@@ -242,7 +250,7 @@ pub fn layout(tree: &Tree, root: NodeId, bounds: Rect, opts: &LayoutOptions) -> 
             continue;
         }
 
-        let children = sorted_children(tree, node);
+        let children = sorted_children(tree, node, opts.basis);
         if children.is_empty() {
             tiles[index].truncated = false;
             continue;
@@ -279,10 +287,15 @@ pub fn layout(tree: &Tree, root: NodeId, bounds: Rect, opts: &LayoutOptions) -> 
 
 /// Children with a non-zero size, largest first. Zero-sized entries are dropped:
 /// they would take no area, and keeping them only produces degenerate rectangles.
-fn sorted_children(tree: &Tree, node: NodeId) -> Vec<(NodeId, f64)> {
+///
+/// "Zero" is judged under the same measure the areas use, so switching the basis
+/// can change which entries appear at all — a file of a few bytes allocates a
+/// block and shows up on disk, and an entry can only vanish from the map if it
+/// contributes nothing to the total being drawn.
+fn sorted_children(tree: &Tree, node: NodeId, basis: SizeBasis) -> Vec<(NodeId, f64)> {
     let mut children: Vec<(NodeId, f64)> = tree
         .children(node)
-        .map(|c| (c, tree.node(c).size as f64))
+        .map(|c| (c, tree.node(c).measure(basis) as f64))
         .filter(|(_, size)| *size > 0.0)
         .collect();
     children.sort_unstable_by(|a, b| b.1.total_cmp(&a.1));

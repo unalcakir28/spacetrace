@@ -1,7 +1,7 @@
 use std::fs;
 use std::sync::Arc;
 
-use spacetrace_scan_core::{scan, EntryKind, ScanOptions, ScanProgress};
+use spacetrace_scan_core::{scan, EntryKind, ScanOptions, ScanProgress, SizeBasis};
 
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -110,7 +110,7 @@ fn children_are_contiguous_and_sorted_by_size_on_demand() {
         assert_eq!(tree.children(id).count(), n.children_len as usize);
     }
 
-    let by_size = tree.children_by_size(tree.root());
+    let by_size = tree.children_by(tree.root(), SizeBasis::Logical);
     let sizes: Vec<u64> = by_size.iter().map(|&c| tree.node(c).size).collect();
     assert!(
         sizes.windows(2).all(|w| w[0] >= w[1]),
@@ -514,5 +514,105 @@ mod untrusted {
         // scanner does leave it at 0 — this must not be mistaken for a cycle.
         let nodes = vec![root(1, 1), node(0, 0, 0)];
         assert!(Tree::from_parts_checked(nodes, PathBuf::from("/x")).is_ok());
+    }
+}
+
+// ------------------------------------------------------------- size basis
+
+/// Ranking by the two measures, on a real sparse file.
+///
+/// Every consumer that says "biggest first" sorts through `children_by`, so if
+/// the basis does not reach the ordering, the figures in a list and the order
+/// of that list disagree — and the entry the user is looking for is the one
+/// most likely to be in the wrong place.
+mod basis {
+    use std::fs;
+    use std::io::Write;
+    use std::sync::Arc;
+
+    use spacetrace_scan_core::{scan, ScanOptions, ScanProgress, SizeBasis};
+
+    #[test]
+    fn a_sparse_file_outranks_a_dense_one_logically_and_loses_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut f = fs::File::create(dir.path().join("sparse.img")).unwrap();
+        f.set_len(1 << 30).unwrap();
+        f.write_all(&vec![0xAB; 64 * 1024]).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+        fs::write(dir.path().join("dense.bin"), vec![0u8; 4 * 1024 * 1024]).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let md = fs::metadata(dir.path().join("sparse.img")).unwrap();
+            if md.blocks() * 512 > (1 << 30) / 2 {
+                eprintln!("skipping: this filesystem does not do sparse files");
+                return;
+            }
+        }
+
+        let (tree, _) = scan(
+            dir.path(),
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+        )
+        .unwrap();
+
+        let name_of = |id| tree.node(id).name.clone();
+
+        let logical = tree.children_by(tree.root(), SizeBasis::Logical);
+        assert_eq!(
+            name_of(logical[0]),
+            "sparse.img",
+            "logically the claim wins: 1 GiB against 4 MiB"
+        );
+
+        let on_disk = tree.children_by(tree.root(), SizeBasis::OnDisk);
+        assert_eq!(
+            name_of(on_disk[0]),
+            "dense.bin",
+            "on disk the blocks win: 4 MiB against 64 KiB"
+        );
+    }
+
+    #[test]
+    fn measure_returns_the_field_the_basis_names() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.bin"), vec![0u8; 8192]).unwrap();
+        let (tree, _) = scan(
+            dir.path(),
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+        )
+        .unwrap();
+
+        let root = tree.node(tree.root());
+        assert_eq!(root.measure(SizeBasis::Logical), root.size);
+        assert_eq!(root.measure(SizeBasis::OnDisk), root.alloc);
+    }
+
+    /// A one-byte file allocates a whole block, so it is *bigger* on disk than
+    /// its length. The divergence runs both ways and neither side is a bug.
+    #[test]
+    fn a_tiny_file_is_larger_on_disk_than_its_length() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("tiny.txt"), b"x").unwrap();
+        let (tree, _) = scan(
+            dir.path(),
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+        )
+        .unwrap();
+
+        let tiny = tree.children_by(tree.root(), SizeBasis::Logical)[0];
+        let node = tree.node(tiny);
+        assert_eq!(node.measure(SizeBasis::Logical), 1);
+        assert!(
+            node.measure(SizeBasis::OnDisk) >= 512,
+            "one byte still costs a block, got {}",
+            node.measure(SizeBasis::OnDisk)
+        );
     }
 }

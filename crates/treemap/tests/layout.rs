@@ -42,6 +42,7 @@ fn no_padding() -> LayoutOptions {
         min_area: 1.0,
         padding: 0.0,
         max_depth: None,
+        ..Default::default()
     }
 }
 
@@ -175,6 +176,7 @@ fn a_large_min_area_stops_subdivision_early() {
             min_area: 50_000.0,
             padding: 0.0,
             max_depth: None,
+            ..Default::default()
         },
     );
     assert!(
@@ -210,6 +212,7 @@ fn max_depth_is_respected() {
             min_area: 1.0,
             padding: 0.0,
             max_depth: Some(1),
+            ..Default::default()
         },
     );
     assert!(map.tiles().iter().all(|t| t.depth <= 1));
@@ -454,4 +457,144 @@ fn a_wide_tree_lays_out_without_slivers_or_panics() {
 
     let covered: f64 = map.children_of(root).iter().map(|t| t.rect.area()).sum();
     assert!((covered - canvas.area()).abs() / canvas.area() < 0.01);
+}
+
+/// The basis a layout is built from, checked on a real sparse file.
+///
+/// This is the case the whole option exists for. A sparse file reports a length
+/// it never allocated — a VM disk image claiming 1 TiB while holding 19 GiB is
+/// the ordinary case, not a curiosity — and a treemap drawn from that claim
+/// gives it fifty times the area it has any right to, burying everything that
+/// is genuinely large.
+mod basis {
+    use super::*;
+    use std::io::{Seek, SeekFrom, Write};
+
+    use spacetrace_scan_core::SizeBasis;
+
+    const SPARSE_LEN: u64 = 1 << 30; // 1 GiB claimed
+    const SPARSE_REAL: usize = 64 * 1024; // and this much actually written
+    const DENSE_LEN: usize = 4 * 1024 * 1024;
+
+    /// A folder holding one sparse file and one ordinary one, or `None` when the
+    /// filesystem under the temp directory allocated the sparse file for real.
+    ///
+    /// Checked rather than assumed: on a filesystem without sparse support this
+    /// fixture would be a 1 GiB write, and a test that quietly does that on
+    /// somebody's CI runner is worse than a test that skips.
+    fn sparse_fixture() -> Option<(tempfile::TempDir, Tree)> {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut f = fs::File::create(dir.path().join("sparse.img")).unwrap();
+        f.set_len(SPARSE_LEN).unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.write_all(&vec![0xAB; SPARSE_REAL]).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        fs::write(dir.path().join("dense.bin"), vec![0u8; DENSE_LEN]).unwrap();
+
+        let md = fs::metadata(dir.path().join("sparse.img")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if md.blocks() * 512 > SPARSE_LEN / 2 {
+                eprintln!("skipping: this filesystem does not do sparse files");
+                return None;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = md;
+            return None;
+        }
+
+        let (tree, _) = scan(
+            dir.path(),
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+        )
+        .unwrap();
+        Some((dir, tree))
+    }
+
+    fn area_of(map: &TileTree, tree: &Tree, name: &str) -> f64 {
+        let root = map.root().unwrap();
+        map.children_of(root)
+            .iter()
+            .find(|t| tree.node(t.node).name == name)
+            .unwrap_or_else(|| panic!("{name} has no tile"))
+            .rect
+            .area()
+    }
+
+    fn options(basis: SizeBasis) -> LayoutOptions {
+        LayoutOptions {
+            min_area: 1.0,
+            padding: 0.0,
+            basis,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_logical_basis_lets_a_sparse_file_swamp_the_map() {
+        let Some((_dir, tree)) = sparse_fixture() else {
+            return;
+        };
+        let map = layout(
+            &tree,
+            tree.root(),
+            full_canvas(),
+            &options(SizeBasis::Logical),
+        );
+
+        let sparse = area_of(&map, &tree, "sparse.img");
+        let dense = area_of(&map, &tree, "dense.bin");
+        // 1 GiB against 4 MiB: the claim is 256x the real file.
+        assert!(
+            sparse > dense * 100.0,
+            "logical: sparse {sparse} should dwarf dense {dense}"
+        );
+    }
+
+    #[test]
+    fn the_on_disk_basis_draws_the_blocks_a_sparse_file_actually_holds() {
+        let Some((_dir, tree)) = sparse_fixture() else {
+            return;
+        };
+        let map = layout(
+            &tree,
+            tree.root(),
+            full_canvas(),
+            &options(SizeBasis::OnDisk),
+        );
+
+        let sparse = area_of(&map, &tree, "sparse.img");
+        let dense = area_of(&map, &tree, "dense.bin");
+        // 64 KiB against 4 MiB: the ordering inverts, which is the whole point.
+        assert!(
+            dense > sparse * 10.0,
+            "on disk: dense {dense} should dwarf sparse {sparse}"
+        );
+    }
+
+    #[test]
+    fn switching_the_basis_still_fills_the_canvas_exactly_once() {
+        let Some((_dir, tree)) = sparse_fixture() else {
+            return;
+        };
+        for basis in [SizeBasis::Logical, SizeBasis::OnDisk] {
+            let map = layout(&tree, tree.root(), full_canvas(), &options(basis));
+            let root = map.root().unwrap();
+            let kids = map.children_of(root);
+            assert_no_overlap(kids);
+            let covered: f64 = kids.iter().map(|t| t.rect.area()).sum();
+            assert!(
+                (covered - full_canvas().area()).abs() / full_canvas().area() < 0.01,
+                "{basis:?} left the canvas {covered} of {}",
+                full_canvas().area()
+            );
+        }
+    }
 }

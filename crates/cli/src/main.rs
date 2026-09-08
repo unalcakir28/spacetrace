@@ -10,7 +10,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 use spacetrace_diff::{diff, ChangeKind, DiffOptions, DiffReport};
-use spacetrace_scan_core::{scan, EntryKind, ScanOptions, ScanProgress, ScanStats, Tree};
+use spacetrace_scan_core::{
+    scan, EntryKind, ScanOptions, ScanProgress, ScanStats, SizeBasis, Tree,
+};
 use spacetrace_store::{export_ncdu, ScanMeta, Store};
 
 use crate::args::{
@@ -159,7 +161,7 @@ fn cmd_ls(a: &LsArgs, db_path: &Path, remote: Option<&Remote>, json: bool) -> Re
 
     if json {
         let children: Vec<_> = tree
-            .children_by_size(node)
+            .children_by(node, SizeBasis::Logical)
             .into_iter()
             .take(a.top)
             .map(|c| entry_json(&tree, c))
@@ -643,7 +645,7 @@ fn print_scan_summary(tree: &Tree, stats: &ScanStats) {
 }
 
 fn print_children_table(tree: &Tree, node: spacetrace_scan_core::NodeId, top: usize) {
-    let children = tree.children_by_size(node);
+    let children = tree.children_by(node, SizeBasis::Logical);
     if children.is_empty() {
         println!("(empty)");
         return;

@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 163 test, hepsi geçmeli
+cargo test --workspace                   # 169 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -60,8 +60,17 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
    `scan()` `ErrorKind::Interrupted` verir. Kısmi bir ağaç tam görünür ve
    yanlış toplam bildirir; onu gerçek snapshot'ların yanına yazmak en kötü
    sonuçtur.
-6. **Hatalar yutulmaz.** Okunamayan yol sayılır ve örneklenir; tarama durmaz.
-7. **Ajan hiçbir şeyi silmez.** Sunucuya kurulacak yazılımın güven kazanması için
+6. **Hangi ölçüyle sıralandığı/çizildiği bir parametre, varsayılan değil.**
+   `SizeBasis` (`Logical` | `OnDisk`) `children_by`, `Node::measure` ve
+   `LayoutOptions.basis` üzerinden geçer. Seyrek bir dosya tuttuğundan 50 kat
+   büyük bir uzunluk bildirir (1 TiB iddia eden Docker.raw 19 GiB tutuyor) ve
+   bunlar gerçek disklerdeki *en büyük* girdiler — yani mantıksal ölçü en çok
+   önemli olan girdilerde en çok yanılıyor. Sıralama ile yanındaki rakamın
+   aynı ölçüden gelmesi zorunlu; "en büyük önce" diyen bir liste yanındaki
+   sayıyla aynı şeyi söylemek durumunda. Masaüstü varsayılanı `OnDisk`, CLI
+   `Logical` (çağrı yerlerinde açıkça yazılı).
+7. **Hatalar yutulmaz.** Okunamayan yol sayılır ve örneklenir; tarama durmaz.
+8. **Ajan hiçbir şeyi silmez.** Sunucuya kurulacak yazılımın güven kazanması için
    verilmiş bilinçli bir karar, eksik özellik değil.
 
 ## Kod ve depo alışkanlıkları
