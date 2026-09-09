@@ -210,23 +210,29 @@ paths will plug in by producing the same `RawMeta`.
 ### What Windows costs today
 
 A directory listing on Windows carries the logical size but neither the
-allocated size nor the file identity, so each is read separately:
-`GetCompressedFileSizeW` by path for the allocation, and one handle opened
-through `std::fs::OpenOptions` (`FILE_READ_ATTRIBUTES`, `BACKUP_SEMANTICS`,
-`OPEN_REPARSE_POINT`) for the link count, file id and volume.
+allocated size nor the file identity. Both come from one handle, opened through
+`std::fs::OpenOptions` (`FILE_READ_ATTRIBUTES`, `BACKUP_SEMANTICS`,
+`OPEN_REPARSE_POINT`) so that it closes itself: `FILE_STANDARD_INFO` for
+`AllocationSize`, and `BY_HANDLE_FILE_INFORMATION` for the link count, file id
+and volume serial.
+
+**`GetCompressedFileSizeW` is not the answer**, though it looks like the
+path-based call that would avoid the handle. It returns the *logical* size for
+any file that is neither compressed nor sparse — CI settled it by reporting
+exactly 100001 bytes for a 100001-byte file. The name is the giveaway.
 
 That handle is the price of being correct here, and it is a real one: our own
-measurements put an extra syscall per entry at **+36%** wall clock. It is only
-paid when the answer will be used — `FileIdentity::Skipped` covers a scan with
-`--no-dedupe` — and the fast path above removes it entirely, because
-`NtQueryDirectoryFileEx` returns allocation and file id inside the listing.
-That is the strongest argument for building it.
+measurements put an extra syscall per entry at **+36%** wall clock. The fast
+path above removes it, because `NtQueryDirectoryFileEx` returns allocation and
+file id inside the listing itself — which is the strongest argument for
+building it. `FileIdentity::Skipped` saves the second query when a scan will
+not use the identity, but not the open.
 
-**A remaining divergence:** on Unix a directory's own blocks count towards
-`alloc`; on Windows they do not. `GetCompressedFileSizeW` is documented for
-files, and calling it per directory would report an error for every directory
-on the disk. `crates/scan-core/tests/windows_metadata.rs` asserts the current
-behaviour so it stays a decision rather than a surprise.
+Directories are queried like files, so `alloc` means the same thing on both
+platforms. What NTFS reports for a directory may still be 0, because a
+directory's index lives in `$INDEX_ROOT`/`$INDEX_ALLOCATION` rather than in the
+unnamed data stream; `crates/scan-core/tests/windows_metadata.rs` prints the
+observed value rather than asserting a guess about the filesystem.
 
 ## Why these technology choices
 

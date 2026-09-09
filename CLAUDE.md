@@ -37,9 +37,11 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
    istekte bağlantı açtığı için, koşulsuz `CREATE TABLE IF NOT EXISTS` ya da
    `PRAGMA journal_mode` bir okumanın süren yazmayı SQLITE_BUSY ile devirmesine
    yol açıyordu (CI'da yakalandı, testi `roundtrip.rs` içinde).
-1. **Boyut anlambilimi.** `size` = yalnızca dosya baytları (`du -sb` ile birebir).
-   `alloc` = tahsis edilen bloklar, dizin blokları dâhil (`du -s --block-size=1`
-   ile birebir). Dizinlerin kendi inode boyutu mantıksal toplama **girmez**.
+1. **Boyut anlambilimi.** `size` = yalnızca dosya baytları. `alloc` = tahsis
+   edilen bloklar, dizin blokları dâhil — **`du -s --block-size=1` ile birebir**.
+   Dizinlerin kendi inode boyutu mantıksal toplama **girmez**; bu yüzden `size`
+   `du -sb` ile eşleşmez (GNU `--apparent-size` her dizinin inode boyutunu
+   ekliyor) — eski hâli öyle diyordu, yanlıştı.
    Bu eşleşme bir test koşulu ve **testi
    `crates/scan-core/tests/du_equivalence.rs`** (9 Eylül 2026'da yazıldı; o güne
    kadar iddia elle doğrulanıyordu). `alloc` için oracle harici `du`; `size`
@@ -183,15 +185,16 @@ Kodda dikkat edilecekler:
 
 Bunlara denk gelirsen bug değil, bilinen borç (tam liste TODO.md'de):
 
-- Windows'ta `alloc` ve hardlink dedupe **yazıldı ama yalnızca CI'da
-  doğrulanabilir** (9 Eylül 2026). `GetCompressedFileSizeW` + `std` üzerinden
-  açılan bir handle (`FILE_READ_ATTRIBUTES`) kullanılıyor. Üç şeyi bil:
-  **(a)** girdi başına fazladan çağrı var, ölçülmüş maliyet mertebesi +36% —
-  kaldıran şey B4 (`NtQueryDirectoryFileEx`); **(b)** handle yalnızca dedupe
-  veya `-x` açıkken açılıyor (`FileIdentity`); **(c)** Windows'ta dizinlerin
-  kendi blokları `alloc`'a **girmiyor**, Unix'te giriyor —
-  `crates/scan-core/tests/windows_metadata.rs` bunu bilinçli karar olarak
-  sabitliyor.
+- Windows'ta `alloc` ve hardlink dedupe **yazıldı, doğrulaması yalnızca CI'da**
+  (9 Eylül 2026). Girdi başına **bir handle** açılıyor (`std::fs::OpenOptions`,
+  `FILE_READ_ATTRIBUTES` + `BACKUP_SEMANTICS` + `OPEN_REPARSE_POINT`) ve o
+  handle üstünden `FILE_STANDARD_INFO` → `AllocationSize`,
+  `BY_HANDLE_FILE_INFORMATION` → nlink + file id + volume okunuyor.
+  **`GetCompressedFileSizeW` kullanmayı denemeyin** — sıkıştırılmamış ve sparse
+  olmayan dosyalarda mantıksal boyutu döndürüyor; CI 100.001 baytlık dosyaya
+  100.001 dedi. Maliyet: girdi başına fazladan çağrı, ölçülmüş mertebe +36%;
+  kaldıran şey B4 (`NtQueryDirectoryFileEx`). `FileIdentity::Skipped` ikinci
+  sorguyu atlıyor, handle'ı değil.
 - APFS clone'ları tekilleştirilmiyor; btrfs/ZFS'te reflink ve sıkıştırma
   yüzünden ağaç yürüyüşü gerçek kullanımı yanlış raporluyor.
 - Tarama tüm ağacı bellekte tutuyor; 10M+ dosyada bellek profili ölçülmedi.

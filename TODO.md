@@ -150,13 +150,12 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
 - [x] **A1 Windows `alloc` gerçek değeri** — yazıldı *(9 Eylül 2026)*,
       **CI onayı bekliyor** (macOS'ta yalnızca tip denetimi yapılabiliyor).
-      `GetFileInformationByHandleEx` yerine **`GetCompressedFileSizeW`**
-      kullanıldı: yol tabanlı tek çağrı, handle yönetimi yok, sparse ve
-      NTFS-sıkıştırmalı dosyalarda gerçek tahsisi veren API bu.
-      *Kalan sapma:* Windows'ta dizinlerin kendi blokları `alloc`'a girmiyor
-      (Unix'te giriyor) — `GetCompressedFileSizeW` dosyalar için belgeli, dizin
-      başına çağırmak diskteki her dizin için hata üretirdi. Test bunu bilinçli
-      karar olarak sabitliyor. B4 kapatıyor.
+      `FILE_STANDARD_INFO` → **`AllocationSize`** kullanılıyor.
+      *Önce `GetCompressedFileSizeW` denendi ve CI yanlışladı:* sıkıştırılmamış
+      ve sparse olmayan dosyalarda mantıksal boyutu döndürüyor — 100.001
+      baytlık dosyaya 100.001 dedi. Adı zaten bunu söylüyormuş. Yani yol
+      tabanlı bir çağrıyla olmuyor, handle şart. Dizinler de sorgulanıyor ki
+      `alloc` iki platformda aynı şeyi anlatsın.
       *Rakip:* TreeSize, WizTree, WinDirStat 2.5.0 doğru rakam veriyor.
 - [x] **A2 Windows hardlink dedupe** — yazıldı *(9 Eylül 2026)*, **CI onayı
       bekliyor**. `GetFileInformationByHandle` tek çağrıda `nNumberOfLinks` +

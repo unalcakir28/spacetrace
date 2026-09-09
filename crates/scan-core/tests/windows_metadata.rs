@@ -208,25 +208,34 @@ fn a_sparse_file_reports_fewer_allocated_bytes_than_its_length() {
     );
 }
 
-/// Documents a real divergence rather than discovering it later: on Unix a
-/// directory's own blocks count towards `alloc`, on Windows they do not.
-/// `GetCompressedFileSizeW` is documented for files, and calling it per
-/// directory would report an error for every directory on the disk. The fast
-/// path in TODO B4 closes this, because `NtQueryDirectoryFileEx` returns an
-/// allocation for directories inside the listing itself.
+/// Directories are queried like files, so that `alloc` means the same thing on
+/// both platforms instead of quietly excluding directory overhead on one.
+///
+/// What NTFS reports for a directory is not asserted to a fixed number: a
+/// directory's index lives in `$INDEX_ROOT`/`$INDEX_ALLOCATION` rather than the
+/// unnamed data stream, so `AllocationSize` may legitimately be 0. Asserting a
+/// guess would make this test a statement about the filesystem rather than
+/// about our code. What *is* asserted is that the number is well formed, and it
+/// is printed so the real value is on the record.
 #[test]
-fn directories_report_no_allocation_of_their_own() {
+fn directory_allocation_is_whatever_the_filesystem_reports() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("empty")).unwrap();
+    fs::write(dir.path().join("empty/inside.txt"), b"hello").unwrap();
 
-    let (tree, _) = run(dir.path(), ScanOptions::default());
+    let (tree, stats) = run(dir.path(), ScanOptions::default());
+    assert_eq!(stats.errors, 0, "opening a directory handle must not fail");
 
+    // `own_alloc`, not `alloc`: the latter is the rolled-up subtree total and
+    // would be dominated by the file inside.
     let empty = tree.find("empty").expect("the directory was scanned");
+    let own = tree.node(empty).own_alloc;
+    eprintln!("NTFS reports AllocationSize {own} for a directory holding one file");
+
     assert_eq!(
-        tree.node(empty).alloc,
+        own % 512,
         0,
-        "if this ever becomes non-zero, Unix and Windows agree and the note \
-         about the divergence should go"
+        "an allocation is a whole number of sectors, got {own}"
     );
 }
 
