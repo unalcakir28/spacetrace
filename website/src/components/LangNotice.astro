@@ -1,0 +1,145 @@
+---
+import { t, LOCALE_NAMES, DEFAULT_LOCALE, type Locale } from "../i18n";
+import { localeUrl, type Page } from "../i18n/routing";
+
+interface Props {
+  locale: Locale;
+  page: Page;
+}
+const { locale, page } = Astro.props;
+const dict = t(locale);
+const englishUrl = localeUrl(DEFAULT_LOCALE, page);
+---
+
+{
+  /*
+    Shown only when the reader was moved here automatically. Being redirected
+    without being told is the part of language detection people hate, and the
+    way out has to be one click and in a word they can read — so the escape
+    hatch is the endonym, "English", not a translation of it.
+
+    Rendered hidden and revealed by script: the page is static and shared by
+    every visitor, so the server cannot know whether this particular one
+    arrived by redirect.
+  */
+}
+{
+  locale !== DEFAULT_LOCALE && (
+    <div class="lang-notice" data-lang-notice={locale} hidden>
+      <div class="wrap">
+        <p>{dict.locale.autoNotice}</p>
+        <a href={englishUrl} data-lang-notice-english hreflang="en" lang="en">
+          {LOCALE_NAMES[DEFAULT_LOCALE]}
+        </a>
+        <button type="button" data-lang-notice-close aria-label={dict.locale.dismiss}>
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path
+              d="M4 4l8 8M12 4l-8 8"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+<style>
+  .lang-notice {
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    font-size: 0.88rem;
+  }
+
+  .wrap {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding-block: 9px;
+  }
+
+  p {
+    margin: 0;
+    color: var(--dim);
+    max-width: none;
+    min-width: 0;
+  }
+
+  a {
+    flex: none;
+    color: var(--accent-bright);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  button {
+    flex: none;
+    margin-left: auto;
+    display: inline-flex;
+    background: none;
+    border: 0;
+    padding: 6px;
+    border-radius: var(--r-chip);
+    color: var(--faint);
+    cursor: pointer;
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+
+  button:hover {
+    color: var(--text);
+  }
+
+  button svg {
+    width: 14px;
+    height: 14px;
+  }
+</style>
+
+<script>
+  const KEY = "spacetrace.lang";
+  const FLAG = "spacetrace.auto";
+
+  const notice = document.querySelector<HTMLElement>("[data-lang-notice]");
+  if (notice) {
+    let arrivedByRedirect = false;
+    try {
+      // One-shot: the flag is cleared as soon as it is read, so the notice
+      // appears on the page the reader landed on and nowhere after it.
+      arrivedByRedirect =
+        window.sessionStorage.getItem(FLAG) === notice.dataset.langNotice;
+      if (arrivedByRedirect) window.sessionStorage.removeItem(FLAG);
+    } catch {
+      /* no storage, no notice — the switcher in the header still works */
+    }
+
+    if (arrivedByRedirect) {
+      notice.hidden = false;
+
+      // Going back to English is a choice, and it has to stick: without this
+      // the next visit to a bare URL would move them again.
+      notice
+        .querySelector<HTMLAnchorElement>("[data-lang-notice-english]")
+        ?.addEventListener("click", () => {
+          try {
+            window.localStorage.setItem(KEY, "en");
+          } catch {
+            /* the link still works */
+          }
+        });
+
+      // Dismissing means "this language is fine", so it is recorded too.
+      notice
+        .querySelector<HTMLButtonElement>("[data-lang-notice-close]")
+        ?.addEventListener("click", () => {
+          notice.hidden = true;
+          try {
+            window.localStorage.setItem(KEY, notice.dataset.langNotice ?? "");
+          } catch {
+            /* nothing to do */
+          }
+        });
+    }
+  }
+</script>

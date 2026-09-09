@@ -11,6 +11,8 @@ export const en = {
   locale: {
     label: "Language",
     pick: "Choose a language",
+    autoNotice: "Shown in English to match your browser.",
+    dismiss: "Dismiss",
   },
 
   nav: {

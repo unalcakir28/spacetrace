@@ -153,6 +153,24 @@ const dict = t(locale);
 </style>
 
 <script>
+  const KEY = "spacetrace.lang";
+
+  // Choosing a language here is deliberate, so it is written down: the
+  // automatic detection in LangRedirect.astro checks this first and never runs
+  // again once it is set. Without this, a Turkish browser would keep pulling
+  // somebody who wants English back to /tr/.
+  for (const link of document.querySelectorAll<HTMLAnchorElement>(
+    "details.lang a[hreflang]",
+  )) {
+    link.addEventListener("click", () => {
+      try {
+        window.localStorage.setItem(KEY, link.hreflang);
+      } catch {
+        /* the link still navigates; only the memory is lost */
+      }
+    });
+  }
+
   // A <details> does not close when you click elsewhere, which for a menu is
   // wrong: the click that dismisses it is almost always a click on something
   // else. Escape is handled too, because the keyboard should not be a

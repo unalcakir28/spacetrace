@@ -1,7 +1,12 @@
 import type { Dictionary } from "./en";
 
 export const de: Dictionary = {
-  locale: { label: "Sprache", pick: "Sprache wählen" },
+  locale: {
+    label: "Sprache",
+    pick: "Sprache wählen",
+    autoNotice: "Auf Deutsch angezeigt, passend zu Ihrem Browser.",
+    dismiss: "Schließen",
+  },
 
   nav: {
     desktop: "Desktop-App",

@@ -2,6 +2,8 @@
 import "../styles/global.css";
 import Header from "../components/Header.astro";
 import Footer from "../components/Footer.astro";
+import LangRedirect from "../components/LangRedirect.astro";
+import LangNotice from "../components/LangNotice.astro";
 import { t, LOCALE_TAGS, type Locale } from "../i18n";
 import { alternates, localeUrl, asset, type Page } from "../i18n/routing";
 
@@ -10,9 +12,17 @@ interface Props {
   page: Page;
   title: string;
   description: string;
+  /** Off for 404, whose path is not one of the translated routes. */
+  detectLanguage?: boolean;
 }
 
-const { locale, page, title, description } = Astro.props;
+const {
+  locale,
+  page,
+  title,
+  description,
+  detectLanguage = true,
+} = Astro.props;
 const dict = t(locale);
 const alts = alternates(page);
 const canonical = new URL(localeUrl(locale, page), Astro.site);
@@ -23,6 +33,12 @@ const canonical = new URL(localeUrl(locale, page), Astro.site);
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <!-- Before the stylesheet and the fonts on purpose: an inline script blocks
+         parsing, so if this decides to move the reader, nothing was fetched for
+         the page they are leaving. -->
+    {detectLanguage && <LangRedirect locale={locale} page={page} />}
+
     <title>{title}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical.href} />
@@ -71,6 +87,7 @@ const canonical = new URL(localeUrl(locale, page), Astro.site);
   </head>
   <body>
     <a class="skip" href="#main">{dict.nav.skip}</a>
+    {detectLanguage && <LangNotice locale={locale} page={page} />}
     <Header locale={locale} page={page} />
     <main id="main">
       <slot />

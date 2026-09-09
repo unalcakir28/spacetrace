@@ -176,3 +176,37 @@ Kolay bozulan yerler:
   makul bir geometriyle çiziliyor, yani JS olmadan da dolu görünüyor.
 - **`base: /spacetrace`** — her iç bağlantı `localeUrl()` üzerinden geçiyor. Elle
   yazılan bir yol `astro dev`'de çalışır, üretimde 404 verir.
+
+### Otomatik dil
+
+Pages statik, yani `Accept-Language` okuyacak bir sunucu yok — algılama
+`src/components/LangRedirect.astro` içindeki satır içi script'te, `<head>`'in en
+başında (stylesheet ve fontlardan önce, terk edilecek sayfa için boşuna istek
+atılmasın diye).
+
+Dört kural var ve her biri bunun kullanıcıya karşı çalışmasını engellemek için:
+
+1. **Yalnızca öneksiz (İngilizce) sayfalarda çalışıyor.** `/tr/hub/` gibi dili
+   adıyla söyleyen bir adres birinin bilinçli seçimi ya da paylaştığı bağlantı;
+   oradan taşımak yanlış olurdu.
+2. **Açık seçim kalıcı kazanıyor.** Değiştiriciden dil seçmek, bildirim
+   çubuğundan "English"e dönmek ya da çubuğu kapatmak `localStorage`'a
+   `spacetrace.lang` yazıyor; ondan sonra bu script hiç çalışmıyor.
+3. **Tarayıcının tercih listesinde İngilizce, diğer dört dilden önce geçiyorsa
+   hiçbir şey olmuyor.** Sıra okunuyor: `["en-GB","tr"]` İngilizce'de kalıyor,
+   `["tr-TR","en-US"]` Türkçe'ye gidiyor. Desteklenmeyen bir dil de İngilizce'de
+   bırakıyor (`hreflang` içindeki `x-default` bu).
+4. **Her hata sayfayı yerinde bırakıyor** — gizli sekmede `localStorage`
+   istisna atabilir, `navigator.languages` olmayabilir.
+
+Yönlendirmeden sonra hedef sayfada bir kez bildirim çubuğu görünüyor
+(`LangNotice.astro`): o dilde bir cümle ve çıkış yolu olarak **English**.
+Haber verilmeden taşınmak, dil algılamanın insanların sevmediği kısmı; çıkış tek
+tık ve okuyabildikleri bir kelime olmak zorunda. Çubuk `sessionStorage`
+bayrağıyla tek seferlik — okunduğu anda siliniyor.
+
+`404` sayfasında algılama kapalı (`detectLanguage={false}`): yolu çevrilmiş
+rotalardan biri değil.
+
+Karar tablosu 13 vakayla doğrulandı (tarayıcı dil listesi × kayıtlı seçim);
+davranışı değiştirirken o tabloyu birlikte güncelle.

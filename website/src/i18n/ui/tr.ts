@@ -1,7 +1,12 @@
 import type { Dictionary } from "./en";
 
 export const tr: Dictionary = {
-  locale: { label: "Dil", pick: "Bir dil seçin" },
+  locale: {
+    label: "Dil",
+    pick: "Bir dil seçin",
+    autoNotice: "Tarayıcınızın diline göre Türkçe gösteriliyor.",
+    dismiss: "Kapat",
+  },
 
   nav: {
     desktop: "Masaüstü uygulaması",

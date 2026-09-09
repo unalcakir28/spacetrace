@@ -146,6 +146,12 @@ Tam anlatım [docs/RELEASING.md](docs/RELEASING.md); kolay bozulan kısımlar:
   alınmış — ikinci bir palet icat etmek, ürüne benzemeyen bir site demek.
   Pazarlama sırası masaüstü → CLI → hub; navigasyon ve ana sayfa bu sırayı
   izliyor.
+- **Otomatik dil yalnızca öneksiz sayfalarda çalışıyor** ve açık seçim
+  (`localStorage`'daki `spacetrace.lang`) her zaman kazanıyor. Tarayıcı
+  tercihinde İngilizce diğerlerinden önce geçiyorsa hiçbir şey olmuyor. Bunu
+  "her sayfada çalışsın" diye genişletmek, paylaşılan bir `/tr/...` bağlantısını
+  açan İngilizce okuyan kullanıcıyı yerinden oynatır. Gerekçe
+  docs/RELEASING.md.
 - Sürüm iş akışı belge ve site değişikliklerinde çalışmıyor (`paths-ignore`),
   Pages iş akışı yalnızca `website/**` değişince çalışıyor.
 
