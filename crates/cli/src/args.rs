@@ -6,6 +6,10 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "spacetrace",
     version,
+    // `-V` stays the bare number, for scripts that parse it; `--version`
+    // carries the commit and the channel, which is what a bug report actually
+    // needs, since every continuous build shares one version number.
+    long_version = spacetrace_buildinfo::long_version(env!("CARGO_PKG_VERSION")),
     about = "Scan disk usage, snapshot it, and see what grew",
     long_about = "spacetrace scans a disk or folder, writes the result to a SQLite \
 snapshot, and compares two snapshots to show what is eating the space. The same binary \

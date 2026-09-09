@@ -11,6 +11,11 @@ because anyone can install them.
 
 ## Unreleased
 
+### Added
+
+- `--version` now says which build it is: the commit, the date it was built and the channel. The agent reports the same on `/health` and `/status`.
+- Every release now comes with written release notes in five languages, and the repository has a CHANGELOG.md.
+
 ### Changed
 
 - The promise that on-disk sizes agree with `du` where no blocks are shared is now enforced by a test that runs real `du`, rather than being a claim in the documentation.

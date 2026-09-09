@@ -147,18 +147,28 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 struct Health {
     status: &'static str,
     version: &'static str,
+    /// Which build, not just which version. `/health` needs no credential, so
+    /// this is the one thing an operator can read off a machine they are only
+    /// half sure about — and every continuous build shares a version number.
+    commit: &'static str,
+    channel: &'static str,
 }
 
 async fn health() -> Json<Health> {
     Json(Health {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
+        commit: spacetrace_buildinfo::GIT_SHA,
+        channel: spacetrace_buildinfo::CHANNEL,
     })
 }
 
 #[derive(Serialize)]
 struct Status {
     version: &'static str,
+    commit: &'static str,
+    built: &'static str,
+    channel: &'static str,
     host: String,
     uptime_s: u64,
     roots: Vec<String>,
@@ -171,6 +181,9 @@ async fn status(State(state): State<Arc<AppState>>) -> Result<Json<Status>, ApiF
     let snapshots = runner.list_scans()?.len();
     Ok(Json(Status {
         version: env!("CARGO_PKG_VERSION"),
+        commit: spacetrace_buildinfo::GIT_SHA,
+        built: spacetrace_buildinfo::BUILD_DATE,
+        channel: spacetrace_buildinfo::CHANNEL,
         host: runner.host().to_string(),
         uptime_s: state.started.elapsed().as_secs(),
         roots: runner

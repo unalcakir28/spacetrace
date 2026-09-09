@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 196 test, hepsi geçmeli
+cargo test --workspace                   # 207 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -98,10 +98,15 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 
 ## Kod ve depo alışkanlıkları
 
-- **Her şey İngilizce: kod yorumları, kullanıcıya görünen dizeler, `--help`
-  metinleri, hata mesajları.** i18n katmanı yok ve planlanmıyor (bkz.
-  [docs/DECISIONS.md](docs/DECISIONS.md) K1). Türkçe kalan tek yer: WHY,
-  ROADMAP, TODO, RESEARCH, DECISIONS ve bu dosya — bunlar gerekçe belgeleri.
+- **Bu depoda her şey İngilizce: kod yorumları, kullanıcıya görünen dizeler,
+  `--help` metinleri, hata mesajları.** CLI, ajan ve hub için i18n katmanı yok
+  ve planlanmıyor — çevrilmiş bir komut yanlış bilgidir (K1). Türkçe kalan tek
+  yer: WHY, ROADMAP, TODO, RESEARCH, DECISIONS ve bu dosya — gerekçe belgeleri.
+- **İstisna, ve yalnızca iki yerde: masaüstü GUI ve changelog metinleri beş
+  dilde** (`en tr it fr de`, sitedekiyle aynı küme). Bu K1'in iptali değil,
+  kapsamının daraltılması; gerekçe
+  [docs/DECISIONS.md](docs/DECISIONS.md) K10. Terminal ve sunucu yüzeyi
+  İngilizce kalıyor.
 - Yorum *ne yaptığını* değil **neden öyle yaptığını** anlatır. Kodun kendisi ne
   yaptığını zaten söylüyor.
 - Bağımlılık eklemekte cimri ol. Ajanın tek statik ikili olarak NAS'a
@@ -132,6 +137,7 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 | `agent` | `spacetrace-agent` ikilisi: zamanlayıcı + HTTP servisi |
 | `treemap` | Squarified yerleşim + LOD + hiyerarşik hit-test (masaüstü kullanır) |
 | `changelog` | Üç bileşenin changelog'u, beş dilde; üreteç aynı crate'in ikilisi |
+| `buildinfo` | İkiliye commit, derleme tarihi ve kanal damgası (`build.rs`) |
 
 Bağımlılık yönü tek yönlü. Ajan (Faz 2) bu üçünü kullanır, `cli`'ye
 bağlanmaz.

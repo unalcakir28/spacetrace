@@ -12,6 +12,7 @@ name = "spacetrace"
 path = "src/main.rs"
 
 [dependencies]
+spacetrace-buildinfo.workspace = true
 spacetrace-scan-core.workspace = true
 spacetrace-store.workspace = true
 spacetrace-diff.workspace = true

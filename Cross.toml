@@ -1,0 +1,11 @@
+# cross runs the build inside a container, and does not forward the
+# environment by default. Without this, the two musl targets would build with
+# no version stamp and fall back to whatever `git` says inside a container that
+# may not have it installed — so the Linux binaries would be the only ones
+# unable to say which build they are.
+[build.env]
+passthrough = [
+    "SPACETRACE_GIT_SHA",
+    "SPACETRACE_BUILD_DATE",
+    "SPACETRACE_CHANNEL",
+]

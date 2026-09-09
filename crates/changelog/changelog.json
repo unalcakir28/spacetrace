@@ -4,6 +4,26 @@
     "cli": {
       "unreleased": [
         {
+          "kind": "added",
+          "text": {
+            "de": "`--version` sagt jetzt, um welchen Build es sich handelt: Commit, Build-Datum und Kanal. Der Agent meldet dasselbe unter `/health` und `/status`.",
+            "en": "`--version` now says which build it is: the commit, the date it was built and the channel. The agent reports the same on `/health` and `/status`.",
+            "fr": "`--version` indique désormais de quelle build il s'agit : le commit, la date de compilation et le canal. L'agent donne les mêmes informations sur `/health` et `/status`.",
+            "it": "`--version` indica ora di quale build si tratta: il commit, la data di compilazione e il canale. L'agente riporta gli stessi dati su `/health` e `/status`.",
+            "tr": "`--version` artık hangi derleme olduğunu söylüyor: commit, derleme tarihi ve kanal. Ajan aynı bilgiyi `/health` ve `/status` üzerinden veriyor."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Jede Version kommt jetzt mit geschriebenen Release Notes in fünf Sprachen, und das Repository hat eine CHANGELOG.md.",
+            "en": "Every release now comes with written release notes in five languages, and the repository has a CHANGELOG.md.",
+            "fr": "Chaque version s'accompagne désormais de notes de version rédigées en cinq langues, et le dépôt contient un CHANGELOG.md.",
+            "it": "Ogni versione arriva ora con note di rilascio scritte in cinque lingue, e il repository ha un CHANGELOG.md.",
+            "tr": "Her sürüm artık beş dilde yazılmış sürüm notlarıyla geliyor, ve depoda bir CHANGELOG.md var."
+          }
+        },
+        {
           "kind": "fixed",
           "text": {
             "de": "APFS-Klone werden einmal gezählt. Drei Klone von je 100 MB belegen keinen zusätzlichen Speicher, und spacetrace sagt das jetzt auch, während `du` weiterhin 400 MB meldet. Abschalten mit `--no-clone-dedupe`.",

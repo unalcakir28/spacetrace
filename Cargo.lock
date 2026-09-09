@@ -1440,6 +1440,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "spacetrace-buildinfo",
  "spacetrace-scan-core",
  "spacetrace-store",
  "tempfile",
@@ -1447,6 +1448,10 @@ dependencies = [
  "toml",
  "zstd",
 ]
+
+[[package]]
+name = "spacetrace-buildinfo"
+version = "0.1.0"
 
 [[package]]
 name = "spacetrace-changelog"
@@ -1466,6 +1471,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "spacetrace-buildinfo",
  "spacetrace-diff",
  "spacetrace-scan-core",
  "spacetrace-store",

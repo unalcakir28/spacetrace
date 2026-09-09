@@ -1,0 +1,13 @@
+[package]
+name = "spacetrace-buildinfo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "What a spacetrace binary was built from: commit, date and channel."
+build = "build.rs"
+
+# No dependencies, on purpose: this is linked into the agent, which has to stay
+# one small static binary.
+[dependencies]

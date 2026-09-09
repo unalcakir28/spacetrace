@@ -16,9 +16,18 @@ on:
     tags: ["v*"]
     # A docs-only commit does not change a binary, and a five-target build is
     # not free.
+    #
+    # CHANGELOG.md is named individually rather than covered by `*.md`, because
+    # it is not documentation: it is compiled into the binary and it is the
+    # release notes. A changelog-only push must produce a build, or the
+    # continuous release keeps describing the version before it. The filter
+    # applies to tag pushes too, which is how tagging a changelog-only commit
+    # would otherwise run nothing at all.
     paths-ignore:
       - "docs/**"
-      - "*.md"
+      - "README.md"
+      - "TODO.md"
+      - "CLAUDE.md"
       - "tasks/**"
       - ".gitignore"
   workflow_dispatch:
@@ -48,26 +57,53 @@ jobs:
     outputs:
       version: ${{ steps.pick.outputs.version }}
       rolling: ${{ steps.pick.outputs.rolling }}
+      channel: ${{ steps.pick.outputs.channel }}
     steps:
+      - uses: actions/checkout@v5
       - id: pick
         # The dispatch input reaches the shell through the environment, never
         # interpolated into the script: it is attacker-controlled text.
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
+          tagged=false
           if [ -n "${INPUT_TAG:-}" ]; then
             version="$INPUT_TAG"
             rolling=false
           elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
             version="$GITHUB_REF_NAME"
             rolling=false
+            tagged=true
           else
             version=continuous
             rolling=true
           fi
+
+          if [ "$rolling" = true ]; then
+            channel=continuous
+          else
+            channel=release
+          fi
+
+          # A tag that disagrees with the manifest ships a binary that lies
+          # about its own version: `v0.2.0` in the file name, `0.1.0` from
+          # --version, and an update check that never stops offering an upgrade
+          # the user already installed. Nothing caught this before.
+          #
+          # Real tag pushes only. A dispatch is someone typing a version on
+          # purpose — often `v0.1.0-test`, which is supposed to disagree.
+          if [ "$tagged" = true ]; then
+            manifest=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+            if [ "$version" != "v$manifest" ]; then
+              echo "::error::tag $version does not match workspace.package.version $manifest in Cargo.toml"
+              exit 1
+            fi
+          fi
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "rolling=$rolling" >> "$GITHUB_OUTPUT"
-          echo "Building as $version (rolling=$rolling)" >> "$GITHUB_STEP_SUMMARY"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Building as $version (rolling=$rolling, channel=$channel)" >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: ${{ matrix.target }}
@@ -113,12 +149,25 @@ jobs:
 
       - name: Build
         shell: bash
+        # The build stamps these into the binary, so `--version` can say which
+        # build it is rather than only which version number. Passed in rather
+        # than read from `.git`: `cross` builds inside a container that has no
+        # checkout, and a build script that shells out to git only reruns when
+        # cargo thinks its inputs changed.
+        #
+        # --locked so a release resolves the dependency versions the lockfile
+        # names. Without it two builds of one tag can differ, which makes the
+        # commit stamped above a half-truth.
+        env:
+          SPACETRACE_GIT_SHA: ${{ github.sha }}
+          SPACETRACE_CHANNEL: ${{ needs.meta.outputs.channel }}
         run: |
+          export SPACETRACE_BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} \
+            cross build --release --locked --target ${{ matrix.target }} \
               --bin spacetrace --bin spacetrace-agent
           else
-            cargo build --release --target ${{ matrix.target }} \
+            cargo build --release --locked --target ${{ matrix.target }} \
               --bin spacetrace --bin spacetrace-agent
           fi
 

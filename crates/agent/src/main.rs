@@ -21,6 +21,9 @@ use spacetrace_agent::{push, scheduler, serve};
 #[command(
     name = "spacetrace-agent",
     version,
+    // See the CLI's parser: `-V` is the bare number, `--version` says which
+    // build. On a server that has been running for months, that matters more.
+    long_version = spacetrace_buildinfo::long_version(env!("CARGO_PKG_VERSION")),
     about = "Scan disk usage on a schedule and serve the snapshots",
     long_about = "spacetrace-agent scans configured roots on its own schedule, stores each \
 result as a snapshot, and serves them over HTTP to the spacetrace CLI or a hub. It only ever \
