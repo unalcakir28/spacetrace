@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 
 use crate::capacity::Capacity;
-use crate::meta::{display_name, EntryKind, RawMeta};
+use crate::meta::{display_name, EntryKind, FileIdentity, RawMeta};
 use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
 
 /// How many failing paths we keep for the report before we only count them.
@@ -145,7 +145,11 @@ pub fn scan(
     let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
     let root_md = std::fs::symlink_metadata(&root_path)?;
-    let root_meta = RawMeta::from_metadata(&root_md);
+    let (root_meta, root_failure) = RawMeta::for_path(
+        &root_path,
+        &root_md,
+        identity_needed(&opts, root_md.is_dir()),
+    );
 
     let ctx = Ctx {
         root_dev: root_meta.dev,
@@ -155,6 +159,9 @@ pub fn scan(
         errors: Mutex::new(Vec::new()),
         progress: Arc::clone(&progress),
     };
+    if let Some(e) = root_failure {
+        ctx.note_error(&root_path, &e);
+    }
 
     let children = if root_meta.kind == EntryKind::Dir {
         progress.dirs.fetch_add(1, Ordering::Relaxed);
@@ -206,6 +213,25 @@ pub fn scan(
     Ok((tree, stats))
 }
 
+/// Whether this entry's identity will actually be read.
+///
+/// Deduplication reads the link count, which only a regular file can have above
+/// one; `one_filesystem` reads the volume, which is only ever compared for a
+/// directory the walk might descend into. Asking for neither costs nothing on
+/// Unix and saves an open file handle per entry on Windows, where these fields
+/// are not in the directory listing.
+fn identity_needed(opts: &ScanOptions, is_dir: bool) -> FileIdentity {
+    let wanted = if is_dir {
+        opts.one_filesystem
+    } else {
+        opts.dedupe_hardlinks
+    };
+    if !wanted {
+        return FileIdentity::Skipped;
+    }
+    FileIdentity::Needed
+}
+
 fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Vec<RawEntry> {
     // Checked before the syscall, so a cancelled scan stops issuing I/O
     // immediately instead of draining whatever rayon had already queued.
@@ -242,7 +268,14 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Vec<RawEntry> {
                 continue;
             }
         };
-        let meta = RawMeta::from_metadata(&md);
+        let (meta, failure) =
+            RawMeta::for_path(&path, &md, identity_needed(&ctx.opts, md.is_dir()));
+        // A metadata field the platform would not answer is counted like any
+        // other read failure (invariant #7). The entry itself stays: it has a
+        // name and a logical size, and dropping it would be the larger lie.
+        if let Some(e) = failure {
+            ctx.note_error(&path, &e);
+        }
         let name = entry.file_name().to_string_lossy().into_owned();
         pending.push((path, name, meta));
     }

@@ -179,9 +179,15 @@ Kodda dikkat edilecekler:
 
 Bunlara denk gelirsen bug değil, bilinen borç (tam liste TODO.md'de):
 
-- Windows'ta `alloc` mantıksal boyuta eşit ve hardlink dedupe kapalı
-  (`TODO(win)`, `crates/scan-core/src/meta.rs`) — gerçek değerler için
-  `GetFileInformationByHandleEx` ve `FileIdInfo` gerekiyor.
+- Windows'ta `alloc` ve hardlink dedupe **yazıldı ama yalnızca CI'da
+  doğrulanabilir** (9 Eylül 2026). `GetCompressedFileSizeW` + `std` üzerinden
+  açılan bir handle (`FILE_READ_ATTRIBUTES`) kullanılıyor. Üç şeyi bil:
+  **(a)** girdi başına fazladan çağrı var, ölçülmüş maliyet mertebesi +36% —
+  kaldıran şey B4 (`NtQueryDirectoryFileEx`); **(b)** handle yalnızca dedupe
+  veya `-x` açıkken açılıyor (`FileIdentity`); **(c)** Windows'ta dizinlerin
+  kendi blokları `alloc`'a **girmiyor**, Unix'te giriyor —
+  `crates/scan-core/tests/windows_metadata.rs` bunu bilinçli karar olarak
+  sabitliyor.
 - APFS clone'ları tekilleştirilmiyor; btrfs/ZFS'te reflink ve sıkıştırma
   yüzünden ağaç yürüyüşü gerçek kullanımı yanlış raporluyor.
 - Tarama tüm ağacı bellekte tutuyor; 10M+ dosyada bellek profili ölçülmedi.

@@ -201,13 +201,29 @@ fast paths:
 | macOS | `getattrlistbulk` | Noticeably faster than `readdir + lstat` when size/date is needed |
 | Linux | `getdents64` + `statx`, DFS per thread | The current approach already follows this model |
 
-`RawMeta::from_metadata` in `scan-core` is the boundary of this split; the
-fast paths will plug in by producing the same `RawMeta`.
+`RawMeta::for_path` in `scan-core` is the boundary of this split; the fast
+paths will plug in by producing the same `RawMeta`.
 
-**Known gap:** on Windows, `alloc` currently equals the logical size, and
-hardlink dedup is disabled (`nlink = 1`). Real values require
-`GetFileInformationByHandleEx` (FILE_STANDARD_INFO) and `FileIdInfo`; marked
-in the code with `TODO(win)`.
+### What Windows costs today
+
+A directory listing on Windows carries the logical size but neither the
+allocated size nor the file identity, so each is read separately:
+`GetCompressedFileSizeW` by path for the allocation, and one handle opened
+through `std::fs::OpenOptions` (`FILE_READ_ATTRIBUTES`, `BACKUP_SEMANTICS`,
+`OPEN_REPARSE_POINT`) for the link count, file id and volume.
+
+That handle is the price of being correct here, and it is a real one: our own
+measurements put an extra syscall per entry at **+36%** wall clock. It is only
+paid when the answer will be used — `FileIdentity::Skipped` covers a scan with
+`--no-dedupe` — and the fast path above removes it entirely, because
+`NtQueryDirectoryFileEx` returns allocation and file id inside the listing.
+That is the strongest argument for building it.
+
+**A remaining divergence:** on Unix a directory's own blocks count towards
+`alloc`; on Windows they do not. `GetCompressedFileSizeW` is documented for
+files, and calling it per directory would report an error for every directory
+on the disk. `crates/scan-core/tests/windows_metadata.rs` asserts the current
+behaviour so it stays a decision rather than a surprise.
 
 ## Why these technology choices
 
@@ -234,7 +250,10 @@ query. No server setup is required.
 
 ## Known limits and technical debt
 
-- Windows `alloc` and hardlink support is missing (see above).
+- Windows pays an extra call per entry for `alloc` and one open handle per
+  file for hardlink dedup, and a directory's own blocks are not counted (see
+  "What Windows costs today"). None of this is visible from macOS: only CI
+  runs the Windows tests.
 - On btrfs/ZFS, reflinks, compression, and dedup mean the tree walk
   misreports actual disk usage. Getting it right requires sampling, like
   `btdu` does; for now, a "filesystem-aware mode" is planned for Phase 5.

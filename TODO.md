@@ -4,8 +4,9 @@ Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
 rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 9 Eylül 2026 (rakip analizi ve ölçümler eklendi; **E1–E2 ve
-A4(Unix) kapandı**, sıradaki iş "Rekabet açıkları" → Sıra 2: A1, A2, A4w)
+Son güncelleme: 9 Eylül 2026 (rakip analizi ve ölçümler eklendi; **Sıra 1 ve
+Sıra 2 kapandı** — E1, E2, A4, A1, A2, A4w. Windows tarafı CI onayı bekliyor.
+Sıradaki iş "Rekabet açıkları" → Sıra 3: B1 bellek)
 
 ---
 
@@ -147,12 +148,28 @@ rakibin bizden iyi olduğuyla** etiketli. Sıralama aşağıda, "Sıra" başlı�
 Bunlar eksik özellik değil, **verdiğimiz sözü tutmama**. Hız eksiği rekabetçi
 dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
-- [ ] **A1 Windows `alloc` gerçek değeri** — `GetFileInformationByHandleEx`
-      (FILE_STANDARD_INFO). Şu an mantıksal boyuta eşit
-      (`TODO(win)`, `crates/scan-core/src/meta.rs`).
+- [x] **A1 Windows `alloc` gerçek değeri** — yazıldı *(9 Eylül 2026)*,
+      **CI onayı bekliyor** (macOS'ta yalnızca tip denetimi yapılabiliyor).
+      `GetFileInformationByHandleEx` yerine **`GetCompressedFileSizeW`**
+      kullanıldı: yol tabanlı tek çağrı, handle yönetimi yok, sparse ve
+      NTFS-sıkıştırmalı dosyalarda gerçek tahsisi veren API bu.
+      *Kalan sapma:* Windows'ta dizinlerin kendi blokları `alloc`'a girmiyor
+      (Unix'te giriyor) — `GetCompressedFileSizeW` dosyalar için belgeli, dizin
+      başına çağırmak diskteki her dizin için hata üretirdi. Test bunu bilinçli
+      karar olarak sabitliyor. B4 kapatıyor.
       *Rakip:* TreeSize, WizTree, WinDirStat 2.5.0 doğru rakam veriyor.
-- [ ] **A2 Windows hardlink dedupe** — `FileIdInfo` ile `(volume, file id)`.
-      Şu an kapalı (`nlink = 1`). *Rakip:* WinDirStat 2.5.0 (Ocak 2026).
+- [x] **A2 Windows hardlink dedupe** — yazıldı *(9 Eylül 2026)*, **CI onayı
+      bekliyor**. `GetFileInformationByHandle` tek çağrıda `nNumberOfLinks` +
+      `nFileIndexHigh/Low` + `dwVolumeSerialNumber` veriyor, yani nlink, ino ve
+      dev birlikte geliyor. Handle `CreateFileW` yerine `std::fs::OpenOptions`
+      ile açılıyor (`FILE_READ_ATTRIBUTES`, `BACKUP_SEMANTICS`,
+      `OPEN_REPARSE_POINT`): RAII kapatıyor, erken dönüşte sızma yok, unsafe
+      yüzeyi küçük ve **yeni windows-sys feature'ı gerekmedi**.
+      *Yan kazanç:* `-x/--one-file-system` Windows'ta artık gerçekten çalışıyor
+      — daha önce her girdi volume 0 bildirdiği için sessizce etkisizdi.
+      *Maliyet:* dosya başına bir handle. Yalnızca dedupe veya `-x` açıkken
+      ödeniyor (`FileIdentity::Skipped`); ölçülmüş mertebe +36%, kaldıran B4.
+      *Rakip:* WinDirStat 2.5.0 (Ocak 2026).
 - [ ] **A3 APFS clone tekilleştirme** — macOS'ta `alloc` şişiyor.
       *Rakip:* **DaisyDisk 4.34** — clone'un yalnızca ilk görünümünü sayıp
       kalanlarına 0 bayt veriyor. macOS en güçlü platformumuz ve orada yanlışız.
@@ -170,13 +187,19 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       Mutasyon testiyle doğrulandı: `alloc`=`size` → 3 test düşüyor,
       dedupe bozulunca → 3 test, dizin inode'u toplama eklenince → 1 test
       (yalnızca naif yürüyüş yakalıyor; `du` o mutasyona onay verirdi).
-- [ ] **A4w `du` karşılaştırmasının Windows karşılığı** — Windows'ta `du` yok,
-      dolayısıyla harici oracle yok. Karşılığı **inşa tabanlı** test olacak:
-      cluster boyutu diskten okunup "N baytlık dosya `ceil(N/cluster)` cluster
-      tutar", "sparse dosya mantıksaldan az tutar", "hardlink bir kez sayılır".
-      A1/A2 ile **aynı commit'te** olmalı — onlar bu test olmadan sessizce
-      bozulur (değişmez #1). Şu an karşılaştırılacak doğru bir şey yok, çünkü
-      `alloc` mantıksal boyuta eşit.
+- [x] **A4w `du` karşılaştırmasının Windows karşılığı** — yazıldı
+      *(9 Eylül 2026)*, A1/A2 ile aynı commit'te.
+      `crates/scan-core/tests/windows_metadata.rs`, 6 test.
+      Windows'ta `du` yok, harici oracle yok; yerine **inşa tabanlı** test.
+      Cluster boyutu taşınabilir biçimde sorulamadığı için hile şu: **512'nin
+      katı olmayan bir uzunluk** seçiliyor (100.001). NTFS cluster'ı en az 512
+      bayt olduğundan gerçek bir tahsis rakamı bu uzunluğa **eşit olamaz** —
+      yani `alloc != size` iddiası, mantıksal boyutun döndürülmediğini cluster
+      boyutunu bilmeden kanıtlıyor. Dosya içeriği bilinçli olarak
+      **sıkıştırılamaz** (sıfırlarla dolu bir dosya, sıkıştırma açık bir
+      birimde testi haksız yere düşürürdü).
+      `stats.errors == 0` iddiası da kanarya: sistematik bir API hatası
+      olsaydı `alloc` sessizce mantıksal boyuta düşerdi, test bunu yakalar.
 - [ ] **A5 Snapshot bütünlük kontrolü** — `export_snapshot` / `import_snapshot`
       ve `push` yolunda checksum yok. Ağ üzerinden bozulan bir bayt doğruluk
       iddiamızı sessizce çürütür. `Tree::from_parts_checked` arena *yapısını*
@@ -290,7 +313,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | Sıra | Ne | Neden burada |
 |------|-----|--------------|
 | ~~1~~ ✅ | ~~E1, E2~~ | Yarım saat, ve diğer her kararın girdisi — yanlış rekabet haritası üstüne plan yapılmasın. **Bitti (9 Eylül 2026)**, README düzeltmesi de dâhil |
-| 2 | ~~A4~~ ✅ → A1, A2, A4w | Doğruluk iddiamız Windows'ta karşılanmıyor. A4 (Unix) **önce yapıldı** çünkü test hiç yoktu — A1/A2 onsuz sessizce bozulur, ve iddianın kanıtsız olduğu ortaya çıktı |
+| ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Doğruluk iddiamız Windows'ta karşılanmıyordu. A4 (Unix) önce yapıldı çünkü test hiç yoktu. **Kod bitti (9 Eylül 2026), Windows CI onayı bekliyor** |
 | 3 | B1 | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar |
 | 4 | A3, A5 | macOS'ta yanlışız (DaisyDisk doğru); ağ üzerinden bozulma sessiz |
 | 5 | B2, B3 | Ucuz ve ölçülmüş — B2 eldeki veriyle hemen yapılabilir |

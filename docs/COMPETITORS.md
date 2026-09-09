@@ -330,7 +330,7 @@ zaman biraz az" olduğunu kabul ediyor `[satıcı]`.
 | Zayıflık | Kim daha iyi |
 |----------|--------------|
 | **Windows MFT hızlı yolu yok** | WizTree, TreeSize (yönetici), WinDirStat 2.5.0 |
-| **Windows `alloc` yanlış + hardlink dedupe kapalı** | TreeSize, WizTree, WinDirStat 2.5.0 |
+| ~~Windows `alloc` yanlış + hardlink dedupe kapalı~~ → **9 Eylül 2026'da yazıldı, CI onayı bekliyor.** Kalan sapma: Windows'ta dizin blokları `alloc`'a girmiyor | TreeSize, WizTree, WinDirStat 2.5.0 |
 | **APFS clone tekilleştirme yok** | **DaisyDisk 4.34** (clone'un ilk görünümünü sayıp kalanına 0 bayt veriyor) |
 | **Bellek hedefin 11–17 katı** | dua-cli (64 B), ncdu 2 (25 B) |
 | **Snapshot bütünlük kontrolü yok** | dua-cli (SHA-256) |
