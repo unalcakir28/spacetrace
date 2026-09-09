@@ -2,19 +2,25 @@
   "schema": 1,
   "components": {
     "cli": {
-      "unreleased": [
-        {
-          "kind": "fixed",
-          "text": {
-            "de": "`install.sh` und `spacetrace update` finden wieder die richtige Version. Alle drei Komponenten veröffentlichen in dasselbe Repository, sodass GitHubs neueste Version kurzzeitig die des Hubs war — die `install.sh` nicht installieren konnte und die die Update-Prüfung als gar keine Version las.",
-            "en": "`install.sh` and `spacetrace update` find the right release again. All three components publish into one repository, so GitHub's idea of the latest release briefly meant the hub's — which `install.sh` could not install, and which the update check read as no version at all.",
-            "fr": "`install.sh` et `spacetrace update` retrouvent la bonne version. Les trois composants publient dans un même dépôt, si bien que la dernière version au sens de GitHub a un temps désigné celle du hub — que `install.sh` ne pouvait pas installer et que la vérification de mise à jour lisait comme aucune version.",
-            "it": "`install.sh` e `spacetrace update` trovano di nuovo la versione giusta. Tutti e tre i componenti pubblicano nello stesso repository, quindi per un momento la versione più recente secondo GitHub era quella dell'hub — che `install.sh` non poteva installare e che il controllo aggiornamenti leggeva come nessuna versione.",
-            "tr": "`install.sh` ve `spacetrace update` yine doğru sürümü buluyor. Üç bileşen de tek depoya yayınladığı için GitHub'ın en son sürümü bir süre hub'ınkini gösterdi — `install.sh` onu kuramıyordu, güncelleme kontrolü de hiçbir sürüm olarak okuyordu."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.4.1",
+          "date": "2026-09-09",
+          "published": true,
+          "entries": [
+            {
+              "kind": "fixed",
+              "text": {
+                "de": "`install.sh` und `spacetrace update` finden wieder die richtige Version. Alle drei Komponenten veröffentlichen in dasselbe Repository, sodass GitHubs neueste Version kurzzeitig die des Hubs war — die `install.sh` nicht installieren konnte und die die Update-Prüfung als gar keine Version las.",
+                "en": "`install.sh` and `spacetrace update` find the right release again. All three components publish into one repository, so GitHub's idea of the latest release briefly meant the hub's — which `install.sh` could not install, and which the update check read as no version at all.",
+                "fr": "`install.sh` et `spacetrace update` retrouvent la bonne version. Les trois composants publient dans un même dépôt, si bien que la dernière version au sens de GitHub a un temps désigné celle du hub — que `install.sh` ne pouvait pas installer et que la vérification de mise à jour lisait comme aucune version.",
+                "it": "`install.sh` e `spacetrace update` trovano di nuovo la versione giusta. Tutti e tre i componenti pubblicano nello stesso repository, quindi per un momento la versione più recente secondo GitHub era quella dell'hub — che `install.sh` non poteva installare e che il controllo aggiornamenti leggeva come nessuna versione.",
+                "tr": "`install.sh` ve `spacetrace update` yine doğru sürümü buluyor. Üç bileşen de tek depoya yayınladığı için GitHub'ın en son sürümü bir süre hub'ınkini gösterdi — `install.sh` onu kuramıyordu, güncelleme kontrolü de hiçbir sürüm olarak okuyordu."
+              }
+            }
+          ]
+        },
         {
           "version": "0.4.0",
           "date": "2026-09-09",
