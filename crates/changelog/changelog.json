@@ -243,6 +243,16 @@
         {
           "kind": "added",
           "text": {
+            "de": "Beim Start prüft die App, ob eine neuere Version vorliegt, und bietet die Installation an. Es wird nichts heruntergeladen, bevor Sie es verlangen. Unter macOS ist die App weiterhin nicht signiert, das System kann sie nach einem Update also erneut bestätigen lassen.",
+            "en": "The app checks for a newer release when it starts and offers to install it. Nothing is downloaded until you ask for it. On macOS the app is still unsigned, so the system may ask you to confirm it again after an update.",
+            "fr": "Au démarrage, l'application vérifie s'il existe une version plus récente et propose de l'installer. Rien n'est téléchargé tant que vous ne le demandez pas. Sur macOS l'application n'est toujours pas signée : le système peut donc vous demander de la confirmer à nouveau après une mise à jour.",
+            "it": "All'avvio l'app verifica la presenza di una versione più recente e propone di installarla. Nulla viene scaricato finché non lo si chiede. Su macOS l'app non è ancora firmata, quindi dopo un aggiornamento il sistema potrebbe chiedere di confermarla di nuovo.",
+            "tr": "Uygulama açılışta yeni bir sürüm olup olmadığına bakıyor ve kurmayı öneriyor. Siz istemeden hiçbir şey indirilmiyor. macOS'ta uygulama hâlâ imzasız, yani güncellemeden sonra sistem sizden yeniden onay isteyebilir."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
             "de": "Die App spricht fünf Sprachen: Englisch, Türkisch, Italienisch, Französisch und Deutsch. Beim ersten Start folgt sie der Sprache Ihres Systems, und die Auswahl lässt sich jederzeit ändern.",
             "en": "The app speaks five languages: English, Turkish, Italian, French and German. It follows your system's language on first launch, and the choice can be changed at any time.",
             "fr": "L'application parle cinq langues : anglais, turc, italien, français et allemand. Au premier lancement elle suit la langue de votre système, et ce choix peut être modifié à tout moment.",
