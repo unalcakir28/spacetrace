@@ -243,6 +243,16 @@
         {
           "kind": "added",
           "text": {
+            "de": "Auch die Fehlermeldungen sind in Ihrer Sprache. Was das Betriebssystem sagt — Permission denied und dergleichen — bleibt in seinen eigenen Worten, denn das sind die Worte, die bei einer Suche weiterhelfen.",
+            "en": "Error messages are in your language too. What the operating system says — Permission denied and the like — stays in its own words, because those are the words that help when you search for them.",
+            "fr": "Les messages d'erreur sont eux aussi dans votre langue. Ce que dit le système d'exploitation — Permission denied et consorts — reste dans ses propres mots, car ce sont ceux qui aident quand on les recherche.",
+            "it": "Anche i messaggi di errore sono nella sua lingua. Ciò che dice il sistema operativo — Permission denied e simili — resta nelle sue parole, perché sono quelle che aiutano quando le si cerca.",
+            "tr": "Hata mesajları da sizin dilinizde. İşletim sisteminin söylediği kısım — Permission denied gibi — kendi sözleriyle kalıyor, çünkü aradığınızda işinize yarayan sözler onlar."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
             "de": "Beim Start prüft die App, ob eine neuere Version vorliegt, und bietet die Installation an. Es wird nichts heruntergeladen, bevor Sie es verlangen. Unter macOS ist die App weiterhin nicht signiert, das System kann sie nach einem Update also erneut bestätigen lassen.",
             "en": "The app checks for a newer release when it starts and offers to install it. Nothing is downloaded until you ask for it. On macOS the app is still unsigned, so the system may ask you to confirm it again after an update.",
             "fr": "Au démarrage, l'application vérifie s'il existe une version plus récente et propose de l'installer. Rien n'est téléchargé tant que vous ne le demandez pas. Sur macOS l'application n'est toujours pas signée : le système peut donc vous demander de la confirmer à nouveau après une mise à jour.",
