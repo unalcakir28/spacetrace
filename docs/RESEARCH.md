@@ -4,6 +4,12 @@ Projenin kararları 6 Eylül 2026'da yapılan pazar ve teknik araştırmaya daya
 Bu belge o araştırmanın **karar veren** kısmını depoda tutar; ürün gerekçesi için
 [WHY.md](WHY.md), tasarım için [ARCHITECTURE.md](ARCHITECTURE.md).
 
+**9 Eylül 2026'da revize edildi.** Rakiplere odaklı, kendi makinemizde alınmış
+ölçümlerle desteklenen ve her iddiası kanıt etiketli devamı
+[COMPETITORS.md](COMPETITORS.md) içinde. Aşağıda o incelemenin **düzelttiği**
+yerler açıkça işaretli — eski hâli silinmedi, çünkü hangi kararın hangi bilgiyle
+verildiği kaybolursa kararı yeniden değerlendirmek imkânsızlaşıyor.
+
 > Fiyatlar, sürümler ve mağaza politikaları hızla değişir. Bir karar bunlardan
 > birine dayanıyorsa kullanmadan önce kaynağı yeniden kontrol et.
 
@@ -11,20 +17,36 @@ Bu belge o araştırmanın **karar veren** kısmını depoda tutar; ürün gerek
 
 | Ürün | Platform | Fiyat | Not |
 |------|----------|-------|-----|
-| TreeSize Free / Personal / Pro | Windows | $0 / $50 kalıcı / $49.20 yıl | Pro'da SSH-UNC-bulut tarama; **kalıcı lisans yalnızca Personal'da kaldı** |
-| SpaceObServer | Windows + sunucu | $600/instance/yıl + kullanıcı | Veritabanı destekli, kurumsal |
+| TreeSize Free / Personal / Pro | Windows | $0 / $50 kalıcı / $49.20 yıl | Pro'da SSH-UNC-bulut tarama; **kalıcı lisans yalnızca Personal'da kaldı**. Düzeltme: **Free bile yönetici olarak koşarsa MFT okuyor** |
+| SpaceObServer | Windows + sunucu | $600/instance/yıl + kullanıcı | Veritabanı destekli, kurumsal. **USN Journal ile artımlı tarama** — en yakın mimari rakip |
 | WizTree | Windows | Kişisel $0, iş $25–1.800 | NTFS MFT okur; uzak tarama **yok** |
-| WinDirStat 2.x | Windows | GPL | 2024'te C++ ile yeniden yazıldı, artık hızlı |
-| DaisyDisk | macOS | $9.99 kalıcı, 5 Mac | Mac'te duygusal fiyat çıpası |
-| FreeSize | Win/mac/Linux | $0, Pro CHF 29/yıl | Kendini "TreeSize alternatifi" diye pazarlıyor |
+| WinDirStat 2.x | Windows | GPL | Düzeltme: 2024'teki hız kazancı **sürücü başına çok thread**'di; MFT ancak **v2.5.0'da (Ocak 2026)** ve opsiyonel |
+| DaisyDisk | macOS | $9.99 kalıcı, 5 Mac | Mac'te duygusal fiyat çıpası. **APFS clone'larını tekilleştiriyor** (4.34) — bizde yok |
+| FreeSize | Win/mac/Linux | $0, Pro CHF 29/yıl | **.NET + Photino.Blazor** (ikili incelendi); Pro'da "Portal & history, multiple devices centrally" |
 | Diskaroo | Win/mac/Linux | $19.99 kalıcı | Ayrı native kod tabanları (Swift + WPF) |
 | DiskRaptor | Win/mac/Linux | MIT | Rust + Tauri |
-| ncdu 2 / gdu / dust / dua | Linux/TUI | ücretsiz | Sunucularda fiili standart |
+| **dua-cli** | çapraz | MIT | **v2.44.0 (30 Ağu 2026): `--export` + `dua diff`** — geçmiş karşılaştırması artık ücretsiz bir CLI'da |
+| ncdu 2 / gdu / dust | Linux/TUI | ücretsiz | Sunucularda fiili standart |
 
-**Karar için önemli olan iki nokta.** (a) Masaüstü treemap kategorisi 2025–26'da
-üç yeni ürünle doldu, biri ücretsiz — oraya dördüncü olarak girmek savunulamaz.
-(b) Uzak makine + tarama geçmişi yalnızca SpaceObServer'da var ve $600+/yıl;
-altında hiçbir şey yok.
+**Karar için önemli olan iki nokta.**
+
+**(a) Masaüstü treemap kategorisi 2025–26'da üç yeni ürünle doldu, biri
+ücretsiz** — oraya dördüncü olarak girmek savunulamaz. Bu hâlâ geçerli.
+
+**(b)** İlk hâli şöyleydi: *"Uzak makine + tarama geçmişi yalnızca
+SpaceObServer'da var ve $600+/yıl; altında hiçbir şey yok."* **Bu cümle 9 Eylül
+2026'da yanlışlandı** — aynı ay içinde iki gelişme oldu
+([COMPETITORS.md §4.3](COMPETITORS.md)):
+
+- `dua-cli` v2.44.0 (30 Ağustos 2026) `--export` + `dua diff` ile geçmiş
+  karşılaştırmasını MIT lisansı altında ücretsiz verdi.
+- FreeSize Pro (CHF 29/yıl) *"tüm cihazlarınız tek bakışta: geçmiş, trendler"*
+  diyen bir portal açtı.
+
+Yani boşluk "hiç kimse yok" değil, **"açık kaynak + self-host + filo geçmişi bir
+arada yok"**. Kalan farklılaştırıcı bu üçlünün kesişimi; tek başına "iki zaman
+noktasını karşılaştır" değil. Fiyat hipotezi de bu daralmayı hesaba katmak
+zorunda ([WHY.md](WHY.md) → Konumlandırma).
 
 **Lisans penceresi:** JAM Software 2025'te TreeSize'ı aboneliğe çevirdi, Temmuz
 2026'da kalıcı lisans sahiplerine güncelleme vermeyi kesti. Tepki büyük oldu;
@@ -90,6 +112,13 @@ olmadan çıkmak kaybetmek demek.
 SSD'de work-stealing paralel DFS, HDD/ağda 1–2 thread. Bellek hedefi ncdu 2'nin
 mertebesi: **~25 B/dosya** (3.8M dosya = 162 MB).
 
+**Ölçüm (9 Eylül 2026), iki taraf da hedefin dışında:** bellekte gerçek tepe
+**276–437 B/girdi**, yani hedefin 11–17 katı (10M dosyaya ekstrapole ~2,8 GB).
+Paralellik tarafı tutuyor — 1 → 8 thread arası **5.2×** — ama **16 thread'te
+gerileme var**, yani "HDD/ağda 1–2 thread" kuralının yanına "SSD'de de çekirdek
+sayısı kadar değil" yazmak gerekiyor. Ayrıntı ve yöntem
+[COMPETITORS.md §1](COMPETITORS.md).
+
 ## 4. Treemap render (Faz 3)
 
 - **Squarified treemap** (Bruls, Huizing, van Wijk 2000): çocukları azalan
@@ -130,7 +159,9 @@ mertebesi: **~25 B/dosya** (3.8M dosya = 162 MB).
 
 ## 7. İncelenmeye değer projeler
 
-Kod okurken referans: [dua-cli](https://github.com/Byron/dua-cli) (jwalk, TUI),
+Kod okurken referans: [dua-cli](https://github.com/Byron/dua-cli) (jwalk, TUI;
+ayrıca **64 B arena düğümü + paylaşılan ad deposu** ve SHA-256 bütünlüklü
+`DUASNAP` snapshot formatı — TODO'daki B1 ve A5 için hazır referans),
 [dut](https://codeberg.org/201984/dut) (en hızlı Linux walker),
 [gdu](https://github.com/dundee/gdu) (Go, JSON export),
 [ncdu 2](https://dev.yorhel.nl/doc/ncdu2) (bellek modeli),

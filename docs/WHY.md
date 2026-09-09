@@ -22,23 +22,33 @@ Bunların üstüne dördüncü bir masaüstü treemap koymak, "daha iyi yaptık"
 iddiasından ibaret bir ürün demek. Rakiplerden biri ücretsizken bu iddia
 savunulamaz: eksik gördüğün özelliği ekler, fiyatı sıfır tutar.
 
-**2. Asıl boşluk uzak makinelerde ve zaman ekseninde.** Pazardaki her araç tek
-bir soruyu cevaplıyor: *"şu an önümdeki diskte ne var?"* Kimse şunu cevaplamıyor:
-*"geçen haftadan beri ne değişti, ve hangi makinede?"*
+**2. Asıl boşluk uzak makinelerde ve zaman ekseninde.** Pazardaki araçların
+neredeyse tamamı tek bir soruyu cevaplıyor: *"şu an önümdeki diskte ne var?"*
+İkincisini — *"geçen haftadan beri ne değişti, ve hangi makinede?"* — cevaplayan
+üç ürün var ve **üçünün de bir bedeli var**: Windows + MSSQL + $600, ya da
+satıcının bulutu, ya da uzak makine kavramının hiç olmaması.
 
-| Yetenek | FreeSize | Diskaroo | WizTree | TreeSize Pro | SpaceObServer | ncdu/gdu |
-|---|---|---|---|---|---|---|
-| Yerel treemap | ✅ | ✅ | yalnız Win | yalnız Win | yalnız Win | TUI |
-| Uzak sunucu/NAS, GUI'de | — | — | — | SSH/UNC, Win'den | ✅ | SSH ile elle |
-| Konteyner / Docker volume | — | — | — | — | — | elle |
-| Tarama geçmişi, diff | — | — | — | Pro'da kısmen | ✅ | — |
-| Çoklu makine tek görünüm | — | — | — | — | ✅ | — |
-| Fiyat | 0 / CHF 29 | $19.99 | 0 / $25+ | $49/yıl | **$600+/yıl** | 0 |
+| Yetenek | FreeSize | dua-cli | Diskaroo | WizTree | TreeSize Pro | SpaceObServer | ncdu/gdu |
+|---|---|---|---|---|---|---|---|
+| Yerel treemap | ✅ | TUI | ✅ | yalnız Win | yalnız Win | yalnız Win | TUI |
+| Uzak sunucu/NAS, GUI'de | — | — | — | — | SSH/UNC, Win'den | ✅ | SSH ile elle |
+| Konteyner / Docker volume | — | — | — | — | — | — | elle |
+| Tarama geçmişi, diff | **Pro portalında** | **✅ v2.44.0** | — | — | Pro'da kısmen | ✅ | — |
+| Çoklu makine tek görünüm | **Pro portalında** | — | — | — | — | ✅ | — |
+| **Self-host edilebilir** | — (İsviçre bulutu) | ✅ yerel dosya | — | — | ✅ | ✅ | ✅ |
+| Fiyat | 0 / CHF 29/yıl | 0 (MIT) | $19.99 | 0 / $25+ | $49/yıl | **$600+/yıl** | 0 |
 
-Tabloda tek bir sütun tüm satırları dolduruyor: SpaceObServer, yılda $600'dan
-başlayan kurumsal bir ürün. Onun altında, ncdu'nun üstünde koca bir boşluk var.
-Orada duran kişi bugün SSH'a girip `ncdu` çalıştırıyor, çıktıyı saklayamıyor,
-iki hafta öncesiyle karşılaştıramıyor.
+**Düzeltme (9 Eylül 2026).** Bu tablonun ilk hâli "geçmiş yalnızca
+SpaceObServer'da var, altında koca bir boşluk" diyordu ve o iddia Eylül 2026'da
+yanlışlandı ([COMPETITORS.md §4.3](COMPETITORS.md)): `dua-cli` v2.44.0 diff'i
+ücretsiz verdi, FreeSize Pro CHF 29/yıl karşılığında *"tüm cihazlarınız tek
+bakışta: geçmiş, trendler"* diyen bir portal açtı. Tablodaki belirleyici satır
+bu yüzden değişti — artık "geçmiş" değil, **"self-host edilebilir"**.
+
+Kalan boşluk üç şeyin **kesişimi**: geçmiş + çoklu makine + kendi sunucunda.
+Hedef kullanıcı — homelab ve küçük IT ekibi — tam bu üçlüyü istiyor ve bugün
+SSH'a girip `ncdu` çalıştırıyor, çıktıyı saklayamıyor, iki hafta öncesiyle
+karşılaştıramıyor.
 
 ## Hedef kullanıcı
 
@@ -57,10 +67,17 @@ Sırayla, öncelik sırasına göre:
 > Bilgisayarındaki, sunucularındaki, NAS'ındaki ve konteynerlerindeki disk
 > kullanımını tek yerde gör, zaman içinde takip et, neyin büyüdüğünü öğren.
 
-Yerel analiz ücretsiz ve iyi olacak — o giriş kapısı. Ajan, geçmiş ve çoklu
-makine görünümü ürünün savunulabilir kısmı: FreeSize'ın bunu kopyalaması için
-sunucu tarafı yazması, bir depo formatı tasarlaması ve hedef kullanıcısını
-değiştirmesi gerekir.
+Yerel analiz ücretsiz ve iyi olacak — o giriş kapısı. Savunulabilir kısım ajan,
+geçmiş ve çoklu makine görünümü.
+
+**Bu paragrafın ilk hâli "FreeSize'ın bunu kopyalaması için sunucu tarafı
+yazması, bir depo formatı tasarlaması ve hedef kullanıcısını değiştirmesi
+gerekir" diyordu — FreeSize onu Eylül 2026'da yazdı** (Pro portalı). Yani
+kopyalanması pahalı olan şey sunucu kodu değildi. Pahalı olan kısım şu:
+**ajanın açık kaynak, verinin kullanıcıda kalması ve merkezin self-host
+edilebilmesi.** Barındırılan bir portalı olan satıcı için bunu taklit etmek
+teknik bir iş değil, kendi gelir modelini bırakma kararı. Farklılaşmayı
+buraya yaslıyoruz.
 
 ## Neden mobil yok
 
@@ -103,6 +120,13 @@ cevabı hayır:
 Araştırmadaki fiyat çıpaları: DaisyDisk $9.99 tek seferlik, Diskaroo $19.99,
 TreeSize Personal $50, TreeSize Pro $49/yıl, SpaceObServer $600+/yıl.
 
+**9 Eylül 2026'da eklenen çıpa: FreeSize Pro, CHF 29/yıl.** Önemi fiyatın
+kendisi değil, karşılığında verdiği şey: arka plan izleme + portal geçmişi +
+çoklu cihaz, yani aşağıdaki **Pro *ve* Team kademelerinin vaadi**. Team'i sunucu
+başına aylık fiyatlamak, tek satıcıya yılda CHF 29 ödeyebilen bir kullanıcıya
+pahalı görünür. Ayrımı fiyattan kurmak mümkün değil; ayrım
+**self-host, sınırsız ajan ve açık kaynak** üstünden kurulmak zorunda.
+
 | Kademe | Kapsam | Fiyat fikri |
 |--------|--------|-------------|
 | Free | CLI, **ajan** (sınırsız), yerel geçmiş, SSH ile tek makine | $0 |
@@ -127,6 +151,9 @@ seçeneği sunmanın** kendi başına bir edinim kanalı olduğunu gösteriyor.
 - Bir geliştirici tek komutla sunucusuna ajan kurabiliyor ve bir hafta sonra
   "şu klasör 40 GB büyüdü" cevabını alıyor.
 - Yerel tarama WizTree/FreeSize kadar hızlı ve doğru; kimse "yavaş" demiyor.
+  Ölçülen durum (9 Eylül 2026): FreeSize'ın mimarisine karşı **7.2× öndeyiz**,
+  WizTree'ye karşı Windows'ta MFT olmadan **geride** — bu yüzden hız manşet
+  yapılmıyor ([COMPETITORS.md §1.1 ve §5](COMPETITORS.md)).
 - r/selfhosted ve HN'de "ncdu'yu zamanla karşılaştıran şey" diye anılıyoruz.
 
 **Kaybetme senaryoları**
@@ -158,6 +185,7 @@ Bir disk aracının tek satmayan özelliği yanlış rakamdır. Bu yüzden:
 ## Kaynaklar
 
 Yukarıdaki fiyat, tarih ve politika bilgileri 6 Eylül 2026'da yapılan
-araştırmadan. Ayrıntılı rakip tabloları, framework karşılaştırması ve tarama
-teknikleri için o araştırma raporuna bakın. Rakamlar hızla değişir; karar
-öncesi yeniden doğrulayın.
+araştırmadan; kararı verdiren kısmı [RESEARCH.md](RESEARCH.md) tutuyor. Rakip
+yığınları, kendi makinemizde alınan ölçümler ve her iddianın kanıt etiketi
+[COMPETITORS.md](COMPETITORS.md) içinde — bu belgedeki 9 Eylül 2026 düzeltmeleri
+oradan geliyor. Rakamlar hızla değişir; karar öncesi yeniden doğrulayın.

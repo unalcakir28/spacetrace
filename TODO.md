@@ -1,9 +1,11 @@
 # Yapılacaklar
 
 Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
-[docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md).
+[docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
+rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 9 Eylül 2026 (dört faz çalışıyor; site kendi deposunda ve kendi alan adında)
+Son güncelleme: 9 Eylül 2026 (rakip analizi ve ölçümler eklendi; **E1–E2
+kapandı**, sıradaki iş "Rekabet açıkları" → Sıra 2: A1, A2, A4)
 
 ---
 
@@ -134,23 +136,178 @@ Ayrı depo: [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) (K2)
 
 ---
 
+## Rekabet açıkları
+
+9 Eylül 2026 rakip analizinden çıkan iş listesi. Gerekçeler, ölçümler ve
+kaynaklar [docs/COMPETITORS.md](docs/COMPETITORS.md) içinde; her madde **hangi
+rakibin bizden iyi olduğuyla** etiketli. Sıralama aşağıda, "Sıra" başlığında.
+
+### A. Doğruluk — iddiamızı üç platformda karşıla
+
+Bunlar eksik özellik değil, **verdiğimiz sözü tutmama**. Hız eksiği rekabetçi
+dezavantaj; yanlış rakam ürünün kendisini çürütür.
+
+- [ ] **A1 Windows `alloc` gerçek değeri** — `GetFileInformationByHandleEx`
+      (FILE_STANDARD_INFO). Şu an mantıksal boyuta eşit
+      (`TODO(win)`, `crates/scan-core/src/meta.rs`).
+      *Rakip:* TreeSize, WizTree, WinDirStat 2.5.0 doğru rakam veriyor.
+- [ ] **A2 Windows hardlink dedupe** — `FileIdInfo` ile `(volume, file id)`.
+      Şu an kapalı (`nlink = 1`). *Rakip:* WinDirStat 2.5.0 (Ocak 2026).
+- [ ] **A3 APFS clone tekilleştirme** — macOS'ta `alloc` şişiyor.
+      *Rakip:* **DaisyDisk 4.34** — clone'un yalnızca ilk görünümünü sayıp
+      kalanlarına 0 bayt veriyor. macOS en güçlü platformumuz ve orada yanlışız.
+- [ ] **A4 `du` karşılaştırma testinin Windows ve Linux CI karşılığı** — şu an
+      yalnızca macOS'ta koşuyor. A1–A3 bu test olmadan sessizce bozulur
+      (değişmez #1).
+- [ ] **A5 Snapshot bütünlük kontrolü** — `export_snapshot` / `import_snapshot`
+      ve `push` yolunda checksum yok. Ağ üzerinden bozulan bir bayt doğruluk
+      iddiamızı sessizce çürütür. `Tree::from_parts_checked` arena *yapısını*
+      doğruluyor (panic ve sonsuz döngü koruması), bit bozulmasını değil.
+      *Rakip:* dua-cli v2.44.0 snapshot'ları SHA-256 ile doğruluyor.
+- [ ] **A6 btrfs/ZFS farkındalığı** — reflink ve sıkıştırma yüzünden ağaç
+      yürüyüşü yanlış. Uzun vade; doğrusu örnekleme gerektiriyor.
+      *Rakip:* btdu (Monte Carlo, ~100 örnekte %1 çözünürlük).
+
+### B. Hız — ölçülmüş açıklar
+
+- [ ] **B1 Bellek: `Node` 104 B + düğüm başına `String` → paylaşılan ad arenası.**
+      Adları tek `Vec<u8>`'de tut, düğümde `(offset: u32, len: u16)` sakla.
+      Kazanç iki katmanlı: ~72 bayt **ve** düğüm başına bir `malloc`ın tamamen
+      kalkması. Şema sürümü artar → masaüstü ve hub koordinasyonu gerekir.
+      *Ölçüm:* 276–437 B/girdi (hedef ~25 B); 10M dosya → ~2,8 GB.
+      *Rakip:* dua-cli 64 B arena düğümü + paylaşılan ad deposu, RSS %49 aşağı;
+      ncdu 2 dosyada 25 B, dizinde 56 B.
+- [ ] **B2 Thread sayısı ayarı** — 16 thread'te 8'e göre **gerileme ölçüldü**
+      (1.27 s vs 1.11 s, 412k girdi). Şu an hiç ayar yok, rayon varsayılanı
+      (çekirdek sayısı) kullanılıyor — yani varsayılan en iyisi değil.
+      *Rakip:* erdtree ampirik 3 thread; TreeSize CPU yüküne göre ayarlıyor.
+- [ ] **B3 HDD / ağ sürücüsü modu** — dönen diskte ve NFS'te paralel yürüyüş tek
+      thread'den kötü olabilir (seek thrash); bu durum için hiçbir şeyimiz yok.
+      *Rakip:* gdu `--sequential`; QDirStat girdileri stat etmeden önce inode'a
+      göre sıralıyor.
+- [ ] **B4 Windows MFT hızlı yolu** (`usn-journal-rs`) — yönetici gerekiyor,
+      ReFS'te ve ağ/FAT'te yok → normal yola geri düşme şart, ve o yol A1/A2'de
+      düzeliyor. **Sıra bu yüzden A'dan sonra.**
+      *Rakip:* WizTree (ham MFT), TreeSize Free (yönetici), WinDirStat 2.5.0.
+- [ ] **B5 macOS `getattrlistbulk` hızlı yolu** (`getattrlistbulk-rs`).
+      *Ölçüm (dış):* `dumac` bununla `du`'dan 6.39× hızlı. **Listedeki tek
+      "öne geçme" maddesi** — rakiplerin hiçbiri macOS'ta bunu yapmıyor.
+- [ ] **B6 Linux `getdents64` + `statx` hızlı yolu.**
+      *Rakip:* `dut` sıcak cache'te `du`'dan 6.87×, dust/dua/gdu'dan 2.8–3.75×.
+- [ ] **B7 USN Journal ile artımlı yeniden tarama (Windows)** — gecelik tarayan
+      bir ajan için her seferinde her şeyi taramak israf. Stratejik olarak en
+      büyük hız kazancı. *Rakip:* **SpaceObServer** — en yakın mimari rakibimiz
+      ve tam bu noktada önde.
+
+### C. Özellik açıkları
+
+- [ ] **C1 E-posta uyarısı (hub)** — şu an yalnızca webhook.
+      *Rakip:* SpaceObServer.
+- [ ] **C2 Kişi başına hesap (hub)** — şu an tek admin kimliği.
+      *Rakip:* SpaceObServer (Client/Web Access).
+- [ ] **C3 Zaman çizelgesi görünümü (masaüstü)** — bir hedefin tüm geçmişi.
+      Geçmiş ana iddiamız ama masaüstünde görselleştirilmiyor; **iddiamızın
+      karşılığı olan görünüm eksik**, bu yüzden özellik listesinde önce geliyor.
+- [ ] **C4 Duplicate bulucu** — boyut → ön-hash → blake3, önbellekli.
+      WHY.md'de Pro kademesinde zaten planlı.
+      *Rakip:* DiskRaptor (xxh3), WinDirStat 2.5.0, Czkawka.
+- [ ] **C5 Tarama sırasında canlı büyüyen ağaç (masaüstü)** — FreeSize'ın manşet
+      özelliği ve algılanan hızının büyük kısmı. Bizde ilerleme göstergesi var,
+      canlı ağaç yok. Not: FreeSize bunu DOM'a çizerek yavaşlığının sebebi
+      yaptı; Canvas2D + Rust yerleşimiyle aynı şeyi **hızlı** yapma avantajımız
+      var.
+- [ ] **C6 Sunburst görünümü (masaüstü)** — yalnızca treemap'imiz var.
+      *Rakip:* FreeSize (treemap + sunburst + heatmap), Filelight.
+- [ ] **C7 Dosya yaşı ısı haritası** — "2 yıldır dokunulmamış 400 GB". `mtime`
+      zaten `Node`'da duruyor, yani ucuz. *Rakip:* FreeSize (heatmap).
+- [ ] **C8 ncdu/gdu JSON içe aktarma** — dışa aktarabiliyoruz, içe alamıyoruz.
+      Mevcut kullanıcıların eski taramaları bir edinim kanalı. *Rakip:* ncdu.
+- [ ] **C9 CSV dışa aktarma** — kurumsal kullanıcının Excel'e attığı format.
+      *Rakip:* WizTree.
+
+### D. Sağlamlık
+
+- [ ] **D1 Yavaş/yanıt vermeyen mount'ta timeout ve devam** — 1 TB USB HDD veya
+      kopmuş NFS'te tarama takılırsa ne oluyor? Denenmedi.
+      *Rakip:* DiskRaptor bu hatayı canlı yaşadı (issue #46: "1TB USB HDD'de
+      30 saniye ilerleme yok") ve timeout/retry ekledi.
+- [ ] **D2 Ajanda yerleşik TLS** — şu an ters vekil öneriliyor (Faz 2'de de var).
+- [ ] **D3 Ajanda hız sınırlama** (Faz 2'de de var).
+- [ ] **D4 10M+ dosyada bellek profili** — kısmen ölçüldü (412k girdide 122 MB,
+      10M'e ekstrapolasyon ~2,8 GB). B1 sonrası yeniden ölçülmeli.
+- [ ] **D5 `store::save` ilerleme geri bildirimi** — büyük ağaçlarda tek
+      transaction, kullanıcı donmuş sanıyor.
+- [ ] **D6 `Tree::rel_path` her çağrıda kökten yürüyor** — sıcak döngüde
+      kullanılmamalı; ya belgelensin ya önbelleklensin.
+
+### E. Dağıtım ve belge
+
+- [x] **E1 `docs/RESEARCH.md`'den COMPETITORS.md'ye bağlantı** ve §1 rakip
+      tablosunun ölçümlerle güncellenmesi. *(9 Eylül 2026)* dua-cli ayrı satıra
+      çıktı; TreeSize Free MFT ve WinDirStat 2.5.0 düzeltmeleri işlendi;
+      §3'teki ~25 B/dosya hedefinin yanına ölçülen 276–437 B ve 16 thread
+      gerilemesi yazıldı. Yanlışlanan (b) maddesi silinmedi, **yanlışlandığı
+      belirtilerek** bırakıldı — hangi kararın hangi bilgiyle verildiği kaybolmasın.
+- [x] **E2 WHY.md düzeltmesi** — *"Uzak makine + tarama geçmişi yalnızca
+      SpaceObServer'da var ve $600+/yıl; altında hiçbir şey yok"* cümlesi
+      **artık yanlış**: FreeSize Pro CHF 29/yıl aynı vaadi veriyor, dua-cli
+      diff'i ücretsiz. Fiyat hipotezi de bu cümleye dayanıyordu.
+      *(9 Eylül 2026)* Beş yer düzeltildi: karşılaştırma tablosuna dua-cli sütunu
+      ve **"self-host edilebilir" satırı** eklendi (kalın satır artık "geçmiş"
+      değil, bu); "koca bir boşluk" paragrafı **üçlü kesişime** daraltıldı;
+      "FreeSize'ın kopyalaması için sunucu yazması gerekir" cümlesi düzeltildi
+      (yazdılar); fiyat çıpalarına CHF 29 eklendi; hız kazanma koşuluna ölçüm
+      eklendi. **Ek:** README'deki *"**Every** disk analyser … FreeSize"* iddiası
+      da yanlıştı, o da düzeltildi.
+- [ ] **E3 Kod imzalama** — macOS Developer ID + notarization ($99/yıl),
+      Windows OV ($150–300/yıl). *Rakip:* FreeSize, Diskaroo, TreeSize, WizTree
+      — hepsi imzalı. Diskin her yerini okuyan imzasız bir program =
+      SmartScreen/Gatekeeper uyarısı = düşük kurulum oranı.
+- [ ] **E4 Homebrew / AUR / Microsoft Store.**
+- [ ] **E5 Geçiş rehberleri** — "ncdu'dan geçiş", "TreeSize'dan geçiş"
+      (ROADMAP'te 1.0 zorunlusu).
+
+### Sıra
+
+| Sıra | Ne | Neden burada |
+|------|-----|--------------|
+| ~~1~~ ✅ | ~~E1, E2~~ | Yarım saat, ve diğer her kararın girdisi — yanlış rekabet haritası üstüne plan yapılmasın. **Bitti (9 Eylül 2026)**, README düzeltmesi de dâhil |
+| 2 | A1, A2, A4 | Doğruluk iddiamız Windows'ta karşılanmıyor; A4 olmadan A1/A2 sessizce bozulur |
+| 3 | B1 | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar |
+| 4 | A3, A5 | macOS'ta yanlışız (DaisyDisk doğru); ağ üzerinden bozulma sessiz |
+| 5 | B2, B3 | Ucuz ve ölçülmüş — B2 eldeki veriyle hemen yapılabilir |
+| 6 | C3, D1 | Geçmiş iddiamızın masaüstü karşılığı + hiç denenmemiş hata senaryosu |
+| 7 | B4, B5, B6 | Platforma özel hızlı yollar — doğruluk düzeldikten **sonra** |
+| 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
+| 9 | C1, C2, C4–C9 | Özellik paritesi |
+| 10 | E3–E5, D2, D3 | Yayın hazırlığı |
+
+---
+
 ## Teknik borç
 
-Ürünü bloke etmiyor ama biriktirmemeli.
+Ürünü bloke etmiyor ama biriktirmemeli. Yıldızlı olanlar artık "Rekabet
+açıkları" bölümünde rakip bağlamı ve sırasıyla birlikte izleniyor — iş tanımı
+orada, burada yalnızca borç kaydı olarak duruyorlar.
 
 - [ ] **Windows `alloc` gerçek değil** — `GetFileInformationByHandleEx`
       (FILE_STANDARD_INFO) gerekiyor; şu an mantıksal boyuta eşit
-      (`TODO(win)`, `crates/scan-core/src/meta.rs`)
+      (`TODO(win)`, `crates/scan-core/src/meta.rs`) → **A1**
 - [ ] **Windows hardlink dedupe kapalı** — `FileIdInfo` ile `(volume, file id)`
-- [ ] APFS clone tekilleştirme yok — macOS'ta `alloc` şişebilir
+      → **A2**
+- [ ] APFS clone tekilleştirme yok — macOS'ta `alloc` şişebilir → **A3**
 - [ ] btrfs/ZFS: reflink ve sıkıştırma yüzünden ağaç yürüyüşü yanlış;
-      "dosya sistemi farkında mod" gerekiyor
-- [ ] 10M+ dosyalı köklerde bellek profili ölçülmedi (hedef: ncdu2 mertebesi,
-      ~25 B/dosya)
+      "dosya sistemi farkında mod" gerekiyor → **A6**
+- [x] ~~10M+ dosyalı köklerde bellek profili ölçülmedi~~ → **ölçüldü**
+      (9 Eylül 2026): `Node` 104 B, gerçek tepe **276–437 B/girdi**
+      (412k girdi = 122 MB RSS). Hedef ~25 B/dosya, yani **11–17 kat üstünde**;
+      10M dosyaya ekstrapole ~2,8 GB. Düzeltme işi → **B1**, yeniden ölçüm → **D4**
 - [ ] `Tree::rel_path` her çağrıda kökten yürüyor — sıcak döngüde kullanılmamalı
+      → **D6**
 - ~~Arayüz dizeleri koda gömülü, i18n yok~~ → borç değil, karar
       ([DECISIONS.md](docs/DECISIONS.md) K1). Dizeler İngilizce ve gömülü kalır.
 - [ ] Büyük ağaçlarda `store::save` tek transaction — ilerleme geri bildirimi yok
+      → **D5**
 
 ---
 

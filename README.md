@@ -7,10 +7,10 @@ Scan disk usage, keep snapshots, and see **what grew**.
 instructions](https://spacetrace.teknobakkall.com/download/), and the
 [usage guide](https://spacetrace.teknobakkall.com/guide/).
 
-Every disk analyser on the market (TreeSize, WizTree, DaisyDisk, FreeSize, ncdu)
-answers one question: *"what is on the disk in front of me right now?"*.
-spacetrace answers the second one too: *"what changed since last week, and on
-which machine?"*
+Most disk analysers (TreeSize, WizTree, DaisyDisk, ncdu) answer one question:
+*"what is on the disk in front of me right now?"*. spacetrace answers the second
+one too: *"what changed since last week, and on which machine?"* — from an
+open-source agent that runs on your own servers, with nothing leaving them.
 
 The same binary runs on your desktop, on a server, on a NAS and inside a
 container.
