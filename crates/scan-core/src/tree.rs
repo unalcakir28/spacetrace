@@ -410,6 +410,40 @@ impl TreeBuilder {
         id
     }
 
+    /// Absolute path of a node, for the passes that run before the tree exists.
+    pub(crate) fn path_of(&self, id: NodeId, root: &std::path::Path) -> PathBuf {
+        let mut parts: Vec<&str> = Vec::new();
+        let mut cur = id;
+        while cur != ROOT {
+            let n = &self.nodes[cur as usize];
+            let from = n.name_off as usize;
+            parts.push(
+                self.names
+                    .get(from..from + n.name_len as usize)
+                    .unwrap_or_default(),
+            );
+            cur = n.parent;
+        }
+        let mut p = root.to_path_buf();
+        for part in parts.iter().rev() {
+            p.push(part);
+        }
+        p
+    }
+
+    /// Charge nothing for this entry, leaving it listed.
+    ///
+    /// Must run before [`TreeBuilder::aggregate`]: afterwards the bytes have
+    /// already been added to every ancestor, and zeroing a leaf would leave
+    /// the totals above it claiming space nothing accounts for.
+    pub(crate) fn charge_nothing(&mut self, id: NodeId) {
+        let n = &mut self.nodes[id as usize];
+        n.size = 0;
+        n.alloc = 0;
+        n.own_size = 0;
+        n.own_alloc = 0;
+    }
+
     pub(crate) fn push_root(&mut self, entry: NewNode<'_>) -> NodeId {
         self.push(NO_PARENT, entry)
     }

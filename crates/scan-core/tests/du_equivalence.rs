@@ -325,3 +325,104 @@ fn naive_logical_size(dir: &Path, seen: &mut HashSet<(u64, u64)>) -> u64 {
     }
     total
 }
+
+// ------------------------------------------------------------- APFS clones
+
+/// Make `dst` a copy-on-write clone of `src`, or report that this filesystem
+/// does not do clones.
+#[cfg(target_os = "macos")]
+fn clone_file(src: &Path, dst: &Path) -> bool {
+    Command::new("cp")
+        .arg("-c")
+        .arg(src)
+        .arg(dst)
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// A clone is the case where `du` and the disk disagree, and the disk is right.
+///
+/// `du` charges every clone its full size because every clone reports it in
+/// `st_blocks`; the filesystem holds those blocks once. Measured in the small:
+/// three 100 MiB clones cost 0 MiB of free space. Measured on a developer's
+/// tree: 7.31 GiB of 23 GiB reported.
+///
+/// So this is the one place where matching `du` byte for byte would mean being
+/// wrong, and `alloc` deliberately diverges. The assertion is on the size of
+/// the divergence, which is exactly the clones' own bytes — the same shape as
+/// the hardlink test above.
+#[cfg(target_os = "macos")]
+#[test]
+fn clones_are_charged_once_and_du_is_the_one_that_overcounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("original.bin");
+    // Comfortably over CLONE_MIN_BYTES, and incompressible so the filesystem
+    // cannot quietly store it some other way.
+    let bytes: Vec<u8> = (0..300_000u32)
+        .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
+        .collect();
+    fs::write(&original, &bytes).unwrap();
+
+    if !clone_file(&original, &dir.path().join("clone1.bin"))
+        || !clone_file(&original, &dir.path().join("clone2.bin"))
+    {
+        eprintln!("SKIPPED: this filesystem does not support clones");
+        return;
+    }
+
+    let one_copy = fs::metadata(&original).unwrap().blocks() * 512;
+    let du_total = du_bytes(dir.path()).expect("du is available on macOS");
+
+    let (tree, stats) = scan(
+        dir.path(),
+        ScanOptions::default(),
+        Arc::new(ScanProgress::default()),
+    )
+    .unwrap();
+
+    assert_eq!(
+        stats.clones_deduped, 2,
+        "two of the three share the first's blocks"
+    );
+    assert_eq!(
+        du_total - tree.total_alloc(),
+        2 * one_copy,
+        "the gap to du should be exactly the two clones nobody has to store"
+    );
+
+    // The lowest node id keeps the bytes, so the answer does not depend on
+    // which thread probed first.
+    let charged: Vec<&str> = ["original.bin", "clone1.bin", "clone2.bin"]
+        .into_iter()
+        .filter(|n| tree.node(tree.find(n).unwrap()).alloc > 0)
+        .collect();
+    assert_eq!(
+        charged.len(),
+        1,
+        "exactly one name carries the bytes: {charged:?}"
+    );
+}
+
+/// With the pass switched off we are back to agreeing with `du`, which is the
+/// proof that the divergence above is the clone accounting and nothing else.
+#[cfg(target_os = "macos")]
+#[test]
+fn without_clone_dedupe_we_match_du_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("original.bin");
+    fs::write(&original, vec![7u8; 300_000]).unwrap();
+    if !clone_file(&original, &dir.path().join("clone1.bin")) {
+        eprintln!("SKIPPED: this filesystem does not support clones");
+        return;
+    }
+
+    let du_total = du_bytes(dir.path()).expect("du is available on macOS");
+    let opts = ScanOptions {
+        dedupe_clones: false,
+        ..ScanOptions::default()
+    };
+    let (tree, stats) = scan(dir.path(), opts, Arc::new(ScanProgress::default())).unwrap();
+
+    assert_eq!(stats.clones_deduped, 0);
+    assert_eq!(tree.total_alloc(), du_total);
+}

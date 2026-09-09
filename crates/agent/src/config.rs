@@ -98,6 +98,12 @@ pub struct RootConfig {
     #[serde(default = "default_dedupe")]
     pub dedupe_hardlinks: bool,
 
+    /// Count copy-on-write clones once (macOS/APFS). Defaults on, like
+    /// hardlink deduplication: both answer "how much would freeing this give
+    /// back", and both cost a syscall per candidate to answer honestly.
+    #[serde(default = "default_dedupe")]
+    pub dedupe_clones: bool,
+
     /// Snapshots of this root to keep. `None` keeps everything.
     #[serde(default)]
     pub keep: Option<usize>,
@@ -145,6 +151,7 @@ impl RootConfig {
             one_file_system: false,
             depth: None,
             dedupe_hardlinks: default_dedupe(),
+            dedupe_clones: default_dedupe(),
             keep: None,
         }
     }
@@ -155,6 +162,7 @@ impl RootConfig {
             one_filesystem: self.one_file_system,
             max_depth: self.depth,
             dedupe_hardlinks: self.dedupe_hardlinks,
+            dedupe_clones: self.dedupe_clones,
         }
     }
 }

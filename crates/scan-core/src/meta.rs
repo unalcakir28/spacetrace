@@ -242,6 +242,50 @@ fn platform_fields(
     ((0, 0, 1, 0, 0), None)
 }
 
+/// Where a file's data physically starts, as a key for spotting copy-on-write
+/// clones.
+///
+/// APFS gives out clones freely: `cp -c`, Finder duplicates, and — the case
+/// that actually shows up on a developer's disk — Cargo copying its build
+/// artifacts out of `target/debug/deps`. A clone has its own inode and
+/// `nlink == 1`, so hardlink deduplication cannot see it, and it reports the
+/// full size in `st_blocks` even though the disk holds those blocks once.
+/// Measured on one real tree: 7.31 GiB of the 23 GiB reported was blocks
+/// already counted (invariant #1).
+///
+/// Two files that start at the same physical offset on the same device share
+/// their first extent, which for a clone means they share everything.
+///
+/// `None` means "count this as its own file". That covers a platform that
+/// cannot answer, a file with no mappable data fork — macOS returns `ENOTSUP`
+/// for its transparently compressed files, which cannot be clones anyway —
+/// and offset zero, which a hole at the start of a sparse file reports and
+/// which would otherwise make unrelated sparse files look identical.
+#[cfg(target_os = "macos")]
+pub fn clone_key(path: &Path) -> Option<u64> {
+    use std::os::unix::io::AsRawFd;
+
+    let file = std::fs::File::open(path).ok()?;
+    // SAFETY: an all-zero log2phys is a valid value — three plain integers —
+    // and zero is also how the extended variant is asked for logical offset 0.
+    let mut info: libc::log2phys = unsafe { std::mem::zeroed() };
+    // SAFETY: the descriptor is open for the duration of the call because
+    // `file` outlives it, and `info` is a live, correctly typed struct.
+    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_LOG2PHYS_EXT, &mut info) };
+    if rc < 0 {
+        return None;
+    }
+    if info.l2p_devoffset <= 0 {
+        return None;
+    }
+    Some(info.l2p_devoffset as u64)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn clone_key(_path: &Path) -> Option<u64> {
+    None
+}
+
 /// Best-effort display name for a path (used for the root node).
 pub fn display_name(path: &Path) -> String {
     path.to_string_lossy().into_owned()

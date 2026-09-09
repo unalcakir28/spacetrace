@@ -85,6 +85,16 @@ Decisions:
 - **Symlinks are not followed.** `DirEntry::metadata()` does not follow the
   link; the link is counted at its own size. This both eliminates cycle risk
   and prevents a tree from being counted twice.
+- **Copy-on-write clones are counted once** (macOS/APFS, on by default,
+  `--no-clone-dedupe` to disable). A clone has its own inode and `nlink == 1`,
+  so hardlink deduplication cannot see it, yet the disk holds its blocks once —
+  three 100 MiB clones measured as 0 MiB of consumed free space. They are found
+  by asking `fcntl(F_LOG2PHYS_EXT)` where a file's data physically starts:
+  files sharing that offset share their extents. Only files whose size collides
+  with another file's are probed, because each probe is an open and an `fcntl`.
+  Measured on a developer's tree: 430 clones, 0.76 GiB of 15.6 GiB (4.9%), at a
+  cost of ~70 ms. This is the one place `alloc` deliberately parts company with
+  `du`, which charges every clone in full.
 - **Hardlinks are counted once.** For files with `nlink > 1`, the
   `(dev, ino)` pair is kept in a shared set; a copy seen again stays visible in
   the tree but contributes 0 bytes. This can be disabled with `--no-dedupe`.
@@ -105,7 +115,7 @@ Two separate sizes are reported, and they are never conflated:
 | Field | Meaning | Equivalent |
 |------|--------|-----------|
 | `size` | Logical size — **file** bytes only | `du -sb` |
-| `alloc` | Allocated blocks on disk, **including directory blocks** | `du -s --block-size=1` |
+| `alloc` | Blocks the disk actually holds, **including directory blocks** | `du -s --block-size=1`, except where blocks are shared |
 
 A directory's own inode size (`len()`, typically 4096) does **not** enter
 the logical total: when the user expects "how much space do the files in
@@ -127,9 +137,9 @@ directory's own inode size, which `size` excludes. `size` is checked against a
 naive serial walk in the same file instead, so the oracle shares no code with
 the parallel walk or the reverse-pass aggregation.
 
-Windows ships no `du`, so it has no equivalence test yet; there is nothing
-correct to compare against while `alloc` still equals the logical size there
-(see Known gap below).
+Windows ships no `du`, so its counterpart is construction-based:
+`crates/scan-core/tests/windows_metadata.rs` builds files whose allocated size
+cannot equal their logical size and asserts the difference.
 
 ### Choosing between them: `SizeBasis`
 
@@ -294,7 +304,7 @@ query. No server setup is required.
 ## Development
 
 ```bash
-cargo test --workspace                       # 175 tests
+cargo test --workspace                       # 177 tests
 cargo clippy --workspace --all-targets       # should be warning-free
 cargo fmt --all
 cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc

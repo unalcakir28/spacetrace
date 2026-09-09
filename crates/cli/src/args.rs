@@ -107,6 +107,10 @@ pub struct WalkArgs {
     /// Do not deduplicate hardlinks; count every copy
     #[arg(long)]
     pub no_dedupe: bool,
+
+    /// Do not deduplicate copy-on-write clones; count every copy (macOS)
+    #[arg(long)]
+    pub no_clone_dedupe: bool,
 }
 
 #[derive(Args, Debug)]
@@ -216,6 +220,7 @@ impl WalkArgs {
             one_filesystem: self.one_file_system,
             max_depth: self.depth,
             dedupe_hardlinks: !self.no_dedupe,
+            dedupe_clones: !self.no_clone_dedupe,
         }
     }
 }

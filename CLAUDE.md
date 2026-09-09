@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 175 test, hepsi geçmeli
+cargo test --workspace                   # 177 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -37,11 +37,20 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
    istekte bağlantı açtığı için, koşulsuz `CREATE TABLE IF NOT EXISTS` ya da
    `PRAGMA journal_mode` bir okumanın süren yazmayı SQLITE_BUSY ile devirmesine
    yol açıyordu (CI'da yakalandı, testi `roundtrip.rs` içinde).
-1. **Boyut anlambilimi.** `size` = yalnızca dosya baytları. `alloc` = tahsis
-   edilen bloklar, dizin blokları dâhil — **`du -s --block-size=1` ile birebir**.
-   Dizinlerin kendi inode boyutu mantıksal toplama **girmez**; bu yüzden `size`
-   `du -sb` ile eşleşmez (GNU `--apparent-size` her dizinin inode boyutunu
-   ekliyor) — eski hâli öyle diyordu, yanlıştı.
+1. **Boyut anlambilimi.** `size` = yalnızca dosya baytları. `alloc` = **diskin
+   gerçekten tuttuğu**, dizin blokları dâhil. Dizinlerin kendi inode boyutu
+   mantıksal toplama **girmez**; bu yüzden `size` `du -sb` ile eşleşmez (GNU
+   `--apparent-size` her dizinin inode boyutunu ekliyor) — eski hâli öyle
+   diyordu, yanlıştı.
+
+   **`alloc` = `du` değil, `alloc` ≈ `df`.** Paylaşılan blok yokken ikisi
+   birebir aynı ve test bunu zorluyor. Blok paylaşımı varken `du` fazla
+   sayıyor, biz saymıyoruz, ve **fark tam olarak paylaşılan bloklar**
+   (bu da test ediliyor). İki durum var: hardlink'te `du` da tekilleştiriyor,
+   **APFS clone'unda tekilleştirmiyor** — clone'un kendi inode'u var ve
+   `nlink == 1`, ama diskte blokları bir kez duruyor. Ölçüldü: 3 clone × 100 MB
+   = **0 MB** boş alan tüketimi. Bunu `du`'ya uyarak raporlamak, "diskte ne
+   kadar yer kaplıyor" sorusuna yanlış cevap vermek olurdu.
    Bu eşleşme bir test koşulu ve **testi
    `crates/scan-core/tests/du_equivalence.rs`** (9 Eylül 2026'da yazıldı; o güne
    kadar iddia elle doğrulanıyordu). `alloc` için oracle harici `du`; `size`

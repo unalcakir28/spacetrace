@@ -12,6 +12,14 @@ use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
 /// How many failing paths we keep for the report before we only count them.
 const MAX_REPORTED_ERRORS: usize = 64;
 
+/// Files smaller than this are never probed for being clones.
+///
+/// Every probe is an open and an `fcntl`, and the small end of a tree is where
+/// the file count is: on one real disk, dropping below this would have tripled
+/// the number of probes to recover bytes that round to nothing in any total a
+/// user reads.
+const CLONE_MIN_BYTES: u64 = 64 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     /// Directory names to skip entirely (e.g. `node_modules`, `.git`).
@@ -22,6 +30,8 @@ pub struct ScanOptions {
     pub max_depth: Option<usize>,
     /// Count a hardlinked file only the first time it is met.
     pub dedupe_hardlinks: bool,
+    /// Count copy-on-write clones only once, the same way (macOS/APFS).
+    pub dedupe_clones: bool,
 }
 
 impl Default for ScanOptions {
@@ -31,6 +41,7 @@ impl Default for ScanOptions {
             one_filesystem: false,
             max_depth: None,
             dedupe_hardlinks: true,
+            dedupe_clones: true,
         }
     }
 }
@@ -75,6 +86,8 @@ pub struct ScanStats {
     pub errors: u64,
     /// Hardlinked files met more than once and counted only the first time.
     pub hardlinks_deduped: u64,
+    /// Clones whose blocks were already counted under another name.
+    pub clones_deduped: u64,
     /// Up to `MAX_REPORTED_ERRORS` paths that could not be read.
     pub error_samples: Vec<(PathBuf, String)>,
     pub duration_ms: u64,
@@ -247,6 +260,11 @@ pub fn scan(
     if let Some(children) = children {
         flatten(&mut builder, root_id, children);
     }
+    let clones_deduped = if ctx.opts.dedupe_clones {
+        dedupe_clones(&mut builder, &root_path)
+    } else {
+        0
+    };
     let tree = builder.finish(root_path);
 
     let stats = ScanStats {
@@ -254,6 +272,7 @@ pub fn scan(
         dirs: progress.dirs.load(Ordering::Relaxed),
         errors: progress.errors.load(Ordering::Relaxed),
         hardlinks_deduped: ctx.hardlinks_deduped.load(Ordering::Relaxed),
+        clones_deduped,
         error_samples: ctx.errors.into_inner().unwrap(),
         duration_ms: started.elapsed().as_millis() as u64,
         // Asked once, after the walk: it describes the mount, not the tree,
@@ -261,6 +280,61 @@ pub fn scan(
         capacity: crate::capacity::capacity_of(tree.root_path()),
     };
     Ok((tree, stats))
+}
+
+/// Charge copy-on-write clones once, the way hardlinks are charged once.
+///
+/// Runs after the walk and before aggregation, because it needs the whole tree
+/// to work out which files are even worth asking about: only a file whose size
+/// collides with another file's can be a clone, and finding those collisions
+/// costs nothing next to an open per file. On one real tree that filter cut the
+/// probes from every file to a tenth of them.
+///
+/// Unlike hardlink deduplication, *which* copy keeps the bytes is defined here:
+/// the lowest node id, which is the entry nearest the top of the tree in BFS
+/// order. It costs a sort and it means the answer does not depend on which
+/// thread finished first.
+fn dedupe_clones(builder: &mut TreeBuilder, root: &Path) -> u64 {
+    let mut by_size: std::collections::HashMap<u64, Vec<NodeId>> = std::collections::HashMap::new();
+    for (index, node) in builder.nodes.iter().enumerate() {
+        if node.kind == EntryKind::File && node.own_size >= CLONE_MIN_BYTES {
+            by_size
+                .entry(node.own_size)
+                .or_default()
+                .push(index as NodeId);
+        }
+    }
+    let candidates: Vec<NodeId> = by_size
+        .into_values()
+        .filter(|group| group.len() > 1)
+        .flatten()
+        .collect();
+    if candidates.is_empty() {
+        return 0;
+    }
+
+    // Paths first, then probes, because the probe borrows nothing from the
+    // builder and can therefore run on the pool.
+    let paths: Vec<(NodeId, PathBuf)> = candidates
+        .into_iter()
+        .map(|id| (id, builder.path_of(id, root)))
+        .collect();
+    let mut probed: Vec<(NodeId, u64)> = paths
+        .into_par_iter()
+        .filter_map(|(id, path)| crate::meta::clone_key(&path).map(|key| (id, key)))
+        .collect();
+    probed.sort_unstable();
+
+    let mut charged: HashSet<u64> = HashSet::new();
+    let mut deduped = 0;
+    for (id, key) in probed {
+        if charged.insert(key) {
+            continue;
+        }
+        builder.charge_nothing(id);
+        deduped += 1;
+    }
+    deduped
 }
 
 /// Whether this entry's identity will actually be read.

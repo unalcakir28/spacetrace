@@ -96,6 +96,7 @@ fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
             "dirs": stats.dirs,
             "errors": stats.errors,
             "hardlinks_deduped": stats.hardlinks_deduped,
+            "clones_deduped": stats.clones_deduped,
             "duration_ms": stats.duration_ms,
             "scan_id": saved_id,
             "fs_total": stats.capacity.map(|c| c.total),
@@ -625,6 +626,14 @@ fn print_scan_summary(tree: &Tree, stats: &ScanStats) {
         println!(
             "  {} hardlinks counted once",
             fmt::count(stats.hardlinks_deduped)
+        );
+    }
+    // Said out loud because it is the one place the total deliberately
+    // disagrees with `du`, and a user comparing the two deserves to know why.
+    if stats.clones_deduped > 0 {
+        println!(
+            "  {} clones counted once (the disk holds their blocks once)",
+            fmt::count(stats.clones_deduped)
         );
     }
     // The filesystem's own accounting, which covers more than the scanned root

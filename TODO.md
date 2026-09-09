@@ -169,9 +169,36 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       *Maliyet:* dosya başına bir handle. Yalnızca dedupe veya `-x` açıkken
       ödeniyor (`FileIdentity::Skipped`); ölçülmüş mertebe +36%, kaldıran B4.
       *Rakip:* WinDirStat 2.5.0 (Ocak 2026).
-- [ ] **A3 APFS clone tekilleştirme** — macOS'ta `alloc` şişiyor.
-      *Rakip:* **DaisyDisk 4.34** — clone'un yalnızca ilk görünümünü sayıp
-      kalanlarına 0 bayt veriyor. macOS en güçlü platformumuz ve orada yanlışız.
+- [x] **A3 APFS clone tekilleştirme** — yapıldı *(9 Eylül 2026)*, varsayılan
+      açık, `--no-clone-dedupe` ile kapanır (ajanda `dedupe_clones`).
+      Clone'un kendi inode'u var ve `nlink == 1`, yani hardlink tekilleştirme
+      onu göremiyor; ama diskte blokları bir kez duruyor. Kontrollü ölçüm:
+      **3 clone × 100 MB = 0 MB** boş alan tüketimi, `du` ise 400 MB diyor.
+      Tespit `fcntl(F_LOG2PHYS_EXT)` ile: aynı fiziksel offset'te başlayan
+      dosyalar extent paylaşıyor. Sıkıştırılmış dosyalarda `ENOTSUP` dönüyor,
+      o da güvenli biçimde "clone değil" demek. Yalnızca **boyutu başka bir
+      dosyayla çakışan** dosyalar sorgulanıyor, çünkü her sorgu bir `open` +
+      `fcntl`.
+
+      **Ölçüm düzeltmesi — kendi rakamımı düzeltiyorum.** İlk ölçümüm
+      "%31,7 fazla sayıyoruz" dedi ve **yanlıştı**: ölçüm betiğim hardlink'leri
+      tekilleştirmiyordu, oysa tarayıcı `~/github`'da 68 bin hardlink eliyor.
+      İki hardlink aynı inode'u paylaştığı için doğal olarak aynı fiziksel
+      offset'i bildiriyor — yani "clone" saydıklarımın çoğu zaten hallettiğimiz
+      hardlink'lermiş. Hardlink tekilleştirmesi sonrası **gerçek rakam:
+      0,76 GiB / 15,6 GiB = %4,9**, 430 dosya. Bağımsız Python aracı ve
+      tarayıcı birebir aynı sayıyı veriyor (430).
+
+      | Ağaç | Kurtarılan | Maliyet |
+      |------|-----------|---------|
+      | `/Applications` (412k girdi) | 0 (hiç clone yok) | +91 ms (+8%) |
+      | `~/github` (138k dosya) | 0,76 GiB (%4,9) | +72 ms (+21%) |
+
+      **Değişmez #1 yeniden yazıldı:** `alloc` artık "`du` ile birebir" değil,
+      "diskin gerçekten tuttuğu". Paylaşılan blok yokken `du` ile birebir aynı
+      (test zorluyor), varken fark **tam olarak paylaşılan bloklar** (o da test
+      ediliyor).
+      *Rakip:* **DaisyDisk 4.34** aynı şeyi yapıyordu; artık biz de yapıyoruz.
 - [x] **A4 (Unix) `du` karşılaştırma testi — yazıldı.** *(9 Eylül 2026)*
       **Madde yanlış kurulmuştu:** "test yalnızca macOS'ta koşuyor" değil,
       **test hiç yoktu**. `totals_match_the_files_on_disk` testin kendi yazdığı
@@ -399,7 +426,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~1~~ ✅ | ~~E1, E2~~ | Yarım saat, ve diğer her kararın girdisi — yanlış rekabet haritası üstüne plan yapılmasın. **Bitti (9 Eylül 2026)**, README düzeltmesi de dâhil |
 | ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Doğruluk iddiamız Windows'ta karşılanmıyordu. A4 (Unix) önce yapıldı çünkü test hiç yoktu. **Kod bitti (9 Eylül 2026), Windows CI onayı bekliyor** |
 | 3 | B1 | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar |
-| 4 | A3, A5 | macOS'ta yanlışız (DaisyDisk doğru); ağ üzerinden bozulma sessiz |
+| 4 | ~~A3~~ ✅, A5 | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma hâlâ sessiz |
 | 5 | B2, B3 | Ucuz ve ölçülmüş — B2 eldeki veriyle hemen yapılabilir |
 | 6 | C3, D1 | Geçmiş iddiamızın masaüstü karşılığı + hiç denenmemiş hata senaryosu |
 | 7 | B4, B5, B6 | Platforma özel hızlı yollar — doğruluk düzeldikten **sonra** |
