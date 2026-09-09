@@ -85,8 +85,16 @@ total_alloc    → 265.641.984 bayt   ← bit birebir
 total_size     → 524.146.086 bayt
 ```
 
-169 test geçiyor. Bu, değişmez #1'in canlı kanıtı ve pazarlamada kullanılabilir
-tek "kanıtlanmış" iddiamız.
+**Düzeltme (9 Eylül 2026):** bu ölçüm **elle** alınmıştı ve ilk hâli "169 test
+geçiyor, bu değişmez #1'in canlı kanıtı" diyordu — yanlıştı. O 169 testin
+hiçbiri `du`'yu çağırmıyordu; `totals_match_the_files_on_disk` testin kendi
+yazdığı sabitlerle karşılaştırıyor ve `alloc` için tek iddiası `>= 4096`.
+Otomatik karşılaştırma **aynı gün yazıldı**:
+`crates/scan-core/tests/du_equivalence.rs` (6 test, üç platformda CI'da koşuyor,
+Windows'ta A1/A2 beklemede). Doğrulaması mutasyon testiyle yapıldı: `alloc`'u
+mantıksal boyuta eşitlemek 3 testi, dedupe'u bozmak 3 testi, dizin inode
+boyutunu mantıksal toplama eklemek 1 testi düşürüyor. Yani iddia artık
+kanıtlanmış — ama **9 Eylül'e kadar değildi.**
 
 ### 1.4 Bellek — hedefin çok üstünde
 

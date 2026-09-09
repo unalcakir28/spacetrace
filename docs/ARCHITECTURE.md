@@ -100,8 +100,18 @@ always 512 bytes, independent of the filesystem's block size). This is why
 sparse files can show up smaller than their logical size, while small files
 show up larger due to block rounding — both are correct.
 
-**Validation:** on `/usr` (141k files), `/usr/share`, and `/etc`, both
-totals match `du` exactly. This is a test case.
+**Validation:** `crates/scan-core/tests/du_equivalence.rs` compares `alloc`
+against `du` byte for byte on a fixture built to make the two measures
+disagree — block rounding both ways, a sparse file, a hardlink, a symlink, an
+empty directory. `du` is deliberately *not* the oracle for `size`: BSD's `-A`
+rounds every file up to a block, and GNU's `--apparent-size` counts each
+directory's own inode size, which `size` excludes. `size` is checked against a
+naive serial walk in the same file instead, so the oracle shares no code with
+the parallel walk or the reverse-pass aggregation.
+
+Windows ships no `du`, so it has no equivalence test yet; there is nothing
+correct to compare against while `alloc` still equals the logical size there
+(see Known gap below).
 
 ### Choosing between them: `SizeBasis`
 
@@ -241,7 +251,7 @@ query. No server setup is required.
 ## Development
 
 ```bash
-cargo test --workspace                       # 32 tests
+cargo test --workspace                       # 175 tests
 cargo clippy --workspace --all-targets       # should be warning-free
 cargo fmt --all
 cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc
@@ -249,4 +259,6 @@ cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc
 
 Tests use a real filesystem in temporary directories, including hardlink,
 symlink, permission-error, depth-limit, and diff scenarios. When adding new
-scan behavior, a comparison test against `du` should be added as well.
+scan behavior, extend `crates/scan-core/tests/du_equivalence.rs` — the external
+`du` comparison lives there, and a change to block accounting that it does not
+cover is a change nothing verifies.

@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 169 test, hepsi geçmeli
+cargo test --workspace                   # 175 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -40,8 +40,12 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 1. **Boyut anlambilimi.** `size` = yalnızca dosya baytları (`du -sb` ile birebir).
    `alloc` = tahsis edilen bloklar, dizin blokları dâhil (`du -s --block-size=1`
    ile birebir). Dizinlerin kendi inode boyutu mantıksal toplama **girmez**.
-   Bu eşleşme bir test koşulu; `du` ile karşılaştırma testi eklemeden tarama
-   davranışı değiştirme.
+   Bu eşleşme bir test koşulu ve **testi
+   `crates/scan-core/tests/du_equivalence.rs`** (9 Eylül 2026'da yazıldı; o güne
+   kadar iddia elle doğrulanıyordu). `alloc` için oracle harici `du`; `size`
+   için oracle aynı dosyadaki naif seri yürüyüş, çünkü `du` mantıksal boyutu
+   veremiyor (BSD `-A` bloğa yuvarlıyor, GNU `--apparent-size` dizin inode'unu
+   ekliyor). Tarama davranışını değiştirirken bu dosyayı genişlet.
 2. **Arena düzeni.** Düğümler BFS sırasında; bir düğümün çocukları bitişik
    (`children_start .. +children_len`) ve her çocuğun indeksi ebeveyninden
    **büyük**. `TreeBuilder::aggregate` tek ters geçişte topluyor ve `store`

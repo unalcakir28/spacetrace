@@ -4,8 +4,8 @@ Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
 rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 9 Eylül 2026 (rakip analizi ve ölçümler eklendi; **E1–E2
-kapandı**, sıradaki iş "Rekabet açıkları" → Sıra 2: A1, A2, A4)
+Son güncelleme: 9 Eylül 2026 (rakip analizi ve ölçümler eklendi; **E1–E2 ve
+A4(Unix) kapandı**, sıradaki iş "Rekabet açıkları" → Sıra 2: A1, A2, A4w)
 
 ---
 
@@ -156,9 +156,27 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 - [ ] **A3 APFS clone tekilleştirme** — macOS'ta `alloc` şişiyor.
       *Rakip:* **DaisyDisk 4.34** — clone'un yalnızca ilk görünümünü sayıp
       kalanlarına 0 bayt veriyor. macOS en güçlü platformumuz ve orada yanlışız.
-- [ ] **A4 `du` karşılaştırma testinin Windows ve Linux CI karşılığı** — şu an
-      yalnızca macOS'ta koşuyor. A1–A3 bu test olmadan sessizce bozulur
-      (değişmez #1).
+- [x] **A4 (Unix) `du` karşılaştırma testi — yazıldı.** *(9 Eylül 2026)*
+      **Madde yanlış kurulmuştu:** "test yalnızca macOS'ta koşuyor" değil,
+      **test hiç yoktu**. `totals_match_the_files_on_disk` testin kendi yazdığı
+      sabitlerle karşılaştırıyordu ve `alloc` iddiası `>= 4096`'ydı; `du`
+      doğrulaması elle yapılıyordu. Buna karşılık CLAUDE.md, ARCHITECTURE.md ve
+      WHY.md "bu bir test koşulu" diyordu — üçü de artık doğru.
+      Yeni: `crates/scan-core/tests/du_equivalence.rs`, 6 test, CI'da
+      ubuntu + macos'ta koşuyor. `alloc` oracle'ı harici `du`; `size` oracle'ı
+      aynı dosyadaki **naif seri yürüyüş**, çünkü `du` mantıksal boyutu
+      veremiyor (BSD `-A` bloğa yuvarlıyor, GNU `--apparent-size` dizin
+      inode'unu ekliyor — bizim `size` eklemiyor).
+      Mutasyon testiyle doğrulandı: `alloc`=`size` → 3 test düşüyor,
+      dedupe bozulunca → 3 test, dizin inode'u toplama eklenince → 1 test
+      (yalnızca naif yürüyüş yakalıyor; `du` o mutasyona onay verirdi).
+- [ ] **A4w `du` karşılaştırmasının Windows karşılığı** — Windows'ta `du` yok,
+      dolayısıyla harici oracle yok. Karşılığı **inşa tabanlı** test olacak:
+      cluster boyutu diskten okunup "N baytlık dosya `ceil(N/cluster)` cluster
+      tutar", "sparse dosya mantıksaldan az tutar", "hardlink bir kez sayılır".
+      A1/A2 ile **aynı commit'te** olmalı — onlar bu test olmadan sessizce
+      bozulur (değişmez #1). Şu an karşılaştırılacak doğru bir şey yok, çünkü
+      `alloc` mantıksal boyuta eşit.
 - [ ] **A5 Snapshot bütünlük kontrolü** — `export_snapshot` / `import_snapshot`
       ve `push` yolunda checksum yok. Ağ üzerinden bozulan bir bayt doğruluk
       iddiamızı sessizce çürütür. `Tree::from_parts_checked` arena *yapısını*
@@ -272,7 +290,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | Sıra | Ne | Neden burada |
 |------|-----|--------------|
 | ~~1~~ ✅ | ~~E1, E2~~ | Yarım saat, ve diğer her kararın girdisi — yanlış rekabet haritası üstüne plan yapılmasın. **Bitti (9 Eylül 2026)**, README düzeltmesi de dâhil |
-| 2 | A1, A2, A4 | Doğruluk iddiamız Windows'ta karşılanmıyor; A4 olmadan A1/A2 sessizce bozulur |
+| 2 | ~~A4~~ ✅ → A1, A2, A4w | Doğruluk iddiamız Windows'ta karşılanmıyor. A4 (Unix) **önce yapıldı** çünkü test hiç yoktu — A1/A2 onsuz sessizce bozulur, ve iddianın kanıtsız olduğu ortaya çıktı |
 | 3 | B1 | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar |
 | 4 | A3, A5 | macOS'ta yanlışız (DaisyDisk doğru); ağ üzerinden bozulma sessiz |
 | 5 | B2, B3 | Ucuz ve ölçülmüş — B2 eldeki veriyle hemen yapılabilir |
