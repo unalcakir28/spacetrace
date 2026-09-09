@@ -10,6 +10,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use spacetrace_changelog::{changelog, render, Changelog, Component, Release};
+#[cfg(test)]
+use spacetrace_changelog::{ComponentLog, Components, Entry, Kind, LOCALES};
 
 const SOURCE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/changelog.json");
 
@@ -290,21 +292,56 @@ mod tests {
         );
     }
 
+    /// A changelog of its own, not the real one.
+    ///
+    /// These tests used to promote the live `changelog.json`, which meant they
+    /// failed the moment a release was actually cut — the fixture stopped
+    /// having anything pending. What is under test is the promotion logic, not
+    /// today's content.
+    fn fixture() -> Changelog {
+        let entry = |kind: Kind, text: &str| Entry {
+            kind,
+            text: LOCALES
+                .iter()
+                .map(|locale| (locale.to_string(), format!("{locale}: {text}")))
+                .collect(),
+        };
+        let log = || ComponentLog {
+            unreleased: vec![
+                entry(Kind::Added, "something new"),
+                entry(Kind::Fixed, "a bug"),
+            ],
+            releases: vec![Release {
+                version: "1.0.0".into(),
+                date: "2026-01-01".into(),
+                published: true,
+                entries: vec![entry(Kind::Added, "the first one")],
+            }],
+        };
+        Changelog {
+            schema: 1,
+            components: Components {
+                cli: log(),
+                desktop: log(),
+                hub: log(),
+            },
+        }
+    }
+
     #[test]
     fn promoting_moves_every_unreleased_entry_into_the_new_release() {
-        let before = changelog();
+        let before = fixture();
         let pending = before.component(Component::Cli).unreleased.clone();
-        assert!(!pending.is_empty(), "the fixture needs pending entries");
 
         let (after, count) =
-            promoted(before, Component::Cli, "0.4.0", "2026-09-10").expect("a clean promotion");
+            promoted(&before, Component::Cli, "1.1.0", "2026-09-10").expect("a clean promotion");
         let log = after.component(Component::Cli);
 
         assert_eq!(count, pending.len());
         assert!(log.unreleased.is_empty(), "unreleased must be emptied");
 
         let cut = &log.releases[0];
-        assert_eq!(cut.version, "0.4.0");
+        assert_eq!(cut.version, "1.1.0");
         assert_eq!(cut.date, "2026-09-10");
         assert!(cut.published, "a promoted release is a real one");
         assert_eq!(cut.entries.len(), pending.len());
@@ -315,44 +352,44 @@ mod tests {
         );
 
         assert!(after.validate().is_empty());
-        // Everything that was already released must still be there, untouched.
-        assert_eq!(
-            log.releases.len(),
-            before.component(Component::Cli).releases.len() + 1
-        );
+        // Everything already released must still be there, untouched.
+        assert_eq!(log.releases.len(), 2);
+        assert_eq!(log.releases[1].version, "1.0.0");
+        // And the other components must not have moved.
+        assert_eq!(after.component(Component::Hub).unreleased.len(), 2);
     }
 
     #[test]
     fn promoting_nothing_is_refused_rather_than_cutting_an_empty_release() {
-        let mut empty = changelog().clone();
+        let mut empty = fixture();
         empty.component_mut(Component::Hub).unreleased.clear();
-        let refusal = promoted(&empty, Component::Hub, "0.3.0", "2026-09-10").unwrap_err();
+        let refusal = promoted(&empty, Component::Hub, "1.1.0", "2026-09-10").unwrap_err();
         assert!(refusal.contains("nothing unreleased"), "{refusal}");
     }
 
     #[test]
     fn promoting_over_an_existing_version_is_refused() {
-        let refusal = promoted(changelog(), Component::Cli, "0.2.0", "2026-09-10").unwrap_err();
+        let refusal = promoted(&fixture(), Component::Cli, "1.0.0", "2026-09-10").unwrap_err();
         assert!(refusal.contains("already released"), "{refusal}");
-        assert!(refusal.contains("2026-09-07"), "say when: {refusal}");
+        assert!(refusal.contains("2026-01-01"), "say when: {refusal}");
     }
 
     /// The ordering rule is the one thing promoting can break, so it must be
     /// caught before the file is written rather than by the next test run.
     #[test]
     fn promoting_a_version_older_than_the_newest_is_refused() {
-        let refusal = promoted(changelog(), Component::Cli, "0.0.9", "2026-09-10").unwrap_err();
+        let refusal = promoted(&fixture(), Component::Cli, "0.9.0", "2026-09-10").unwrap_err();
         assert!(refusal.contains("newest first"), "{refusal}");
     }
 
     #[test]
     fn a_refused_promotion_changes_nothing() {
-        let before = changelog();
+        let before = fixture();
         let untouched = before.clone();
-        assert!(promoted(before, Component::Cli, "0.0.9", "2026-09-10").is_err());
+        assert!(promoted(&before, Component::Cli, "0.9.0", "2026-09-10").is_err());
         assert_eq!(
             canonical_json(&untouched).unwrap(),
-            canonical_json(before).unwrap()
+            canonical_json(&before).unwrap()
         );
     }
 

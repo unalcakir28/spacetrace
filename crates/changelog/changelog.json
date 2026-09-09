@@ -2,109 +2,115 @@
   "schema": 1,
   "components": {
     "cli": {
-      "unreleased": [
-        {
-          "kind": "added",
-          "text": {
-            "de": "Der Agent meldet auf `/status`, wenn eine neuere Version vorliegt. Nur eine Meldung: er installiert nichts von selbst. Einmal täglich, ohne Angaben über die Maschine, und mit `update_check = false` ganz abschaltbar.",
-            "en": "The agent reports on `/status` when a newer release exists. A notice only: it never installs anything itself. Once a day, sending nothing about the machine, and `update_check = false` turns it off entirely.",
-            "fr": "L'agent signale sur `/status` qu'une version plus récente existe. Une simple information : il n'installe jamais rien de lui-même. Une fois par jour, sans rien transmettre sur la machine, et `update_check = false` le désactive complètement.",
-            "it": "L'agente segnala su `/status` quando esiste una versione più recente. Solo una segnalazione: non installa mai nulla da sé. Una volta al giorno, senza inviare nulla sulla macchina, e `update_check = false` lo disattiva del tutto.",
-            "tr": "Ajan, yeni bir sürüm olduğunda bunu `/status` üzerinden bildiriyor. Yalnızca bildirim: hiçbir şeyi kendisi kurmuyor. Günde bir kez, makine hakkında hiçbir şey göndermeden, ve `update_check = false` ile tamamen kapanıyor."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "`spacetrace update` installiert die neueste Version über die laufende, nachdem der Download gegen die veröffentlichte `SHA256SUMS` geprüft wurde.",
-            "en": "`spacetrace update` installs the newest release over the running one, after verifying the download against the published `SHA256SUMS`.",
-            "fr": "`spacetrace update` installe la dernière version par-dessus celle en cours d'exécution, après avoir vérifié le téléchargement avec le fichier `SHA256SUMS` publié.",
-            "it": "`spacetrace update` installa la versione più recente al posto di quella in esecuzione, dopo aver verificato il download con il file `SHA256SUMS` pubblicato.",
-            "tr": "`spacetrace update` en yeni sürümü çalışan sürümün üzerine kuruyor; indirdiğini önce yayınlanan `SHA256SUMS` ile doğruluyor."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "Eine tägliche Prüfung auf eine neuere Version, als eine Zeile auf stderr. Sie läuft nur bei einem getaggten Build im Terminal, erklärt sich beim ersten Mal und lässt sich mit `SPACETRACE_NO_UPDATE_CHECK=1` ganz abschalten.",
-            "en": "A once-a-day check for a newer release, printed as one line on stderr. It runs only on a tagged build in a terminal, explains itself the first time, and stops entirely with `SPACETRACE_NO_UPDATE_CHECK=1`.",
-            "fr": "Une vérification quotidienne de la présence d'une nouvelle version, affichée en une ligne sur stderr. Elle ne s'exécute que sur une version étiquetée dans un terminal, s'explique la première fois, et se désactive entièrement avec `SPACETRACE_NO_UPDATE_CHECK=1`.",
-            "it": "Un controllo giornaliero della presenza di una nuova versione, stampato su stderr in una riga. Funziona solo su una build taggata in un terminale, si spiega la prima volta e si disattiva del tutto con `SPACETRACE_NO_UPDATE_CHECK=1`.",
-            "tr": "Günde bir kez yeni sürüm kontrolü, stderr'e tek satır. Yalnızca etiketli bir derlemede ve terminalde çalışıyor, ilk seferinde ne yaptığını söylüyor, ve `SPACETRACE_NO_UPDATE_CHECK=1` ile tamamen kapanıyor."
-          }
-        },
-        {
-          "kind": "fixed",
-          "text": {
-            "de": "`install.sh` prüft den Download gegen die veröffentlichte `SHA256SUMS`. Die Datei wurde bei jeder Version veröffentlicht und nie gelesen.",
-            "en": "`install.sh` verifies the download against the published `SHA256SUMS`. The file was published with every release and never read.",
-            "fr": "`install.sh` vérifie le téléchargement avec le fichier `SHA256SUMS` publié. Ce fichier était publié à chaque version et n'était jamais lu.",
-            "it": "`install.sh` verifica il download con il file `SHA256SUMS` pubblicato. Il file veniva pubblicato a ogni versione e non veniva mai letto.",
-            "tr": "`install.sh` indirdiğini yayınlanan `SHA256SUMS` ile doğruluyor. Dosya her sürümde yayınlanıyordu ve hiç okunmuyordu."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "`--version` sagt jetzt, um welchen Build es sich handelt: Commit, Build-Datum und Kanal. Der Agent meldet dasselbe unter `/health` und `/status`.",
-            "en": "`--version` now says which build it is: the commit, the date it was built and the channel. The agent reports the same on `/health` and `/status`.",
-            "fr": "`--version` indique désormais de quelle build il s'agit : le commit, la date de compilation et le canal. L'agent donne les mêmes informations sur `/health` et `/status`.",
-            "it": "`--version` indica ora di quale build si tratta: il commit, la data di compilazione e il canale. L'agente riporta gli stessi dati su `/health` e `/status`.",
-            "tr": "`--version` artık hangi derleme olduğunu söylüyor: commit, derleme tarihi ve kanal. Ajan aynı bilgiyi `/health` ve `/status` üzerinden veriyor."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "Jede Version kommt jetzt mit geschriebenen Release Notes in fünf Sprachen, und das Repository hat eine CHANGELOG.md.",
-            "en": "Every release now comes with written release notes in five languages, and the repository has a CHANGELOG.md.",
-            "fr": "Chaque version s'accompagne désormais de notes de version rédigées en cinq langues, et le dépôt contient un CHANGELOG.md.",
-            "it": "Ogni versione arriva ora con note di rilascio scritte in cinque lingue, e il repository ha un CHANGELOG.md.",
-            "tr": "Her sürüm artık beş dilde yazılmış sürüm notlarıyla geliyor, ve depoda bir CHANGELOG.md var."
-          }
-        },
-        {
-          "kind": "fixed",
-          "text": {
-            "de": "APFS-Klone werden einmal gezählt. Drei Klone von je 100 MB belegen keinen zusätzlichen Speicher, und spacetrace sagt das jetzt auch, während `du` weiterhin 400 MB meldet. Abschalten mit `--no-clone-dedupe`.",
-            "en": "APFS clones are counted once. Three 100 MB clones take 0 MB of extra room on the disk, and spacetrace now says so where `du` still reports 400 MB. Use `--no-clone-dedupe` to turn it off.",
-            "fr": "Les clones APFS ne sont comptés qu'une fois. Trois clones de 100 Mo n'occupent aucun espace supplémentaire sur le disque, et spacetrace le dit désormais là où `du` annonce encore 400 Mo. Pour le désactiver : `--no-clone-dedupe`.",
-            "it": "I clone APFS vengono contati una sola volta. Tre cloni da 100 MB occupano 0 MB di spazio aggiuntivo sul disco, e ora spacetrace lo dice mentre `du` continua a riportare 400 MB. Per disattivarlo: `--no-clone-dedupe`.",
-            "tr": "APFS clone'ları bir kez sayılıyor. 100 MB'lık üç clone diskte fazladan 0 MB yer tutuyor; `du` hâlâ 400 MB derken spacetrace artık doğrusunu söylüyor. Kapatmak için `--no-clone-dedupe`."
-          }
-        },
-        {
-          "kind": "fixed",
-          "text": {
-            "de": "Unter Windows liest spacetrace jetzt den tatsächlich belegten Speicher und zählt hart verlinkte Dateien einmal, statt auf die angegebene Dateilänge zurückzufallen.",
-            "en": "On Windows, spacetrace now reads the space a file really occupies and counts a hard-linked file once, instead of falling back to the length the file claims.",
-            "fr": "Sous Windows, spacetrace lit désormais l'espace réellement occupé par un fichier et ne compte qu'une fois les fichiers en lien physique, au lieu de se rabattre sur la taille annoncée.",
-            "it": "Su Windows spacetrace legge ora lo spazio realmente occupato da un file e conta una sola volta i file con collegamenti fisici, invece di ripiegare sulla lunghezza dichiarata.",
-            "tr": "Windows'ta artık dosyanın diskte gerçekten kapladığı yer okunuyor ve sabit bağlantılı dosya bir kez sayılıyor; eskiden dosyanın iddia ettiği uzunluğa düşülüyordu."
-          }
-        },
-        {
-          "kind": "performance",
-          "text": {
-            "de": "Das Scannen großer Verzeichnisbäume braucht deutlich weniger Speicher: ein Knoten schrumpfte von 104 auf 72 Byte, und die Namen liegen jetzt in einer gemeinsamen Arena.",
-            "en": "Scanning a large tree uses noticeably less memory: a tree node shrank from 104 to 72 bytes and names moved into one shared arena.",
-            "fr": "L'analyse d'une grande arborescence consomme nettement moins de mémoire : un nœud est passé de 104 à 72 octets et les noms ont été regroupés dans une arène partagée.",
-            "it": "La scansione di un albero grande usa sensibilmente meno memoria: un nodo è passato da 104 a 72 byte e i nomi sono confluiti in un'unica arena condivisa.",
-            "tr": "Büyük bir ağacı taramak belirgin biçimde daha az bellek kullanıyor: ağaç düğümü 104 bayttan 72 bayta indi ve adlar tek bir paylaşılan arenaya taşındı."
-          }
-        },
-        {
-          "kind": "changed",
-          "text": {
-            "de": "Das Versprechen, dass die belegten Größen mit `du` übereinstimmen, solange keine Blöcke geteilt werden, wird jetzt durch einen Test mit echtem `du` abgesichert statt nur in der Dokumentation behauptet.",
-            "en": "The promise that on-disk sizes agree with `du` where no blocks are shared is now enforced by a test that runs real `du`, rather than being a claim in the documentation.",
-            "fr": "La promesse que les tailles sur disque correspondent à `du` en l'absence de blocs partagés est désormais vérifiée par un test qui exécute réellement `du`, au lieu d'être une affirmation dans la documentation.",
-            "it": "La promessa che le dimensioni su disco coincidano con `du` in assenza di blocchi condivisi è ora garantita da un test che esegue davvero `du`, invece di essere un'affermazione nella documentazione.",
-            "tr": "Blok paylaşımı olmadığında disk boyutlarının `du` ile uyuştuğu sözü, artık belgedeki bir iddia değil, gerçek `du` çalıştıran bir testle zorlanıyor."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.4.0",
+          "date": "2026-09-09",
+          "published": true,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Der Agent meldet auf `/status`, wenn eine neuere Version vorliegt. Nur eine Meldung: er installiert nichts von selbst. Einmal täglich, ohne Angaben über die Maschine, und mit `update_check = false` ganz abschaltbar.",
+                "en": "The agent reports on `/status` when a newer release exists. A notice only: it never installs anything itself. Once a day, sending nothing about the machine, and `update_check = false` turns it off entirely.",
+                "fr": "L'agent signale sur `/status` qu'une version plus récente existe. Une simple information : il n'installe jamais rien de lui-même. Une fois par jour, sans rien transmettre sur la machine, et `update_check = false` le désactive complètement.",
+                "it": "L'agente segnala su `/status` quando esiste una versione più recente. Solo una segnalazione: non installa mai nulla da sé. Una volta al giorno, senza inviare nulla sulla macchina, e `update_check = false` lo disattiva del tutto.",
+                "tr": "Ajan, yeni bir sürüm olduğunda bunu `/status` üzerinden bildiriyor. Yalnızca bildirim: hiçbir şeyi kendisi kurmuyor. Günde bir kez, makine hakkında hiçbir şey göndermeden, ve `update_check = false` ile tamamen kapanıyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "`spacetrace update` installiert die neueste Version über die laufende, nachdem der Download gegen die veröffentlichte `SHA256SUMS` geprüft wurde.",
+                "en": "`spacetrace update` installs the newest release over the running one, after verifying the download against the published `SHA256SUMS`.",
+                "fr": "`spacetrace update` installe la dernière version par-dessus celle en cours d'exécution, après avoir vérifié le téléchargement avec le fichier `SHA256SUMS` publié.",
+                "it": "`spacetrace update` installa la versione più recente al posto di quella in esecuzione, dopo aver verificato il download con il file `SHA256SUMS` pubblicato.",
+                "tr": "`spacetrace update` en yeni sürümü çalışan sürümün üzerine kuruyor; indirdiğini önce yayınlanan `SHA256SUMS` ile doğruluyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Eine tägliche Prüfung auf eine neuere Version, als eine Zeile auf stderr. Sie läuft nur bei einem getaggten Build im Terminal, erklärt sich beim ersten Mal und lässt sich mit `SPACETRACE_NO_UPDATE_CHECK=1` ganz abschalten.",
+                "en": "A once-a-day check for a newer release, printed as one line on stderr. It runs only on a tagged build in a terminal, explains itself the first time, and stops entirely with `SPACETRACE_NO_UPDATE_CHECK=1`.",
+                "fr": "Une vérification quotidienne de la présence d'une nouvelle version, affichée en une ligne sur stderr. Elle ne s'exécute que sur une version étiquetée dans un terminal, s'explique la première fois, et se désactive entièrement avec `SPACETRACE_NO_UPDATE_CHECK=1`.",
+                "it": "Un controllo giornaliero della presenza di una nuova versione, stampato su stderr in una riga. Funziona solo su una build taggata in un terminale, si spiega la prima volta e si disattiva del tutto con `SPACETRACE_NO_UPDATE_CHECK=1`.",
+                "tr": "Günde bir kez yeni sürüm kontrolü, stderr'e tek satır. Yalnızca etiketli bir derlemede ve terminalde çalışıyor, ilk seferinde ne yaptığını söylüyor, ve `SPACETRACE_NO_UPDATE_CHECK=1` ile tamamen kapanıyor."
+              }
+            },
+            {
+              "kind": "fixed",
+              "text": {
+                "de": "`install.sh` prüft den Download gegen die veröffentlichte `SHA256SUMS`. Die Datei wurde bei jeder Version veröffentlicht und nie gelesen.",
+                "en": "`install.sh` verifies the download against the published `SHA256SUMS`. The file was published with every release and never read.",
+                "fr": "`install.sh` vérifie le téléchargement avec le fichier `SHA256SUMS` publié. Ce fichier était publié à chaque version et n'était jamais lu.",
+                "it": "`install.sh` verifica il download con il file `SHA256SUMS` pubblicato. Il file veniva pubblicato a ogni versione e non veniva mai letto.",
+                "tr": "`install.sh` indirdiğini yayınlanan `SHA256SUMS` ile doğruluyor. Dosya her sürümde yayınlanıyordu ve hiç okunmuyordu."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "`--version` sagt jetzt, um welchen Build es sich handelt: Commit, Build-Datum und Kanal. Der Agent meldet dasselbe unter `/health` und `/status`.",
+                "en": "`--version` now says which build it is: the commit, the date it was built and the channel. The agent reports the same on `/health` and `/status`.",
+                "fr": "`--version` indique désormais de quelle build il s'agit : le commit, la date de compilation et le canal. L'agent donne les mêmes informations sur `/health` et `/status`.",
+                "it": "`--version` indica ora di quale build si tratta: il commit, la data di compilazione e il canale. L'agente riporta gli stessi dati su `/health` e `/status`.",
+                "tr": "`--version` artık hangi derleme olduğunu söylüyor: commit, derleme tarihi ve kanal. Ajan aynı bilgiyi `/health` ve `/status` üzerinden veriyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Jede Version kommt jetzt mit geschriebenen Release Notes in fünf Sprachen, und das Repository hat eine CHANGELOG.md.",
+                "en": "Every release now comes with written release notes in five languages, and the repository has a CHANGELOG.md.",
+                "fr": "Chaque version s'accompagne désormais de notes de version rédigées en cinq langues, et le dépôt contient un CHANGELOG.md.",
+                "it": "Ogni versione arriva ora con note di rilascio scritte in cinque lingue, e il repository ha un CHANGELOG.md.",
+                "tr": "Her sürüm artık beş dilde yazılmış sürüm notlarıyla geliyor, ve depoda bir CHANGELOG.md var."
+              }
+            },
+            {
+              "kind": "fixed",
+              "text": {
+                "de": "APFS-Klone werden einmal gezählt. Drei Klone von je 100 MB belegen keinen zusätzlichen Speicher, und spacetrace sagt das jetzt auch, während `du` weiterhin 400 MB meldet. Abschalten mit `--no-clone-dedupe`.",
+                "en": "APFS clones are counted once. Three 100 MB clones take 0 MB of extra room on the disk, and spacetrace now says so where `du` still reports 400 MB. Use `--no-clone-dedupe` to turn it off.",
+                "fr": "Les clones APFS ne sont comptés qu'une fois. Trois clones de 100 Mo n'occupent aucun espace supplémentaire sur le disque, et spacetrace le dit désormais là où `du` annonce encore 400 Mo. Pour le désactiver : `--no-clone-dedupe`.",
+                "it": "I clone APFS vengono contati una sola volta. Tre cloni da 100 MB occupano 0 MB di spazio aggiuntivo sul disco, e ora spacetrace lo dice mentre `du` continua a riportare 400 MB. Per disattivarlo: `--no-clone-dedupe`.",
+                "tr": "APFS clone'ları bir kez sayılıyor. 100 MB'lık üç clone diskte fazladan 0 MB yer tutuyor; `du` hâlâ 400 MB derken spacetrace artık doğrusunu söylüyor. Kapatmak için `--no-clone-dedupe`."
+              }
+            },
+            {
+              "kind": "fixed",
+              "text": {
+                "de": "Unter Windows liest spacetrace jetzt den tatsächlich belegten Speicher und zählt hart verlinkte Dateien einmal, statt auf die angegebene Dateilänge zurückzufallen.",
+                "en": "On Windows, spacetrace now reads the space a file really occupies and counts a hard-linked file once, instead of falling back to the length the file claims.",
+                "fr": "Sous Windows, spacetrace lit désormais l'espace réellement occupé par un fichier et ne compte qu'une fois les fichiers en lien physique, au lieu de se rabattre sur la taille annoncée.",
+                "it": "Su Windows spacetrace legge ora lo spazio realmente occupato da un file e conta una sola volta i file con collegamenti fisici, invece di ripiegare sulla lunghezza dichiarata.",
+                "tr": "Windows'ta artık dosyanın diskte gerçekten kapladığı yer okunuyor ve sabit bağlantılı dosya bir kez sayılıyor; eskiden dosyanın iddia ettiği uzunluğa düşülüyordu."
+              }
+            },
+            {
+              "kind": "performance",
+              "text": {
+                "de": "Das Scannen großer Verzeichnisbäume braucht deutlich weniger Speicher: ein Knoten schrumpfte von 104 auf 72 Byte, und die Namen liegen jetzt in einer gemeinsamen Arena.",
+                "en": "Scanning a large tree uses noticeably less memory: a tree node shrank from 104 to 72 bytes and names moved into one shared arena.",
+                "fr": "L'analyse d'une grande arborescence consomme nettement moins de mémoire : un nœud est passé de 104 à 72 octets et les noms ont été regroupés dans une arène partagée.",
+                "it": "La scansione di un albero grande usa sensibilmente meno memoria: un nodo è passato da 104 a 72 byte e i nomi sono confluiti in un'unica arena condivisa.",
+                "tr": "Büyük bir ağacı taramak belirgin biçimde daha az bellek kullanıyor: ağaç düğümü 104 bayttan 72 bayta indi ve adlar tek bir paylaşılan arenaya taşındı."
+              }
+            },
+            {
+              "kind": "changed",
+              "text": {
+                "de": "Das Versprechen, dass die belegten Größen mit `du` übereinstimmen, solange keine Blöcke geteilt werden, wird jetzt durch einen Test mit echtem `du` abgesichert statt nur in der Dokumentation behauptet.",
+                "en": "The promise that on-disk sizes agree with `du` where no blocks are shared is now enforced by a test that runs real `du`, rather than being a claim in the documentation.",
+                "fr": "La promesse que les tailles sur disque correspondent à `du` en l'absence de blocs partagés est désormais vérifiée par un test qui exécute réellement `du`, au lieu d'être une affirmation dans la documentation.",
+                "it": "La promessa che le dimensioni su disco coincidano con `du` in assenza di blocchi condivisi è ora garantita da un test che esegue davvero `du`, invece di essere un'affermazione nella documentazione.",
+                "tr": "Blok paylaşımı olmadığında disk boyutlarının `du` ile uyuştuğu sözü, artık belgedeki bir iddia değil, gerçek `du` çalıştıran bir testle zorlanıyor."
+              }
+            }
+          ]
+        },
         {
           "version": "0.3.0",
           "date": "2026-09-08",
@@ -249,59 +255,65 @@
       ]
     },
     "desktop": {
-      "unreleased": [
-        {
-          "kind": "added",
-          "text": {
-            "de": "Auch die Fehlermeldungen sind in Ihrer Sprache. Was das Betriebssystem sagt — Permission denied und dergleichen — bleibt in seinen eigenen Worten, denn das sind die Worte, die bei einer Suche weiterhelfen.",
-            "en": "Error messages are in your language too. What the operating system says — Permission denied and the like — stays in its own words, because those are the words that help when you search for them.",
-            "fr": "Les messages d'erreur sont eux aussi dans votre langue. Ce que dit le système d'exploitation — Permission denied et consorts — reste dans ses propres mots, car ce sont ceux qui aident quand on les recherche.",
-            "it": "Anche i messaggi di errore sono nella sua lingua. Ciò che dice il sistema operativo — Permission denied e simili — resta nelle sue parole, perché sono quelle che aiutano quando le si cerca.",
-            "tr": "Hata mesajları da sizin dilinizde. İşletim sisteminin söylediği kısım — Permission denied gibi — kendi sözleriyle kalıyor, çünkü aradığınızda işinize yarayan sözler onlar."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "Beim Start prüft die App, ob eine neuere Version vorliegt, und bietet die Installation an. Es wird nichts heruntergeladen, bevor Sie es verlangen. Unter macOS ist die App weiterhin nicht signiert, das System kann sie nach einem Update also erneut bestätigen lassen.",
-            "en": "The app checks for a newer release when it starts and offers to install it. Nothing is downloaded until you ask for it. On macOS the app is still unsigned, so the system may ask you to confirm it again after an update.",
-            "fr": "Au démarrage, l'application vérifie s'il existe une version plus récente et propose de l'installer. Rien n'est téléchargé tant que vous ne le demandez pas. Sur macOS l'application n'est toujours pas signée : le système peut donc vous demander de la confirmer à nouveau après une mise à jour.",
-            "it": "All'avvio l'app verifica la presenza di una versione più recente e propone di installarla. Nulla viene scaricato finché non lo si chiede. Su macOS l'app non è ancora firmata, quindi dopo un aggiornamento il sistema potrebbe chiedere di confermarla di nuovo.",
-            "tr": "Uygulama açılışta yeni bir sürüm olup olmadığına bakıyor ve kurmayı öneriyor. Siz istemeden hiçbir şey indirilmiyor. macOS'ta uygulama hâlâ imzasız, yani güncellemeden sonra sistem sizden yeniden onay isteyebilir."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "Die App spricht fünf Sprachen: Englisch, Türkisch, Italienisch, Französisch und Deutsch. Beim ersten Start folgt sie der Sprache Ihres Systems, und die Auswahl lässt sich jederzeit ändern.",
-            "en": "The app speaks five languages: English, Turkish, Italian, French and German. It follows your system's language on first launch, and the choice can be changed at any time.",
-            "fr": "L'application parle cinq langues : anglais, turc, italien, français et allemand. Au premier lancement elle suit la langue de votre système, et ce choix peut être modifié à tout moment.",
-            "it": "L'app parla cinque lingue: inglese, turco, italiano, francese e tedesco. Al primo avvio segue la lingua del sistema e la scelta si può cambiare in qualsiasi momento.",
-            "tr": "Uygulama beş dil konuşuyor: İngilizce, Türkçe, İtalyanca, Fransızca ve Almanca. İlk açılışta sisteminizin dilini izliyor, ve bu seçim istendiği zaman değiştirilebiliyor."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "Ein Panel mit der laufenden Version und dem Build sowie den Neuerungen der letzten Versionen. Es funktioniert offline: Das Changelog steckt in der App selbst.",
-            "en": "A panel showing which version and which build you are running, plus what changed in recent releases. It works offline: the changelog is compiled into the app itself.",
-            "fr": "Un panneau indiquant la version et la build en cours d'exécution, ainsi que les nouveautés des dernières versions. Il fonctionne hors ligne : le journal des modifications est intégré à l'application.",
-            "it": "Un pannello con la versione e la build in esecuzione e le novità delle ultime versioni. Funziona anche offline: il changelog è compilato dentro l'app stessa.",
-            "tr": "Hangi sürümü ve hangi derlemeyi çalıştırdığınızı, ve son sürümlerde ne değiştiğini gösteren bir pencere. Çevrimdışı çalışıyor: changelog uygulamanın içine derleniyor."
-          }
-        },
-        {
-          "kind": "performance",
-          "text": {
-            "de": "Das Öffnen eines großen Scans braucht weniger Speicher, dank der kompakteren Baumdarstellung im Scan-Kern.",
-            "en": "Opening a large scan uses less memory, following the smaller tree representation in the scanning core.",
-            "fr": "Ouvrir une analyse volumineuse consomme moins de mémoire, grâce à la représentation d'arbre plus compacte du moteur d'analyse.",
-            "it": "Aprire una scansione grande consuma meno memoria, grazie alla rappresentazione dell'albero più compatta nel motore di scansione.",
-            "tr": "Büyük bir taramayı açmak daha az bellek kullanıyor; tarama çekirdeğindeki küçülen ağaç gösterimi sayesinde."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.3.0",
+          "date": "2026-09-09",
+          "published": true,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Auch die Fehlermeldungen sind in Ihrer Sprache. Was das Betriebssystem sagt — Permission denied und dergleichen — bleibt in seinen eigenen Worten, denn das sind die Worte, die bei einer Suche weiterhelfen.",
+                "en": "Error messages are in your language too. What the operating system says — Permission denied and the like — stays in its own words, because those are the words that help when you search for them.",
+                "fr": "Les messages d'erreur sont eux aussi dans votre langue. Ce que dit le système d'exploitation — Permission denied et consorts — reste dans ses propres mots, car ce sont ceux qui aident quand on les recherche.",
+                "it": "Anche i messaggi di errore sono nella sua lingua. Ciò che dice il sistema operativo — Permission denied e simili — resta nelle sue parole, perché sono quelle che aiutano quando le si cerca.",
+                "tr": "Hata mesajları da sizin dilinizde. İşletim sisteminin söylediği kısım — Permission denied gibi — kendi sözleriyle kalıyor, çünkü aradığınızda işinize yarayan sözler onlar."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Beim Start prüft die App, ob eine neuere Version vorliegt, und bietet die Installation an. Es wird nichts heruntergeladen, bevor Sie es verlangen. Unter macOS ist die App weiterhin nicht signiert, das System kann sie nach einem Update also erneut bestätigen lassen.",
+                "en": "The app checks for a newer release when it starts and offers to install it. Nothing is downloaded until you ask for it. On macOS the app is still unsigned, so the system may ask you to confirm it again after an update.",
+                "fr": "Au démarrage, l'application vérifie s'il existe une version plus récente et propose de l'installer. Rien n'est téléchargé tant que vous ne le demandez pas. Sur macOS l'application n'est toujours pas signée : le système peut donc vous demander de la confirmer à nouveau après une mise à jour.",
+                "it": "All'avvio l'app verifica la presenza di una versione più recente e propone di installarla. Nulla viene scaricato finché non lo si chiede. Su macOS l'app non è ancora firmata, quindi dopo un aggiornamento il sistema potrebbe chiedere di confermarla di nuovo.",
+                "tr": "Uygulama açılışta yeni bir sürüm olup olmadığına bakıyor ve kurmayı öneriyor. Siz istemeden hiçbir şey indirilmiyor. macOS'ta uygulama hâlâ imzasız, yani güncellemeden sonra sistem sizden yeniden onay isteyebilir."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Die App spricht fünf Sprachen: Englisch, Türkisch, Italienisch, Französisch und Deutsch. Beim ersten Start folgt sie der Sprache Ihres Systems, und die Auswahl lässt sich jederzeit ändern.",
+                "en": "The app speaks five languages: English, Turkish, Italian, French and German. It follows your system's language on first launch, and the choice can be changed at any time.",
+                "fr": "L'application parle cinq langues : anglais, turc, italien, français et allemand. Au premier lancement elle suit la langue de votre système, et ce choix peut être modifié à tout moment.",
+                "it": "L'app parla cinque lingue: inglese, turco, italiano, francese e tedesco. Al primo avvio segue la lingua del sistema e la scelta si può cambiare in qualsiasi momento.",
+                "tr": "Uygulama beş dil konuşuyor: İngilizce, Türkçe, İtalyanca, Fransızca ve Almanca. İlk açılışta sisteminizin dilini izliyor, ve bu seçim istendiği zaman değiştirilebiliyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Ein Panel mit der laufenden Version und dem Build sowie den Neuerungen der letzten Versionen. Es funktioniert offline: Das Changelog steckt in der App selbst.",
+                "en": "A panel showing which version and which build you are running, plus what changed in recent releases. It works offline: the changelog is compiled into the app itself.",
+                "fr": "Un panneau indiquant la version et la build en cours d'exécution, ainsi que les nouveautés des dernières versions. Il fonctionne hors ligne : le journal des modifications est intégré à l'application.",
+                "it": "Un pannello con la versione e la build in esecuzione e le novità delle ultime versioni. Funziona anche offline: il changelog è compilato dentro l'app stessa.",
+                "tr": "Hangi sürümü ve hangi derlemeyi çalıştırdığınızı, ve son sürümlerde ne değiştiğini gösteren bir pencere. Çevrimdışı çalışıyor: changelog uygulamanın içine derleniyor."
+              }
+            },
+            {
+              "kind": "performance",
+              "text": {
+                "de": "Das Öffnen eines großen Scans braucht weniger Speicher, dank der kompakteren Baumdarstellung im Scan-Kern.",
+                "en": "Opening a large scan uses less memory, following the smaller tree representation in the scanning core.",
+                "fr": "Ouvrir une analyse volumineuse consomme moins de mémoire, grâce à la représentation d'arbre plus compacte du moteur d'analyse.",
+                "it": "Aprire una scansione grande consuma meno memoria, grazie alla rappresentazione dell'albero più compatta nel motore di scansione.",
+                "tr": "Büyük bir taramayı açmak daha az bellek kullanıyor; tarama çekirdeğindeki küçülen ağaç gösterimi sayesinde."
+              }
+            }
+          ]
+        },
         {
           "version": "0.2.0",
           "date": "2026-09-08",
@@ -379,39 +391,45 @@
       ]
     },
     "hub": {
-      "unreleased": [
-        {
-          "kind": "added",
-          "text": {
-            "de": "Die About-Seite zeigt jetzt, welcher Build läuft (Commit, Build-Datum und Kanal), und was sich in den letzten Versionen geändert hat.",
-            "en": "The About page now shows which build is running (commit, build date and channel) and what changed in the last few releases.",
-            "fr": "La page About indique désormais quelle build est en cours d'exécution (commit, date de compilation et canal) ainsi que ce qui a changé dans les dernières versions.",
-            "it": "La pagina About mostra ora quale build è in esecuzione (commit, data di compilazione e canale) e cosa è cambiato nelle ultime versioni.",
-            "tr": "Hakkında sayfası artık hangi derlemenin çalıştığını (commit, derleme tarihi ve kanal) ve son birkaç sürümde ne değiştiğini gösteriyor."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "`/health` meldet Commit und Kanal neben der Version, sodass sich ein laufender Container ohne Anmeldung identifizieren lässt.",
-            "en": "`/health` reports the commit and the channel next to the version, so a running container can be identified without signing in.",
-            "fr": "`/health` indique le commit et le canal à côté de la version, ce qui permet d'identifier un conteneur en cours d'exécution sans se connecter.",
-            "it": "`/health` riporta il commit e il canale accanto alla versione, così un container in esecuzione può essere identificato senza autenticarsi.",
-            "tr": "`/health` sürümün yanında commit ve kanalı da bildiriyor; böylece çalışan bir konteyner oturum açmadan tanınabiliyor."
-          }
-        },
-        {
-          "kind": "performance",
-          "text": {
-            "de": "Das Laden eines großen Snapshots braucht weniger Speicher, dank der kompakteren Baumdarstellung im Scan-Kern.",
-            "en": "Loading a large snapshot uses less memory, following the smaller tree representation in the scanning core.",
-            "fr": "Le chargement d'un instantané volumineux consomme moins de mémoire, grâce à la représentation d'arbre plus compacte du moteur d'analyse.",
-            "it": "Il caricamento di uno snapshot grande consuma meno memoria, grazie alla rappresentazione dell'albero più compatta nel motore di scansione.",
-            "tr": "Büyük bir anlık görüntüyü yüklemek daha az bellek kullanıyor; tarama çekirdeğindeki küçülen ağaç gösterimi sayesinde."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.3.0",
+          "date": "2026-09-09",
+          "published": true,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Die About-Seite zeigt jetzt, welcher Build läuft (Commit, Build-Datum und Kanal), und was sich in den letzten Versionen geändert hat.",
+                "en": "The About page now shows which build is running (commit, build date and channel) and what changed in the last few releases.",
+                "fr": "La page About indique désormais quelle build est en cours d'exécution (commit, date de compilation et canal) ainsi que ce qui a changé dans les dernières versions.",
+                "it": "La pagina About mostra ora quale build è in esecuzione (commit, data di compilazione e canale) e cosa è cambiato nelle ultime versioni.",
+                "tr": "Hakkında sayfası artık hangi derlemenin çalıştığını (commit, derleme tarihi ve kanal) ve son birkaç sürümde ne değiştiğini gösteriyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "`/health` meldet Commit und Kanal neben der Version, sodass sich ein laufender Container ohne Anmeldung identifizieren lässt.",
+                "en": "`/health` reports the commit and the channel next to the version, so a running container can be identified without signing in.",
+                "fr": "`/health` indique le commit et le canal à côté de la version, ce qui permet d'identifier un conteneur en cours d'exécution sans se connecter.",
+                "it": "`/health` riporta il commit e il canale accanto alla versione, così un container in esecuzione può essere identificato senza autenticarsi.",
+                "tr": "`/health` sürümün yanında commit ve kanalı da bildiriyor; böylece çalışan bir konteyner oturum açmadan tanınabiliyor."
+              }
+            },
+            {
+              "kind": "performance",
+              "text": {
+                "de": "Das Laden eines großen Snapshots braucht weniger Speicher, dank der kompakteren Baumdarstellung im Scan-Kern.",
+                "en": "Loading a large snapshot uses less memory, following the smaller tree representation in the scanning core.",
+                "fr": "Le chargement d'un instantané volumineux consomme moins de mémoire, grâce à la représentation d'arbre plus compacte du moteur d'analyse.",
+                "it": "Il caricamento di uno snapshot grande consuma meno memoria, grazie alla rappresentazione dell'albero più compatta nel motore di scansione.",
+                "tr": "Büyük bir anlık görüntüyü yüklemek daha az bellek kullanıyor; tarama çekirdeğindeki küçülen ağaç gösterimi sayesinde."
+              }
+            }
+          ]
+        },
         {
           "version": "0.2.0",
           "date": "2026-09-08",
