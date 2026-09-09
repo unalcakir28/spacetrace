@@ -19,9 +19,15 @@ use std::process::Command;
 fn main() {
     // Anything not set by CI falls through to git, then to a marker. A build
     // that cannot tell you where it came from must say so, not guess.
+    // Shortened here rather than at the source, because the two sources
+    // disagree: CI passes `github.sha`, which is all forty characters, while
+    // git is asked for seven. Truncating in one place is what keeps a local
+    // build and a published one looking the same — and forty hex characters in
+    // a version banner is noise nobody reads back over the phone.
     let sha = env_or("SPACETRACE_GIT_SHA", || {
         git(&["rev-parse", "--short=7", "HEAD"])
-    });
+    })
+    .map(|sha| sha.chars().take(7).collect::<String>());
     let date = env_or("SPACETRACE_BUILD_DATE", || {
         git(&[
             "log",
