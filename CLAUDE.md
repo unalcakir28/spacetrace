@@ -69,7 +69,11 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 5. **İptal edilen tarama ağaç döndürmez.** `ScanProgress::cancel` sonrası
    `scan()` `ErrorKind::Interrupted` verir. Kısmi bir ağaç tam görünür ve
    yanlış toplam bildirir; onu gerçek snapshot'ların yanına yazmak en kötü
-   sonuçtur.
+   sonuçtur. **Testi yazarken:** "yürüyüş erkenden durdu" iddiası
+   *tarama başlamadan* iptal edip `progress.files == 0` doğrulanarak kurulur.
+   Yan thread'den iptal edip "hepsini bitirmemiş olmalı" demek, yürüyüşün
+   zamanlayıcıdan yavaş olduğuna bahis oynamaktır ve hızlı makinede kaybeder
+   (macOS CI'da kaybetti).
 6. **Hangi ölçüyle sıralandığı/çizildiği bir parametre, varsayılan değil.**
    `SizeBasis` (`Logical` | `OnDisk`) `children_by`, `Node::measure` ve
    `LayoutOptions.basis` üzerinden geçer. Seyrek bir dosya tuttuğundan 50 kat
