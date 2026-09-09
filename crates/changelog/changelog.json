@@ -266,19 +266,25 @@
       ]
     },
     "desktop": {
-      "unreleased": [
-        {
-          "kind": "fixed",
-          "text": {
-            "de": "Die Update-Prüfung funktioniert. 0.3.0 hat sie angekündigt, aber es wurde kein Update-Manifest mitveröffentlicht, sodass die App nichts zum Prüfen hatte.",
-            "en": "The update check works. 0.3.0 announced it, but no update manifest was published alongside it, so the app had nothing to check against.",
-            "fr": "La vérification des mises à jour fonctionne. La 0.3.0 l'annonçait, mais aucun manifeste de mise à jour n'a été publié avec elle : l'application n'avait donc rien à consulter.",
-            "it": "Il controllo degli aggiornamenti funziona. La 0.3.0 lo annunciava, ma non è stato pubblicato alcun manifest di aggiornamento, quindi l'app non aveva nulla da controllare.",
-            "tr": "Güncelleme kontrolü çalışıyor. 0.3.0 bunu duyurmuştu ama yanında bir güncelleme manifesti yayınlanmadığı için uygulamanın bakacağı bir şey yoktu."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.3.1",
+          "date": "2026-09-09",
+          "published": true,
+          "entries": [
+            {
+              "kind": "fixed",
+              "text": {
+                "de": "Die Update-Prüfung funktioniert. 0.3.0 hat sie angekündigt, aber es wurde kein Update-Manifest mitveröffentlicht, sodass die App nichts zum Prüfen hatte.",
+                "en": "The update check works. 0.3.0 announced it, but no update manifest was published alongside it, so the app had nothing to check against.",
+                "fr": "La vérification des mises à jour fonctionne. La 0.3.0 l'annonçait, mais aucun manifeste de mise à jour n'a été publié avec elle : l'application n'avait donc rien à consulter.",
+                "it": "Il controllo degli aggiornamenti funziona. La 0.3.0 lo annunciava, ma non è stato pubblicato alcun manifest di aggiornamento, quindi l'app non aveva nulla da controllare.",
+                "tr": "Güncelleme kontrolü çalışıyor. 0.3.0 bunu duyurmuştu ama yanında bir güncelleme manifesti yayınlanmadığı için uygulamanın bakacağı bir şey yoktu."
+              }
+            }
+          ]
+        },
         {
           "version": "0.3.0",
           "date": "2026-09-09",
