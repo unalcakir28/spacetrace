@@ -124,36 +124,26 @@ push etmeden önce bunu düşün.
 
 Tam anlatım [docs/RELEASING.md](docs/RELEASING.md); kolay bozulan kısımlar:
 
-- **Üç bileşenin indirilebilir dosyaları da bu deponun release'lerinde.** Private
-  bir deponun release varlıkları kimlik doğrulaması olmadan indirilemiyor, o
-  yüzden masaüstü ve hub kendi CI'larında derleyip buraya yayınlıyor
-  (`RELEASE_TOKEN` sırrı ile). Etiketler: `continuous` / `v*` (CLI),
-  `desktop-continuous` / `desktop-v*`, `hub-continuous` / `hub-v*`.
-- **Etiket ve varlık adları sabit sözleşme.**
-  `website/src/data/releases.ts` bunlara doğrudan bağlanıyor ve `install.sh`
-  dosya adını verilen sürümden kuruyor; yeniden adlandırmak indirme sayfasını
-  sessizce kırar.
+- **Üç bileşenin indirilebilir dosyaları da bu deponun release'lerinde.**
+  Masaüstü ve hub kendi CI'larında derleyip buraya yayınlıyor (`RELEASE_TOKEN`
+  sırrı ile — bir depodaki `GITHUB_TOKEN` başka depoya yazamıyor, depo public
+  olsa da). Etiketler: `continuous` / `v*` (CLI), `desktop-continuous` /
+  `desktop-v*`, `hub-continuous` / `hub-v*`.
+- **Etiket ve varlık adları sabit sözleşme, ve karşı taraf artık ayrı bir
+  depoda.** Site deposundaki `src/data/releases.ts` bunlara doğrudan bağlanıyor
+  ve `install.sh` dosya adını verilen sürümden kuruyor. Yeniden adlandırmak
+  indirme sayfasını sessizce kırar — ve iki ayrı depo olduğu için tek bir CI
+  adımı bunu yakalamıyor, aynı gün iki commit gerekiyor.
 - **Konteyner imajları önceden derlenmiş musl ikililerinden kuruluyor**
   (`.github/docker/Dockerfile.release`), kökteki `Dockerfile`'dan değil. QEMU
   altında Rust derlemek arm64 imajını dakikalar yerine on dakikalar sürdürüyor.
   Kökteki Dockerfile duruyor çünkü `docker build .` bir klonda çalışsın diye var.
-- **`website/` bir Astro projesi**, beş dilde (en/tr/it/fr/de) 31 statik sayfa.
-  Sözlükler `src/i18n/ui/en.ts`'e karşı tipli, yani eksik çeviri anahtarı
-  derleme hatası. `yarn check` yazma — yarn'ın yerleşik komutu script'i
-  gölgeliyor; doğrusu `yarn typecheck`. İndirme sözleşmesi
-  `src/data/releases.ts` içinde tek yerde. JavaScript kapalıyken de çalışan bir
-  indirme sayfası bırakmak zorunlu. Renk paleti masaüstünün `theme.css`'inden
-  alınmış — ikinci bir palet icat etmek, ürüne benzemeyen bir site demek.
-  Pazarlama sırası masaüstü → CLI → hub; navigasyon ve ana sayfa bu sırayı
-  izliyor.
-- **Otomatik dil yalnızca öneksiz sayfalarda çalışıyor** ve açık seçim
-  (`localStorage`'daki `spacetrace.lang`) her zaman kazanıyor. Tarayıcı
-  tercihinde İngilizce diğerlerinden önce geçiyorsa hiçbir şey olmuyor. Bunu
-  "her sayfada çalışsın" diye genişletmek, paylaşılan bir `/tr/...` bağlantısını
-  açan İngilizce okuyan kullanıcıyı yerinden oynatır. Gerekçe
-  docs/RELEASING.md.
-- Sürüm iş akışı belge ve site değişikliklerinde çalışmıyor (`paths-ignore`),
-  Pages iş akışı yalnızca `website/**` değişince çalışıyor.
+- **Site bu depoda değil.**
+  [unalcakir28/spacetrace-website](https://github.com/unalcakir28/spacetrace-website)
+  — Astro, beş dil, `spacetrace.teknobakkall.com`. Nasıl çalıştığı o deponun
+  `CLAUDE.md`'sinde; burada bilmen gereken tek şey yukarıdaki indirme
+  sözleşmesi. Ayrılma gerekçesi docs/RELEASING.md → Site.
+- Sürüm iş akışı belge değişikliklerinde çalışmıyor (`paths-ignore`).
 
 ## Sıradaki iş
 

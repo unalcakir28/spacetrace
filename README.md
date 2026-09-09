@@ -2,10 +2,10 @@
 
 Scan disk usage, keep snapshots, and see **what grew**.
 
-**[unalcakir28.github.io/spacetrace](https://unalcakir28.github.io/spacetrace/)**
+**[spacetrace.teknobakkall.com](https://spacetrace.teknobakkall.com/)**
 — what it is, [downloads and install
-instructions](https://unalcakir28.github.io/spacetrace/download/), and the
-[usage guide](https://unalcakir28.github.io/spacetrace/guide/).
+instructions](https://spacetrace.teknobakkall.com/download/), and the
+[usage guide](https://spacetrace.teknobakkall.com/guide/).
 
 Every disk analyser on the market (TreeSize, WizTree, DaisyDisk, FreeSize, ncdu)
 answers one question: *"what is on the disk in front of me right now?"*.
@@ -58,7 +58,7 @@ POSIX `sh`, because it also has to run on NAS firmware whose shell is busybox.
 
 Prebuilt archives for Linux (musl, x86_64 and aarch64), macOS (both
 architectures) and Windows are on the
-[download page](https://unalcakir28.github.io/spacetrace/download/) and in
+[download page](https://spacetrace.teknobakkall.com/download/) and in
 [releases](https://github.com/unalcakir28/spacetrace/releases). Two channels:
 
 | Channel | Tag | What it is |

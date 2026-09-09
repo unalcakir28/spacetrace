@@ -6,14 +6,21 @@ notları, indirme sayfası, kurulum talimatları — İngilizce (K1).
 
 ## Neden hepsi bu depoda yayınlanıyor
 
-`spacetrace-desktop` ve `spacetrace-hub` private (K2: ticari kısım). **Private
-bir deponun release varlıkları kimlik doğrulaması olmadan indirilemez.** İndirme
-bağlantısı herkese açık olacaksa varlıklar public bir depoda durmak zorunda.
+Bu düzen, masaüstü ve hub private'ken kurulmuştu: private bir deponun release
+varlıkları kimlik doğrulaması olmadan indirilemiyor, o yüzden varlıkların public
+bir depoda durması zorunluydu.
 
-Çözüm: her depo kendi kodunu kendi CI'ında derler, çıktıyı **bu deponun
-release'lerine** yayınlar. Kaynak private kalır, indirme public olur. Tek bir
-yerde de olması iyi: indirme sayfası tek bir GitHub API çağrısıyla üç bileşenin
-sürümünü öğreniyor.
+**O kısıt artık yok** — üç depo da public. Ama düzen duruyor, çünkü artık başka
+sebepleri var:
+
+- İndirme sayfası **tek bir GitHub API çağrısıyla** üç bileşenin sürümünü
+  öğreniyor. Üç ayrı depoya dağıtmak üç çağrı ve üç hata yolu demek.
+- `install.sh` ve sitenin `src/data/releases.ts` dosyası tek bir depoya bağlı.
+  Dağıtmak, çalışan her indirme bağlantısını hiçbir kazanç karşılığında
+  yeniden yazmak olurdu.
+
+Yani her depo kendi kodunu kendi CI'ında derler, çıktıyı **bu deponun
+release'lerine** yayınlar.
 
 ## Kanallar
 
@@ -55,10 +62,11 @@ klonda çalışsın diye.
 
 Bunlar bir kez yapılıyor ve otomatikleştirilemiyor.
 
-### 1. `RELEASE_TOKEN` (iki private depo için)
+### 1. `RELEASE_TOKEN` (masaüstü ve hub depoları için)
 
-Private bir depodaki `GITHUB_TOKEN` başka bir depoya yazamaz. Fine-grained bir
-PAT gerekiyor:
+Bir depodaki `GITHUB_TOKEN` **başka** bir depoya yazamaz — bu, depo public olsa
+da geçerli; mesele gizlilik değil, token'ın kapsamı. Masaüstü ve hub kendi
+çıktılarını buraya yayınladığı için ayrı bir token gerekiyor:
 
 1. <https://github.com/settings/personal-access-tokens/new>
 2. Repository access → **Only select repositories** → `unalcakir28/spacetrace`
@@ -72,17 +80,18 @@ gh secret set RELEASE_TOKEN --repo unalcakir28/spacetrace-desktop
 gh secret set RELEASE_TOKEN --repo unalcakir28/spacetrace-hub
 ```
 
-Sır yoksa iş akışı **hata vermiyor**: varlıkları kendi private deposunda
-yayınlıyor ve bir uyarı basıyor. Yani ilk push'lar boşa gitmez, sadece indirme
-bağlantıları public olmaz.
+Sır yoksa iş akışı **hata vermiyor**: varlıkları kendi deposunda yayınlıyor ve
+bir uyarı basıyor. Yani ilk push'lar boşa gitmez — ama varlıklar sitenin
+beklediği yerde olmaz, yani indirme bağlantıları 404 verir.
 
 Token süresi dolduğunda yayınlama adımı 403 ile düşer. Yenile ve aynı komutu
 tekrar çalıştır.
 
 ### 2. GHCR paket görünürlüğü
 
-Private bir depodan oluşturulan GHCR paketi private başlıyor. `docker pull`
-kimlik doğrulaması istemesin diye bir kez:
+GHCR paketleri, deposu public olsa bile **private başlıyor** — paket
+görünürlüğü depo görünürlüğünden ayrı. `docker pull` kimlik doğrulaması
+istemesin diye her yeni paket için bir kez:
 
 Paket sayfası → **Package settings** → Change visibility → **Public**.
 
@@ -92,18 +101,22 @@ Paket sayfası → **Package settings** → Change visibility → **Public**.
 `spacetrace` imajı bu public depodan geldiği için zaten public olabilir; yine de
 ilk yayından sonra kontrol et.
 
-### 3. GitHub Pages — **yapıldı**
+### 3. GitHub Pages — **artık bu depoda değil**
 
-`GITHUB_TOKEN`'ın hiç var olmamış bir Pages sitesini oluşturma izni yok
-("Resource not accessible by integration"), yani `configure-pages` bunu
-kendisi başlatamıyor. Bir kez açıldı:
+Site kendi deposuna taşındı, yani bu adım oraya ait. Kaydı burada tutmakta bir
+fayda var, çünkü aynı tuzağa iki kez düşülüyor: `GITHUB_TOKEN`'ın hiç var
+olmamış bir Pages sitesini oluşturma izni yok ("Resource not accessible by
+integration"), yani `configure-pages` bunu kendisi başlatamıyor. Yeni bir Pages
+sitesi bir kez elle açılmak zorunda:
 
 ```bash
-gh api -X POST repos/unalcakir28/spacetrace/pages -f build_type=workflow
+gh api -X POST repos/unalcakir28/spacetrace-website/pages -f build_type=workflow
+gh api -X PUT  repos/unalcakir28/spacetrace-website/pages -f cname=spacetrace.teknobakkall.com
 ```
 
-Site <https://unalcakir28.github.io/spacetrace/> adresinde. Bir daha
-gerekmiyor; iş akışı bundan sonra yalnızca yapılandırmayı okuyor.
+Alan adı Cloudflare'de CNAME olarak `unalcakir28.github.io`'ya bakıyor ve
+**proxy kapalı** (gri bulut) olmak zorunda: turuncu bulutla önde dururken
+GitHub alan adını doğrulayamıyor ve Let's Encrypt sertifikasını üretemiyor.
 
 ## Kararlı sürüm kesmek
 
@@ -152,85 +165,18 @@ gerektiriyor ve bunların hiçbiri yoksayılmıyor. Yine de olursa çıkış yol
 
 ## Site
 
-`website/` bir **Astro** projesi. Beş dil (en, tr, it, fr, de) ve 31 statik
-sayfa üretiyor; `pages.yml` bunu derleyip Pages'e yüklüyor.
+Site artık bu depoda değil:
+**[unalcakir28/spacetrace-website](https://github.com/unalcakir28/spacetrace-website)**
+— Astro, beş dil, 31 sayfa, `spacetrace.teknobakkall.com` adresinden yayında.
+Nasıl çalıştığı ve kolay bozulan yerleri o deponun `CLAUDE.md`'sinde.
 
-Kolay bozulan yerler:
+Buradan ayrıldı çünkü onu burada tutan tek şey adresti: GitHub Pages proje
+sitesini `/<depo-adı>/` altında sunuyor, yani depo adı URL'in parçasıydı ve
+ayırmak adresi bozardı. Kendi alan adı o bağı kopardı; sitenin `crates/` ile
+zaten hiçbir kod bağı yoktu.
 
-- **Sözlükler İngilizceye karşı tipli.** `src/i18n/ui/en.ts` kaynak; diğer dört
-  dil `Dictionary` tipiyle ona uyuyor. Bir dile eklenip diğerlerinde unutulan
-  anahtar `yarn typecheck` ile derleme hatası veriyor, canlı sayfada boşluk
-  olarak değil. İş akışı bu yüzden `build`'den önce `typecheck` çalıştırıyor.
-- **`yarn check` yazma.** yarn 1.x'in kendi yerleşik komutu ve script'i
-  gölgeliyor — sessizce "Folder in sync" der ve tip denetimi hiç çalışmaz.
-  Script'in adı bu yüzden `typecheck`.
-- **İndirme sözleşmesi tek yerde:** `src/data/releases.ts`. Etiket adları ve
-  varlık adları yukarıdaki tablodakilerle aynı olmak zorunda; oradaki bir
-  yeniden adlandırma her indirme bağlantısını kırar.
-- **JS kapalıyken de çalışan bir indirme sayfası bırakmak şart.** Bağlantılar
-  işaretlemede gerçek dosyalara işaret ediyor (`continuous` etiketleri hiç
-  kımıldamıyor); `src/scripts/releases.ts` yalnızca üzerine bilgi ekliyor —
-  sürüm, tarih, boyut, ve kararlı sürüm çıktığında bağlantıların ona
-  yükseltilmesi. Her adım korumalı, hata sessizce yutuluyor.
-- **Etkileşimli treemap tek React adası** (`src/components/demo/`). Sunucuda da
-  makul bir geometriyle çiziliyor, yani JS olmadan da dolu görünüyor.
-- **`base: /spacetrace`** — her iç bağlantı `localeUrl()` üzerinden geçiyor. Elle
-  yazılan bir yol `astro dev`'de çalışır, üretimde 404 verir. Kendi alan adına
-  geçilirse bu `/` olur ve elle yazılmış adreslerin hepsi elden geçmek zorunda;
-  liste [TODO.md](../TODO.md) → "Yayın sonrası — SEO ve AISEO" içinde.
-
-SEO ve AI keşfedilebilirliği tarafında eksikler tespit edildi ama yayın sonrasına
-bırakıldı — `<head>` etiketlerine ya da site adresine dokunmadan önce
-[TODO.md](../TODO.md) içindeki o bölüme bak, ölçümler orada.
-
-### Otomatik dil
-
-Pages statik, yani `Accept-Language` okuyacak bir sunucu yok — algılama
-`src/components/LangRedirect.astro` içindeki satır içi script'te, `<head>`'in en
-başında (stylesheet ve fontlardan önce, terk edilecek sayfa için boşuna istek
-atılmasın diye).
-
-Dört kural var ve her biri bunun kullanıcıya karşı çalışmasını engellemek için:
-
-1. **Yalnızca öneksiz (İngilizce) sayfalarda çalışıyor.** `/tr/hub/` gibi dili
-   adıyla söyleyen bir adres birinin bilinçli seçimi ya da paylaştığı bağlantı;
-   oradan taşımak yanlış olurdu.
-2. **Açık seçim kalıcı kazanıyor.** Değiştiriciden dil seçmek, bildirim
-   çubuğundan "English"e dönmek ya da çubuğu kapatmak `localStorage`'a
-   `spacetrace.lang` yazıyor; ondan sonra bu script hiç çalışmıyor.
-3. **Tarayıcının tercih listesinde İngilizce, diğer dört dilden önce geçiyorsa
-   hiçbir şey olmuyor.** Sıra okunuyor: `["en-GB","tr"]` İngilizce'de kalıyor,
-   `["tr-TR","en-US"]` Türkçe'ye gidiyor. Desteklenmeyen bir dil de İngilizce'de
-   bırakıyor (`hreflang` içindeki `x-default` bu).
-4. **Her hata sayfayı yerinde bırakıyor** — gizli sekmede `localStorage`
-   istisna atabilir, `navigator.languages` olmayabilir.
-
-Yönlendirmeden sonra hedef sayfada bir kez bildirim çubuğu görünüyor
-(`LangNotice.astro`): o dilde bir cümle ve çıkış yolu olarak **English**.
-Haber verilmeden taşınmak, dil algılamanın insanların sevmediği kısmı; çıkış tek
-tık ve okuyabildikleri bir kelime olmak zorunda. Çubuk `sessionStorage`
-bayrağıyla tek seferlik — okunduğu anda siliniyor.
-
-`404` sayfasında algılama kapalı (`detectLanguage={false}`): yolu çevrilmiş
-rotalardan biri değil.
-
-#### Doğrulama zorunlu, ve derlenmiş çıktıya karşı
-
-`yarn verify` (`website/scripts/verify-lang.mjs`) yönlendiriciyi **`dist/`'ten
-çıkarıp sahte bir tarayıcıda çalıştırıyor** ve 20 vakada okuyucunun nereye
-gittiğini ölçüyor. Pages iş akışında `yarn build`'den sonra çalışıyor.
-
-Bu adım bir sebeple var: özellik bir kez **etkisiz halde canlıya çıktı**.
-Astro'da satır içi script gövdesini JSX çocuğu olarak `` {`…`} `` ile sarmak,
-sarmalayıcıyı olduğu gibi HTML'e basıyor; ortaya çıkan kod bir blok içinde
-değerlendirilip atılan bir string oluyor. Sonuç: derleme yeşil, script sayfada,
-içinde `window.location.replace` **geçiyor**, ve hiçbir şey yapmıyor. Yani
-"script var mı" ya da "içinde şu ifade var mı" diye bakan bir test bunu
-onaylardı — tek dişli kontrol script'i çalıştırmak.
-
-İkinci tuzak: `define:vars` ile `set:html` birlikte kullanılamıyor, `define:vars`
-kazanıyor ve gövde tamamen kayboluyor. Bu yüzden tek mekanizma var — değerler
-dahil tüm script frontmatter'da string olarak kuruluyor ve `set:html` ile
-veriliyor.
-
-Davranışı değiştirirken `verify-lang.mjs`'deki vakaları birlikte güncelle.
+**Bu depoda kalan tek bağ, aşağıdaki indirme sözleşmesi.** Sitenin
+`src/data/releases.ts` dosyası buradaki üç sürüm iş akışının ürettiği etiket ve
+varlık adlarına birebir bağlı. Yukarıdaki tabloda bir ad değiştirirsen site
+deposunu da aynı gün güncelle, yoksa her indirme bağlantısı sessizce kırılır —
+ve artık iki ayrı depo olduğu için tek bir CI adımı bunu yakalamıyor.

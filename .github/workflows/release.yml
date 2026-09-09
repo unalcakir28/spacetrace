@@ -18,14 +18,9 @@ on:
     # not free.
     paths-ignore:
       - "docs/**"
-      - "website/**"
       - "*.md"
       - "tasks/**"
       - ".gitignore"
-      # The site's own workflow has nothing to do with the binaries, and every
-      # needless run here deletes and recreates the `continuous` release —
-      # a short 404 window on every download link, for nothing.
-      - ".github/workflows/pages.yml"
   workflow_dispatch:
     inputs:
       tag:
