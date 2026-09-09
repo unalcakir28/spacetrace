@@ -1,5 +1,6 @@
 <!-- Generated from crates/changelog/changelog.json in unalcakir28/spacetrace.
-     Do not edit by hand: run `cargo run -p spacetrace-changelog -- markdown`. -->
+     Do not edit by hand. From a checkout of that repo:
+       cargo run -p spacetrace-changelog -- markdown --component cli > CHANGELOG.md -->
 
 # Changelog
 

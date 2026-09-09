@@ -7,16 +7,27 @@
 
 use crate::{Changelog, Component, Entry, Kind, Release, DEFAULT_LOCALE};
 
-const GENERATED_BY: &str =
-    "<!-- Generated from crates/changelog/changelog.json in unalcakir28/spacetrace.\n     \
-     Do not edit by hand: run `cargo run -p spacetrace-changelog -- markdown`. -->";
+/// The header of every generated `CHANGELOG.md`.
+///
+/// It names the component, because two of the three files live in repos where
+/// the generator is not a command you can run — the instruction has to say
+/// which repo to run it in and with what, or it is just noise above a file
+/// somebody will edit by hand anyway.
+fn generated_by(component: Component) -> String {
+    format!(
+        "<!-- Generated from crates/changelog/changelog.json in unalcakir28/spacetrace.\n     \
+         Do not edit by hand. From a checkout of that repo:\n       \
+         cargo run -p spacetrace-changelog -- markdown --component {} > CHANGELOG.md -->",
+        component.slug()
+    )
+}
 
 /// The whole `CHANGELOG.md` for one component.
 pub fn markdown(changelog: &Changelog, component: Component) -> String {
     let log = changelog.component(component);
     let mut out = String::new();
 
-    out.push_str(GENERATED_BY);
+    out.push_str(&generated_by(component));
     out.push_str("\n\n# Changelog\n\n");
     out.push_str(&format!(
         "What changed in {}, newest first.\n",
