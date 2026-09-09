@@ -22,7 +22,13 @@
 
   --text: #eaeefb;
   --dim: #a7b1d0;
-  --faint: #737e9f;
+  /* Lightened from the application's own #737e9f: on a --panel card that
+     value measured 4.30:1, under the 4.5 AA floor for normal text. This one
+     clears AA on every surface faint text actually sits on — the ground
+     (6.13), --panel (5.40) and --panel-raised (4.80) — while keeping a
+     visible step down from --dim. The app keeps its value; a native window
+     and a web page do not have to agree on a grey. */
+  --faint: #8290ae;
 
   /* Interface accent: buttons, focus, active states. Deliberately absent from
      the treemap, where every hue belongs to data. */
@@ -47,20 +53,49 @@
   --cat-archive: #45d3ba;
   --cat-code: #7bd88f;
 
-  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+  /* One family, two widths.
+     ---------------------------------------------------------------------
+     Archivo is a variable grotesque with a genuine width axis (62%-125%),
+     so headlines can be wide and grounded while body text stays normal —
+     the same skeleton throughout, one woff2 per subset. It replaces IBM
+     Plex, whose Condensed cut and mono-everywhere labelling were what made
+     this site read as a typed engineering document rather than a product.
+
+     Mono is now confined to places where a machine speaks: code, pre, kbd,
+     and file paths. It is not a styling device for small labels. */
+  --sans: "Archivo", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
     "Liberation Mono", monospace;
-  --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    system-ui, sans-serif;
-  --cond: "IBM Plex Sans Condensed", "IBM Plex Sans", -apple-system,
-    system-ui, sans-serif;
+
+  /* Width steps on the one axis. Display type is wide because the product's
+     own artefact is a field of rectangles. */
+  --w-display: 112%;
+  --w-head: 106%;
+  --w-sub: 102%;
+
+  /* Type scale, ratio ~1.26 from a 17px body. */
+  --t-2xs: 0.75rem;
+  --t-xs: 0.8125rem;
+  --t-sm: 0.9375rem;
+  --t-base: 1.0625rem;
+  --t-md: 1.3125rem;
+  --t-lg: clamp(1.32rem, 1.1rem + 0.8vw, 1.62rem);
+  --t-xl: clamp(1.7rem, 1.25rem + 1.9vw, 2.35rem);
+  --t-2xl: clamp(2.3rem, 1.5rem + 3.4vw, 3.5rem);
 
   --r-control: 6px;
   --r-surface: 10px;
   --r-chip: 3px;
 
-  /* Two measures: artefacts get the wide one, prose the narrow one. */
-  --wide: 1160px;
-  --prose: 68ch;
+  /* Two measures: artefacts get the wide one, prose the narrow one. Prose
+     stays under 80 characters, where a line stops being work to read. */
+  --wide: 1180px;
+  --prose: 62ch;
+
+  /* Vertical rhythm. Sections breathe: crowding was half of why the old
+     layout felt unfinished. */
+  --band: clamp(64px, 7.5vw, 108px);
 
   /* Motion. One curve, because nothing here moves from A to B: everything
      either enters, exits, or answers a pointer, and all three want ease-out.
@@ -94,28 +129,28 @@ body {
   margin: 0;
   background: var(--ink);
   color: var(--text);
-  font: 400 16px/1.65 var(--sans);
+  font: 400 var(--t-base) / 1.62 var(--sans);
+  font-stretch: 100%;
   -webkit-font-smoothing: antialiased;
   /* A stray horizontal scrollbar on a page this wide is always a bug, never a
      feature; wide artefacts scroll inside their own container instead. */
   overflow-x: clip;
 }
 
-/* A faint indigo wash behind the top of every page, so the ground reads as a
-   surface rather than a void. Static: a moving gradient would be decoration
-   that loops, which is exactly what the motion rules rule out. */
+/* One faint cool wash behind the top of every page, so the ground reads as a
+   surface rather than a void. Static, and only one: a second warm gradient
+   used to sit on the right, which was decoration and also contradicted the
+   palette's own rule that warm means "this grew". */
 body::before {
   content: "";
   position: fixed;
   inset: 0 0 auto 0;
-  height: 70vh;
-  background:
-    radial-gradient(
-      120% 100% at 15% 0%,
-      rgba(139, 155, 255, 0.1),
-      transparent 60%
-    ),
-    radial-gradient(80% 70% at 88% 0%, rgba(255, 180, 84, 0.055), transparent 55%);
+  height: 62vh;
+  background: radial-gradient(
+    120% 100% at 18% 0%,
+    rgba(139, 155, 255, 0.09),
+    transparent 62%
+  );
   pointer-events: none;
   z-index: 0;
 }
@@ -129,41 +164,62 @@ footer {
 
 /* ------------------------------------------------------------------ type */
 
+/* Headings widen as they grow. Tracking tightens as size increases, which is
+   what keeps a large line from reading as loose. */
 h1,
 h2,
 h3,
 h4 {
-  font-family: var(--cond);
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-family: var(--sans);
   margin: 0;
   text-wrap: balance;
 }
 
 h1 {
-  font-size: clamp(2.1rem, 5.2vw, 3.5rem);
-  line-height: 1.06;
+  font-size: var(--t-2xl);
+  font-stretch: var(--w-display);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 0.98;
 }
 
 h2 {
-  font-size: clamp(1.5rem, 3vw, 2.1rem);
-  line-height: 1.12;
+  font-size: var(--t-xl);
+  font-stretch: var(--w-head);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.05;
 }
 
 h3 {
-  font-size: 1.16rem;
-  line-height: 1.28;
+  font-size: var(--t-lg);
+  font-stretch: var(--w-sub);
   font-weight: 600;
+  letter-spacing: -0.014em;
+  line-height: 1.22;
 }
 
 h4 {
-  font-size: 1rem;
+  font-size: var(--t-base);
+  font-stretch: var(--w-sub);
   font-weight: 600;
+  letter-spacing: -0.008em;
 }
 
 p {
   margin: 0 0 1.05em;
   max-width: var(--prose);
+}
+
+/* Headings carry `margin: 0`, so a paragraph placed directly after one had no
+   space above it at all and the two lines touched. Kept at element
+   specificity (0,0,0,2) so every class that sets its own value — .band-head p,
+   .hero .lede, .part .pitch — still wins. */
+h1 + p,
+h2 + p,
+h3 + p,
+h4 + p {
+  margin-top: 0.7em;
 }
 
 a {
@@ -285,17 +341,18 @@ table th {
 /* padding-block, never the shorthand: these classes sit on the same element as
    .wrap and `padding: X 0` would silently zero its gutter. */
 .band {
-  padding-block: clamp(56px, 8vw, 96px);
+  padding-block: var(--band);
   border-top: 1px solid var(--line);
 }
 
 .band-head {
-  margin-bottom: 34px;
+  margin-bottom: clamp(30px, 4vw, 52px);
 }
 
 .band-head p {
   color: var(--dim);
-  margin: 12px 0 0;
+  font-size: var(--t-md);
+  margin: 16px 0 0;
 }
 
 .split {
@@ -326,7 +383,8 @@ table th {
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  font: 500 0.96rem/1 var(--sans);
+  font: 550 var(--t-sm) / 1 var(--sans);
+  font-stretch: var(--w-sub);
   padding: 12px 18px;
   border-radius: var(--r-control);
   border: 1px solid var(--line-strong);
@@ -365,8 +423,8 @@ table th {
 }
 
 .btn-lg {
-  padding: 15px 24px;
-  font-size: 1.02rem;
+  padding: 15px 26px;
+  font-size: var(--t-base);
 }
 
 .btn svg {
@@ -400,7 +458,7 @@ table th {
 }
 
 .note-title {
-  font-family: var(--cond);
+  font-stretch: var(--w-sub);
   font-weight: 600;
   color: var(--text);
   display: block;
@@ -414,7 +472,7 @@ pre {
   border: 1px solid var(--line);
   border-radius: var(--r-control);
   overflow-x: auto;
-  font-size: 0.86rem;
+  font-size: var(--t-xs);
   line-height: 1.65;
   color: var(--dim);
 }
@@ -438,14 +496,14 @@ pre .out {
 table.data {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.93rem;
+  font-size: var(--t-sm);
 }
 
 table.data caption {
   caption-side: bottom;
   text-align: left;
   color: var(--faint);
-  font-size: 0.86rem;
+  font-size: var(--t-xs);
   padding-top: 14px;
   max-width: var(--prose);
 }
@@ -460,9 +518,9 @@ table.data td {
 
 table.data thead th {
   color: var(--faint);
-  font-family: var(--cond);
+  font-stretch: var(--w-sub);
   font-weight: 600;
-  font-size: 0.94rem;
+  font-size: var(--t-sm);
   border-bottom-color: var(--line-strong);
 }
 
@@ -501,10 +559,15 @@ table.data td:first-child {
   margin: 0;
 }
 
+.claims > li > h3 {
+  font-size: var(--t-base);
+  font-stretch: var(--w-sub);
+  line-height: 1.35;
+}
+
 .claims p {
   margin: 0;
   color: var(--dim);
-  font-size: 0.95rem;
   max-width: none;
 }
 
@@ -521,7 +584,7 @@ dl.ref {
 
 dl.ref dt {
   font-family: var(--mono);
-  font-size: 0.86rem;
+  font-size: var(--t-xs);
   color: var(--accent-bright);
   padding: 12px 18px 12px 0;
   border-bottom: 1px solid var(--line);
@@ -531,7 +594,7 @@ dl.ref dd {
   margin: 0;
   padding: 12px 0;
   color: var(--dim);
-  font-size: 0.93rem;
+  font-size: var(--t-sm);
   border-bottom: 1px solid var(--line);
 }
 
@@ -567,7 +630,7 @@ ol.steps > li::before {
   background: var(--panel-raised);
   border: 1px solid var(--line-strong);
   color: var(--dim);
-  font: 500 0.8rem/24px var(--mono);
+  font: 600 var(--t-xs) / 24px var(--sans);
   text-align: center;
 }
 
@@ -577,7 +640,7 @@ ol.steps h4 {
 
 ol.steps p {
   color: var(--dim);
-  font-size: 0.95rem;
+  font-size: var(--t-sm);
 }
 
 /* --------------------------------------------------------------- utility */
@@ -595,22 +658,10 @@ ol.steps p {
 }
 
 .lede {
-  font-size: 1.14rem;
+  font-size: var(--t-md);
+  line-height: 1.5;
   color: var(--dim);
-  max-width: 58ch;
-}
-
-.kicker {
-  font-family: var(--mono);
-  font-size: 0.82rem;
-  color: var(--faint);
-  margin-bottom: 20px;
-  max-width: 62ch;
-}
-
-.kicker b {
-  color: var(--dim);
-  font-weight: 500;
+  max-width: 52ch;
 }
 
 /* One orchestrated arrival per section, played once.

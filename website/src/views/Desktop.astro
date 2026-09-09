@@ -4,7 +4,6 @@ import AppWindow from "../components/AppWindow.astro";
 import ReleaseScript from "../components/ReleaseScript.astro";
 import { t, type Locale } from "../i18n";
 import { localeUrl } from "../i18n/routing";
-import { DESKTOP_REPO_URL } from "../data/releases";
 
 interface Props {
   locale: Locale;
@@ -36,11 +35,7 @@ const sources = [
   description={dict.desktop.description}
 >
   <section class="wrap hero">
-    <p class="kicker">{dict.desktop.kicker}</p>
-    <h1>
-      <span class="given">{dict.desktop.headlineGiven}</span>
-      <span class="second">{dict.desktop.headlineSecond}</span>
-    </h1>
+    <h1>{dict.desktop.headline}</h1>
     <p class="lede">{dict.desktop.lede}</p>
     <div class="row hero-actions">
       <a
@@ -53,7 +48,7 @@ const sources = [
       >
         {dict.desktop.ctaPrimary}
       </a>
-      <span class="faint mono meta">
+      <span class="faint meta tnum">
         <span data-size></span>
         <span data-version="desktop">{dict.common.latestBuild}</span>
       </span>
@@ -125,9 +120,6 @@ const sources = [
           <ul class="dim">
             {dict.desktop.notYet.map((item) => <li>{item}</li>)}
           </ul>
-          <p class="faint small">
-            <a href={DESKTOP_REPO_URL}>{DESKTOP_REPO_URL.replace("https://", "")}</a>
-          </p>
         </div>
       </div>
     </div>
@@ -153,15 +145,7 @@ const sources = [
     padding-block: clamp(44px, 7vw, 76px) clamp(48px, 7vw, 80px);
   }
 
-  .given {
-    display: block;
-    color: var(--faint);
-  }
 
-  .second {
-    display: block;
-    color: #fff;
-  }
 
   h1 {
     max-width: 22ch;
@@ -179,7 +163,7 @@ const sources = [
   .meta {
     display: inline-flex;
     gap: 8px;
-    font-size: 0.8rem;
+    font-size: var(--t-xs);
   }
 
   .win-holder {
@@ -188,21 +172,21 @@ const sources = [
 
   .cap {
     margin-top: 12px;
-    font-size: 0.86rem;
+    font-size: var(--t-xs);
     max-width: 76ch;
   }
 
   /* These are titles, not commands, so they do not take the monospace face
      the reference list uses by default. */
   dl.ref dt.plain {
-    font-family: var(--cond);
-    font-size: 1rem;
+    font-stretch: var(--w-sub);
+    font-size: var(--t-base);
     font-weight: 600;
     color: var(--text);
   }
 
   .small {
-    font-size: 0.86rem;
+    font-size: var(--t-xs);
   }
 
   .cta-row {

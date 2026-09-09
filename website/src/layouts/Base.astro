@@ -67,9 +67,12 @@ const canonical = new URL(localeUrl(locale, page), Astro.site);
          parser reaches the stylesheet that needs it. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Archivo is requested as a variable font across both axes it uses, so
+         the wide display cut and the normal body cut are one download rather
+         than four static weights. JetBrains Mono is only for code. -->
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400..600&display=swap"
     />
 
     <meta property="og:type" content="website" />

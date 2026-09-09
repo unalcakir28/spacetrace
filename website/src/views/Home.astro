@@ -1,11 +1,9 @@
 ---
 import Base from "../layouts/Base.astro";
-import Command from "../components/Command.astro";
 import DiffTerminal from "../components/DiffTerminal.astro";
 import Treemap from "../components/demo/Treemap.tsx";
 import { t, type Locale } from "../i18n";
 import { localeUrl } from "../i18n/routing";
-import { INSTALL_COMMAND, REPO_URL } from "../data/releases";
 import ReleaseScript from "../components/ReleaseScript.astro";
 
 interface Props {
@@ -14,6 +12,9 @@ interface Props {
 const { locale } = Astro.props;
 const dict = t(locale);
 
+// The order is the marketing order, and the grid below turns it into area:
+// the app is the big tile, the other two are the small ones. A treemap of the
+// product itself, which is the one structural joke the subject earns.
 const parts = [
   {
     name: dict.parts.desktopName,
@@ -22,7 +23,6 @@ const parts = [
     points: dict.parts.desktopPoints,
     cta: dict.parts.desktopCta,
     href: localeUrl(locale, "desktop"),
-    licence: dict.common.proprietary,
     lead: true,
   },
   {
@@ -32,7 +32,6 @@ const parts = [
     points: dict.parts.cliPoints,
     cta: dict.parts.cliCta,
     href: localeUrl(locale, "cli"),
-    licence: dict.common.apacheCore,
   },
   {
     name: dict.parts.hubName,
@@ -41,9 +40,22 @@ const parts = [
     points: dict.parts.hubPoints,
     cta: dict.parts.hubCta,
     href: localeUrl(locale, "hub"),
-    licence: dict.common.proprietary,
   },
 ];
+
+// Folder is left out: the legend is about file kinds, and a folder tile takes
+// the colour of what is inside it.
+const LEGEND = [
+  "image",
+  "video",
+  "audio",
+  "document",
+  "archive",
+  "code",
+  "binary",
+  "cache",
+  "other",
+] as const;
 
 const claims = [
   { title: dict.trust.duTitle, body: dict.trust.duBody },
@@ -61,12 +73,10 @@ const claims = [
   title={dict.home.title}
   description={dict.home.description}
 >
+  <!-- The headline block is deliberately short so the map is still on the
+       first screen. The map is the product; it should not need a scroll. -->
   <section class="wrap hero">
-    <p class="kicker">{dict.home.kicker}</p>
-    <h1>
-      <span class="given">{dict.home.headlineGiven}</span>
-      <span class="second">{dict.home.headlineSecond}</span>
-    </h1>
+    <h1>{dict.home.headline}</h1>
     <p class="lede">{dict.home.lede}</p>
 
     <div class="row hero-actions">
@@ -87,26 +97,17 @@ const claims = [
         </svg>
         {dict.home.ctaPrimary}
       </a>
-      <span class="faint mono meta">
-        <span data-size></span>
-        <span data-version="desktop">{dict.common.latestBuild}</span>
-      </span>
-      <a class="btn" href={localeUrl(locale, "cli")}>
+      <a class="btn btn-lg" href={localeUrl(locale, "cli")}>
         {dict.home.ctaSecondary}
       </a>
     </div>
-    <p class="faint small">{dict.home.noAccount}</p>
+    <p class="faint small no-account">{dict.home.noAccount}</p>
   </section>
 
-  <!-- The map is the hero's second half, not a section further down: it is the
-       product's own artefact, and it earns the space above the fold. -->
-  <section class="wrap demo-band" aria-labelledby="demo-title">
-    <div class="demo-head">
-      <h2 id="demo-title">{dict.home.demoTitle}</h2>
-    </div>
-    <!-- client:load, not client:visible: the map is in the hero, so it is
-         already on screen and "wait until it scrolls into view" would only
-         delay the one thing a visitor is meant to touch. -->
+  <section class="wrap map-band" aria-label={dict.home.demoCap}>
+    <!-- client:load, not client:visible: the map is above the fold, so
+         "wait until it scrolls into view" would only delay the one thing a
+         visitor is meant to touch. -->
     <Treemap
       client:load
       locale={locale}
@@ -130,7 +131,7 @@ const claims = [
         categories: dict.categories,
       }}
     />
-    <p class="faint demo-cap">{dict.home.demoLede}</p>
+    <p class="faint map-cap">{dict.home.demoCap}</p>
   </section>
 
   <section class="band">
@@ -138,7 +139,7 @@ const claims = [
       <div class="split aside">
         <div data-reveal>
           <h2>{dict.home.diffTitle}</h2>
-          <p class="dim">{dict.home.diffLede}</p>
+          <p class="dim lede">{dict.home.diffLede}</p>
         </div>
         <div data-reveal data-reveal-delay="1">
           <DiffTerminal locale={locale} />
@@ -162,20 +163,29 @@ const claims = [
               data-reveal
               data-reveal-delay={String(index)}
             >
-              <h3>
-                {part.name}
-                <span class="lic">{part.licence}</span>
-              </h3>
-              <p class="role" translate="no">{part.role}</p>
-              <p>{part.pitch}</p>
+              <p class="role">{part.role}</p>
+              <h3>{part.name}</h3>
+              <p class="pitch">{part.pitch}</p>
               <ul>
                 {part.points.map((point) => (
                   <li>{point}</li>
                 ))}
               </ul>
-              <p class="go">
-                <a href={part.href}>{part.cta}</a>
-              </p>
+              {part.lead && (
+                <ul class="legend" aria-label={dict.demo.kind}>
+                  {LEGEND.map((category) => (
+                    <li>
+                      <span
+                        class="swatch"
+                        style={`--swatch: var(--cat-${category})`}
+                        aria-hidden="true"
+                      />
+                      {dict.categories[category]}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <a class="go" href={part.href}>{part.cta}</a>
             </article>
           ))
         }
@@ -207,16 +217,14 @@ const claims = [
   <section class="band cta-band">
     <div class="wrap">
       <h2 data-reveal>{dict.home.ctaTitle}</h2>
-      <p class="dim" data-reveal data-reveal-delay="1">{dict.home.ctaLede}</p>
+      <p class="dim lede" data-reveal data-reveal-delay="1">{dict.home.ctaLede}</p>
       <div class="row cta-row" data-reveal data-reveal-delay="2">
         <a class="btn btn-primary btn-lg" href={localeUrl(locale, "download")}>
           {dict.nav.download}
         </a>
-        <a class="btn" href={localeUrl(locale, "guide")}>{dict.nav.guide}</a>
-        <a class="btn" href={REPO_URL}>{dict.common.sourceOnGitHub}</a>
-      </div>
-      <div class="cta-cmd" data-reveal data-reveal-delay="3">
-        <Command locale={locale} command={INSTALL_COMMAND} />
+        <a class="btn btn-lg" href={localeUrl(locale, "guide")}>
+          {dict.nav.guide}
+        </a>
       </div>
     </div>
   </section>
@@ -226,145 +234,150 @@ const claims = [
 
 <style>
   .hero {
-    padding-block: clamp(40px, 5.5vw, 64px) 0;
+    padding-block: clamp(48px, 7vw, 92px) clamp(28px, 4vw, 44px);
   }
 
-  /* Deliberately smaller than the global h1: the map below is competing for
-     the same fold, and a headline that pushes it off the screen wins the
-     wrong argument. */
-  h1 {
-    font-size: clamp(2rem, 4.2vw, 3rem);
+  .hero h1 {
+    max-width: 20ch;
   }
 
-  /* The headline is a contrast, so it is set as one: the sentence everybody
-     else can say is receded, the one only this tool can say is not. The warm
-     growth colour is kept out of it and spent on the artefacts below. */
-  .given {
-    display: block;
-    color: var(--faint);
-  }
-
-  .second {
-    display: block;
-    color: #fff;
-  }
-
-  h1 {
-    max-width: 24ch;
-  }
-
-  .lede {
-    margin-top: 16px;
-    font-size: 1.08rem;
+  .hero .lede {
+    margin-top: clamp(18px, 2.4vw, 26px);
   }
 
   .hero-actions {
-    margin: 22px 0 8px;
-    gap: 14px;
+    margin-top: clamp(26px, 3.4vw, 38px);
+    gap: 12px;
   }
 
-  .meta {
-    display: inline-flex;
-    gap: 8px;
-    font-size: 0.8rem;
+  .no-account {
+    margin-top: 16px;
   }
 
-  .small {
-    font-size: 0.88rem;
+  /* The map sits in its own band with no heading above it. A heading here
+     would be a label on something that explains itself by being touched. */
+  .map-band {
+    padding-block: 0 clamp(56px, 7vw, 96px);
   }
 
-  .demo-band {
-    padding-block: clamp(24px, 3.5vw, 36px) clamp(48px, 7vw, 80px);
+  .map-cap {
+    margin: 16px 0 0;
+    font-size: var(--t-sm);
   }
 
-  .demo-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-bottom: 14px;
-  }
-
-  .demo-head h2 {
-    font-size: clamp(1.25rem, 2.2vw, 1.6rem);
-  }
-
-  .demo-cap {
-    margin: 14px 0 0;
-    font-size: 0.88rem;
-    max-width: 80ch;
-  }
-
-  /* Not three identical cards: the desktop app is the product, so its column
-     is the one that carries weight. */
+  /* Three products, laid out as the treemap they describe: the app is one
+     large tile, the other two are stacked small ones beside it. The areas
+     carry the priority, so no 01/02/03 markers are needed to imply order. */
   .parts {
     display: grid;
-    grid-template-columns: 1.15fr 1fr 1fr;
-    border: 1px solid var(--line);
-    border-radius: var(--r-surface);
-    overflow: hidden;
-    background: var(--panel);
+    grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+    gap: 14px;
   }
 
   .part {
     display: flex;
     flex-direction: column;
-    padding: 26px 24px 28px;
-    border-left: 1px solid var(--line);
-  }
-
-  .part:first-child {
-    border-left: 0;
+    align-items: start;
+    gap: 10px;
+    padding: clamp(22px, 2.6vw, 32px);
+    border: 1px solid var(--line);
+    border-radius: var(--r-surface);
+    background: var(--panel);
   }
 
   .part.lead {
+    grid-row: span 2;
     background: linear-gradient(
-      180deg,
-      rgba(139, 155, 255, 0.09),
-      rgba(139, 155, 255, 0)
+      165deg,
+      var(--panel-raised),
+      var(--panel) 62%
     );
-  }
-
-  .part h3 {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-bottom: 4px;
-  }
-
-  .lic {
-    font: 400 0.72rem/1 var(--mono);
-    color: var(--faint);
-    border: 1px solid var(--line-strong);
-    border-radius: var(--r-chip);
-    padding: 3px 5px;
+    border-color: var(--line-strong);
   }
 
   .role {
-    font-family: var(--mono);
-    font-size: 0.78rem;
-    color: var(--accent);
-    margin-bottom: 14px;
+    margin: 0;
+    color: var(--faint);
+    font-size: var(--t-sm);
   }
 
-  .part p,
-  .part ul {
-    max-width: none;
+  .part h3 {
+    margin: 0;
+  }
+
+  .part.lead h3 {
+    font-size: var(--t-xl);
+    font-stretch: var(--w-head);
+    letter-spacing: -0.025em;
+  }
+
+  .pitch {
+    margin: 0;
     color: var(--dim);
-    font-size: 0.94rem;
   }
 
   .part ul {
-    margin-bottom: 18px;
+    margin: 4px 0 0;
+    padding-left: 1.15em;
+    color: var(--dim);
+    font-size: var(--t-sm);
+    max-width: none;
   }
 
+  .part li {
+    margin-bottom: 0.35em;
+  }
+
+  /* Pushed to the bottom so the three cards' links align on one line
+     regardless of how much copy sits above them. */
   .go {
     margin-top: auto;
-    margin-bottom: 0;
-    padding-top: 6px;
-    font-size: 0.93rem;
+    padding-top: 14px;
+    font-weight: 550;
+    text-decoration: none;
+  }
+
+  .go:hover {
+    text-decoration: underline;
+  }
+
+  /* `.part ul` (0,0,1,1) beats a bare `.legend` (0,0,1,0), so its
+     `margin: 4px 0 0` was silently cancelling the auto top margin that
+     pushes this block to the bottom of the card. Matched at the same
+     specificity to win on order. */
+  .part ul.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    list-style: none;
+    padding: 0;
+    margin: auto 0 0;
+    max-width: none;
+    font-size: var(--t-sm);
+    color: var(--dim);
+  }
+
+  .part ul.legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0;
+  }
+
+  .swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background: var(--swatch);
+    flex: none;
+  }
+
+  /* Two `margin-top: auto` siblings in a flex column split the free space
+     between them, which would open a gap above the legend AND above the link.
+     On the lead card the legend is the element that claims the space, so the
+     link sits directly under it. */
+  .part.lead .go {
+    margin-top: 0;
   }
 
   .cta-band h2 {
@@ -372,12 +385,7 @@ const claims = [
   }
 
   .cta-row {
-    margin-top: 24px;
-  }
-
-  .cta-cmd {
-    margin-top: 22px;
-    max-width: 620px;
+    margin-top: clamp(24px, 3vw, 34px);
   }
 
   @media (max-width: 900px) {
@@ -385,13 +393,8 @@ const claims = [
       grid-template-columns: minmax(0, 1fr);
     }
 
-    .part {
-      border-left: 0;
-      border-top: 1px solid var(--line);
-    }
-
-    .part:first-child {
-      border-top: 0;
+    .part.lead {
+      grid-row: auto;
     }
   }
 </style>

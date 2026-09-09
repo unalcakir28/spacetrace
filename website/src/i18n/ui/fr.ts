@@ -43,38 +43,32 @@ export const fr: Dictionary = {
   },
 
   home: {
-    title: "spacetrace — voyez ce qui remplit votre disque, et ce qui a changé",
+    title: "spacetrace — découvrez ce qui remplit votre disque",
     description:
-      "Une application de bureau qui cartographie ce qui remplit vos disques, conserve des instantanés et vous dit quel dossier a réellement grossi. Avec un outil en ligne de commande et un tableau de bord auto-hébergé pour les serveurs.",
-    kicker: "macOS · Windows · Linux",
-    headlineGiven: "Tous les analyseurs de disque cartographient ce qui est sur le disque.",
-    headlineSecond: "Celui-ci montre aussi ce qui a changé.",
-    lede: "Analysez un volume et parcourez-le comme une treemap vivante. Conservez le résultat comme instantané, revenez la semaine suivante et obtenez le seul dossier qui a vraiment grossi — pas la racine sous laquelle il se trouve.",
+      "Voyez ce qui remplit votre disque sous forme de carte à parcourir. Relancez une analyse la semaine suivante et spacetrace nomme le dossier qui a grossi. Gratuit pour macOS, Windows et Linux.",
+
+    headline: "Qu'est-ce qui remplit votre disque ?",
+    lede: "Analysez un volume et voyez-le comme une carte. Analysez-le à nouveau la semaine suivante et voyez exactement ce qui a grossi.",
     ctaPrimary: "Télécharger l'application",
-    ctaSecondary: "Ou utiliser la ligne de commande",
-    noAccount: "Pas de compte, pas de télémétrie, rien n'est envoyé nulle part.",
+    ctaSecondary: "Utiliser la ligne de commande",
+    noAccount: "Gratuit. Pas de compte, et rien ne quitte votre machine.",
+    demoCap: "C'est la vraie carte, elle tourne ici. Cliquez sur une tuile. Double-cliquez pour aller plus loin.",
 
-    demoTitle: "C'est l'application. Faites un tour d'essai.",
-    demoLede:
-      "La vraie dessine des dizaines de milliers de tuiles sur un canvas. Celle-ci exécute le même agencement squarified sur un arbre plus petit, directement dans la page.",
-
-    diffTitle: "Une analyse est une photographie. Deux sont une réponse.",
+    diffTitle: "Quel dossier a vraiment grossi ?",
     diffLede:
-      "Enregistrez une analyse comme instantané, puis comparez. Les dossiers qui ne font que transmettre une variation sont ignorés, et c'est le premier niveau où la croissance se répartit vraiment qui est signalé.",
-    diffPoint:
-      "Il nomme le dossier sur lequel vous pouvez agir, pas ses ancêtres.",
+      "Comparez deux analyses et spacetrace nomme le dossier sur lequel agir — pas le dossier parent où il se trouve.",
 
-    partsTitle: "Un seul cœur, trois portes d'entrée",
+    partsTitle: "Un outil, trois portes d'entrée",
     partsLede:
-      "Le scanner, le stockage des instantanés, la comparaison et l'agencement de la treemap forment une seule bibliothèque Rust. Un instantané écrit par l'un est lisible par les deux autres.",
+      "Commencez par l'application. Le terminal et le tableau de bord serveur font tourner le même scanner en dessous.",
 
     trustTitle: "Des chiffres que vous pouvez vérifier",
     trustLede:
-      "Un outil de disque qui affiche un chiffre irréconciliable avec votre propre shell a perdu la discussion. Ce sont des conditions de test dans le dépôt, pas des promesses.",
+      "Un outil de disque dont les chiffres ne correspondent pas à votre propre shell a perdu la partie.",
 
     ctaTitle: "Découvrez ce qui a grossi pendant que vous ne regardiez pas.",
-    ctaLede:
-      "L'application de bureau est téléchargeable gratuitement. Le scanner, l'outil en ligne de commande et l'agent serveur sont open source et le resteront.",
+    ctaLede: "Gratuit pour macOS, Windows et Linux.",
+
   },
 
   demo: {
@@ -115,69 +109,60 @@ export const fr: Dictionary = {
     desktopName: "Application de bureau",
     desktopRole: "macOS · Windows · Linux",
     desktopPitch:
-      "Une treemap navigable colorée par type de fichier, où la liste des dossiers, la carte et l'inspecteur s'accordent sur la mesure qu'ils affichent.",
+      "Pointez-le vers un volume et parcourez la carte. La couleur indique le type de fichier que vous regardez.",
     desktopPoints: [
-      "Parcourez une analyse en direct, un instantané enregistré ou un serveur via HTTP",
-      "Comparez deux instantanés et voyez le dossier qui a grossi",
-      "Mettez des entrées à la corbeille sans perdre votre place",
-      "La fenêtre reste utilisable pendant une analyse",
+      "Parcourez une analyse en direct ou une déjà enregistrée",
+      "Comparez deux analyses pour voir ce qui a grossi",
+      "Supprimez directement depuis la carte",
     ],
-    desktopCta: "Ce que fait l'application",
+    desktopCta: "Voir l'application",
 
     cliName: "Ligne de commande",
-    cliRole: "un binaire statique · plus un agent serveur",
+    cliRole: "Un seul binaire, sans runtime",
     cliPitch:
-      "Le même cœur, sous forme de commande scriptable et de service qui analyse selon un calendrier et répond via HTTP.",
+      "Le même scanner sous forme de commande scriptable, avec une sortie JSON pour chaque résultat.",
     cliPoints: [
-      "Analyser, enregistrer, comparer, lister, exporter vers ncdu",
-      "Pointez n'importe quelle commande en lecture seule vers un agent distant",
-      "Tourne sur un NAS, dans un conteneur, sur de vieilles glibc",
-      "L'agent lit. Il ne supprime jamais rien.",
+      "Analyser, comparer, exporter",
+      "Fonctionne via SSH et sur un NAS",
+      "Lecture seule — il ne supprime jamais rien",
     ],
-    cliCta: "Commandes et installation",
+    cliCta: "Voir les commandes",
 
-    hubName: "Hub",
-    hubRole: "auto-hébergé · un binaire, un fichier SQLite",
+    hubName: "Le tableau de bord",
+    hubRole: "Auto-hébergé",
     hubPitch:
-      "Les agents lui envoient leurs instantanés. Le hub conserve l'historique, calcule ce qui grossit et vous avertit avant qu'un disque ne soit plein.",
+      "Vos serveurs envoient leurs résultats. Une page vous montre quel disque se remplit en premier.",
     hubPoints: [
-      "Tableau de bord de la flotte trié par urgence, pas par nom d'hôte",
-      "Taux de croissance et prévision « plein dans N jours »",
-      "Règles de seuil livrées par webhook",
+      "Trié par ce qui demande votre attention maintenant",
+      "Vous avertit avant qu'un disque ne soit plein",
       "Ne touche jamais aux machines qu'il surveille",
     ],
-    hubCta: "Lancer le hub",
+    hubCta: "Voir le tableau de bord",
   },
 
   trust: {
     duTitle: "Les totaux correspondent exactement à votre shell",
-    duBody:
-      "Logique ne compte que les octets des fichiers et correspond à du -sb. Sur le disque, ce sont les blocs réellement alloués, blocs de répertoires inclus, et cela correspond à du -s --block-size=1. Vérifié sur /usr avec 141k fichiers.",
-    capacityTitle: "Libre sur total, jamais « % utilisé »",
+    duBody: "Les mêmes chiffres que du, vérifiés sur un dossier de 141 000 fichiers.",
+    capacityTitle: "L'espace libre, jamais un chiffre « % utilisé »",
     capacityBody:
-      "La capacité est rapportée comme df la rapporte. Sur un conteneur APFS, un sous-volume btrfs ou un LVM thin, un chiffre d'espace utilisé inclurait les voisins et contredirait df sur le même point de montage — il n'est donc pas affiché.",
-    forecastTitle: "La prévision est retenue plus souvent qu'affichée",
+      "Indiqué comme df l'indique. Quand ce chiffre serait trompeur, il n'est pas affiché.",
+    forecastTitle: "La prévision se tait tant qu'elle n'est pas sûre",
     forecastBody:
-      "« Plein dans N jours » exige au moins trois instantanés couvrant au moins un jour, un ajustement linéaire de r² ≥ 0,5, une capacité réellement mesurée et une réponse à moins de dix ans. Une date fausse mais assurée est pire que pas de date.",
-    snapshotTitle: "Un instantané est un simple fichier SQLite",
-    snapshotBody:
-      "Pas un format d'export, pas un blob propriétaire. Ce que l'agent conserve est ce qui circule sur le réseau et ce qui arrive sur votre portable : un instantané distant se parcourt avec le même code qu'un instantané local.",
-    errorsTitle: "Les erreurs sont comptées, pas avalées",
-    errorsBody:
-      "Un chemin illisible est signalé et échantillonné ; l'analyse continue. Une analyse annulée ne renvoie aucun arbre, car un arbre partiel a l'air complet et annonce un total qui n'a jamais été vrai d'aucun disque.",
-    deleteTitle: "L'agent n'a pas de suppression",
-    deleteBody:
-      "Un logiciel installé sur un serveur gagne la confiance en étant incapable de faire la chose effrayante. L'application de bureau peut mettre des entrées à la corbeille — seulement sur une analyse en direct de la machine devant vous, et seulement après avoir demandé.",
+      "Une date fausse mais assurée est pire que pas de date du tout, donc « plein dans 12 jours » est retenu plus souvent qu'affiché.",
+    snapshotTitle: "Une analyse est un simple fichier SQLite",
+    snapshotBody: "Pas un format verrouillé. Il est à vous, et les trois outils peuvent le lire.",
+    errorsTitle: "Les erreurs sont comptées, pas cachées",
+    errorsBody: "Un dossier illisible est signalé et l'analyse continue.",
+    deleteTitle: "L'agent serveur ne peut pas supprimer",
+    deleteBody: "Il lit. Il n'y a aucune suppression dedans.",
   },
 
   desktop: {
     title: "Application de bureau — spacetrace",
     description:
       "Une treemap navigable de ce qui remplit vos disques, colorée par type de fichier, avec instantanés, agents distants et comparaisons. macOS, Windows et Linux.",
-    kicker: "Tauri et Rust · une fenêtre légère sur un scanner natif",
-    headlineGiven: "Une carte de votre disque.",
-    headlineSecond: "Puis une carte de ce qui a changé dessus.",
-    lede: "Analysez un dossier et parcourez-le comme une treemap colorée par type de fichier. Ou ouvrez un instantané de la semaine dernière, ou un instantané posé sur un serveur, et mettez les deux côte à côte.",
+    headline: "Voyez votre disque comme une carte",
+    lede: "Analysez un dossier et parcourez-le. La couleur indique le type de fichier que vous regardez. Ouvrez l'analyse de la semaine dernière à côté de celle d'aujourd'hui et voyez ce qui a changé.",
     ctaPrimary: "Télécharger l'application",
     ctaSecondary: "Voir tous les fichiers",
 
@@ -245,10 +230,8 @@ export const fr: Dictionary = {
     title: "Ligne de commande — spacetrace",
     description:
       "L'outil en ligne de commande spacetrace et l'agent serveur : analyser, enregistrer, comparer et lire une machine distante via HTTP. Un binaire statique, Apache-2.0.",
-    kicker: "Un binaire statique · aucun runtime à installer · Apache-2.0",
-    headlineGiven: "Le même cœur, sans fenêtre.",
-    headlineSecond: "Scriptable, et à sa place sur un serveur.",
-    lede: "Tout ce que fait l'application, sous forme de commande à mettre dans une tâche cron — plus un agent qui analyse selon un calendrier et répond via HTTP, pour qu'une machine où vous ne vous connectez jamais puisse quand même vous dire ce qui est arrivé à son disque.",
+    headline: "Le même scanner, dans votre terminal",
+    lede: "Tout ce que fait l'application, sous forme de commande scriptable. Plus un agent qui analyse selon un calendrier, pour qu'une machine où vous ne vous connectez jamais puisse quand même vous dire ce qui est arrivé à son disque.",
     installTitle: "Installation",
     installNote:
       "Installe spacetrace et spacetrace-agent dans /usr/local/bin. Délibérément du sh POSIX sans surprise, parce qu'il doit aussi tourner sur le firmware d'un NAS dont le shell est busybox.",
@@ -264,6 +247,17 @@ export const fr: Dictionary = {
     tour3Body: "Compare les deux derniers instantanés d'une racine, ou le plus récent avec le disque tel qu'il est maintenant.",
     tour4Title: "Lire une autre machine",
     tour4Body: "Toute commande en lecture seule accepte --remote. Mêmes sous-commandes, pointées ailleurs.",
+
+    aiTitle: "Facile à piloter par un assistant IA",
+    aiLede:
+      "Chaque commande affiche du JSON, et rien dans l'outil ne peut supprimer un fichier. Vous pouvez donc laisser un assistant analyser une machine, lire les chiffres et expliquer ce qui a rempli le disque — sans écrire de parseur et sans prendre de risque.",
+    aiPoints: [
+      "--json sur chaque commande, donc rien à extraire d'un texte destiné aux humains",
+      "Lecture seule : aucune suppression à portée d'un modèle",
+      "Un seul binaire statique, qui s'installe dans n'importe quel conteneur ou bac à sable",
+      "--remote et du SSH classique, pour qu'un assistant puisse regarder toute une flotte",
+      "Les totaux correspondent à du et df, donc vous pouvez vérifier ses conclusions",
+    ],
 
     agentTitle: "L'agent",
     agentLede:
@@ -281,19 +275,17 @@ export const fr: Dictionary = {
     dockerNote:
       "Montez l'hôte en lecture seule et analysez-le. L'image contient amd64 et arm64.",
 
-    openTitle: "Open source, et ça ne changera pas",
+    openTitle: "Vous pouvez lire le code",
     openBody:
-      "Le scanner, le stockage des instantanés, la comparaison et les deux binaires sont sous Apache-2.0. L'agent tourne sur vos serveurs, vous devez donc pouvoir le lire. L'application de bureau et le hub sont la partie commerciale.",
+      "Le scanner, le stockage des instantanés, la comparaison et les deux binaires sont sous Apache-2.0. Un logiciel que vous installez sur vos propres serveurs doit être un logiciel que vous pouvez inspecter.",
   },
 
   hub: {
     title: "Hub — spacetrace",
     description:
       "Le hub spacetrace auto-hébergé : les agents envoient des instantanés, le hub conserve l'historique, calcule ce qui grossit et vous avertit avant qu'un disque ne soit plein.",
-    kicker: "Auto-hébergé · un binaire, un fichier SQLite · aucune télémétrie",
-    headlineGiven: "Quarante machines, quarante disques.",
-    headlineSecond: "Une page, le pire en premier.",
-    lede: "Les agents analysent leurs propres machines et envoient les instantanés ici. Le hub conserve l'historique, calcule ce qui grossit et vous avertit avant qu'un disque ne soit plein. Il ne touche jamais aux machines qu'il surveille.",
+    headline: "Quarante machines. Une page.",
+    lede: "Vos serveurs s'analysent eux-mêmes et envoient leurs résultats. Le disque qui se remplit en premier apparaît en haut. Le hub ne touche jamais aux machines qu'il surveille.",
     ctaBinaries: "Binaires",
     dashCaption:
       "Dessiné plutôt que capturé. Le vrai tableau de bord est du HTML rendu par le serveur — un outil auto-hébergé qui réclame un npm install avant de vous montrer une page est un outil moins bon.",

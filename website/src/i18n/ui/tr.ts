@@ -43,38 +43,32 @@ export const tr: Dictionary = {
   },
 
   home: {
-    title: "spacetrace — diskini neyin doldurduğunu ve neyin değiştiğini gör",
+    title: "spacetrace — diskini neyin doldurduğunu bul",
     description:
-      "Diskleri neyin doldurduğunu haritalayan, anlık görüntü tutan ve hangi klasörün gerçekten büyüdüğünü söyleyen bir masaüstü uygulaması. Yanında komut satırı aracı ve sunucular için kendi sunucunuzda çalışan bir filo panosu.",
-    kicker: "macOS · Windows · Linux",
-    headlineGiven: "Her disk analizcisi diskte ne olduğunu haritalar.",
-    headlineSecond: "Bu, neyin değiştiğini de gösterir.",
-    lede: "Bir diski tara ve canlı bir treemap olarak gez. Sonucu anlık görüntü olarak sakla, haftaya geri dön ve gerçekten büyüyen tek klasörü al — altında durduğu kök dizini değil.",
+      "Diskini neyin doldurduğunu tıklayarak gezebileceğin bir harita olarak gör. Haftaya yeniden tara, spacetrace büyüyen klasörü söylesin. macOS, Windows ve Linux için ücretsiz.",
+
+    headline: "Diskini ne dolduruyor?",
+    lede: "Bir diski tara ve harita olarak gör. Haftaya yeniden tara, tam olarak neyin büyüdüğünü gör.",
     ctaPrimary: "Uygulamayı indir",
-    ctaSecondary: "Ya da komut satırını kullan",
-    noAccount: "Hesap yok, telemetri yok, hiçbir şey hiçbir yere yüklenmiyor.",
+    ctaSecondary: "Terminali kullan",
+    noAccount: "Ücretsiz. Hesap gerekmiyor, hiçbir şey makinenden çıkmıyor.",
+    demoCap: "Burada çalışan gerçek harita bu. Bir karoya tıkla. Daha derine inmek için çift tıkla.",
 
-    demoTitle: "Uygulama bu. Bir tur at.",
-    demoLede:
-      "Gerçeği bir canvas üzerinde on binlerce karo çiziyor. Buradaki aynı squarified yerleşimi daha küçük bir ağaçta, tam bu sayfada çalıştırıyor.",
-
-    diffTitle: "Bir tarama fotoğraftır. İki tarama cevaptır.",
+    diffTitle: "Hangi klasör gerçekten büyüdü?",
     diffLede:
-      "Bir taramayı anlık görüntü olarak sakla, sonra karşılaştır. Değişimi yalnızca aktaran klasörler atlanıyor ve büyümenin gerçekten dağıldığı ilk seviye bildiriliyor.",
-    diffPoint:
-      "Üzerinde işlem yapabileceğin klasörü söylüyor, onun atalarını değil.",
+      "İki taramayı karşılaştır, spacetrace üzerinde işlem yapabileceğin klasörü söylesin — içinde durduğu üst klasörü değil.",
 
-    partsTitle: "Tek çekirdek, üç giriş yolu",
+    partsTitle: "Tek araç, üç giriş yolu",
     partsLede:
-      "Tarayıcı, anlık görüntü deposu, karşılaştırma ve treemap yerleşimi tek bir Rust kütüphanesi. Bunlardan herhangi biriyle yazılan bir anlık görüntüyü diğer ikisi okuyabiliyor.",
+      "Uygulamayla başla. Komut satırı ve sunucu panosu altta aynı tarama motorunu kullanıyor.",
 
     trustTitle: "Doğrulayabileceğin sayılar",
     trustLede:
-      "Kendi kabuğunla doğrulayamadığın bir rakam basan bir disk aracı tartışmayı kaybetmiştir. Bunlar depoda birer test koşulu, verilmiş sözler değil.",
+      "Gösterdiği sayıları kendi terminalinde doğrulayamıyorsan, o disk aracı tartışmayı kaybetmiştir.",
 
     ctaTitle: "Sen bakmazken neyin büyüdüğünü öğren.",
-    ctaLede:
-      "Masaüstü uygulaması ücretsiz indirilebiliyor. Tarayıcı, komut satırı aracı ve sunucu ajanı açık kaynak ve öyle kalacak.",
+    ctaLede: "macOS, Windows ve Linux için ücretsiz.",
+
   },
 
   demo: {
@@ -112,72 +106,63 @@ export const tr: Dictionary = {
   },
 
   parts: {
-    desktopName: "Masaüstü uygulaması",
-    desktopRole: "macOS · Windows · Linux",
+    desktopName: "Uygulama",
+    desktopRole: "macOS, Windows, Linux",
     desktopPitch:
-      "Dosya türüne göre renklenen, yakınlaşabilir bir treemap; klasör listesi, harita ve inceleme panelinin hangi ölçüyü gösterdiği konusunda hemfikir olduğu bir pencere.",
+      "Bir diski seç, haritada gez. Renk, hangi tür dosyalara baktığını söyler.",
     desktopPoints: [
-      "Canlı bir taramayı, saklanmış bir anlık görüntüyü ya da HTTP üzerinden bir sunucuyu gez",
-      "İki anlık görüntüyü karşılaştır ve büyüyen klasörü gör",
-      "Girdileri, yerini kaybetmeden Çöp Kutusu'na taşı",
-      "Tarama sürerken pencere kullanılabilir kalıyor",
+      "Canlı bir taramayı ya da daha önce kaydettiğin birini gez",
+      "Neyin büyüdüğünü bulmak için iki taramayı karşılaştır",
+      "Doğrudan haritadan sil",
     ],
-    desktopCta: "Uygulama ne yapıyor",
+    desktopCta: "Uygulamayı gör",
 
-    cliName: "Komut satırı",
-    cliRole: "tek statik ikili · artı bir sunucu ajanı",
+    cliName: "Terminal",
+    cliRole: "Tek ikili dosya, çalışma zamanı yok",
     cliPitch:
-      "Aynı çekirdek; hem betikleyebileceğin bir komut, hem de zamanlanmış tarama yapıp HTTP üzerinden cevap veren bir servis olarak.",
+      "Aynı tarama motoru, betikleyebileceğin bir komut olarak; her sonuç JSON çıktısıyla.",
     cliPoints: [
-      "Tara, anlık görüntü al, karşılaştır, listele, ncdu'ya aktar",
-      "Salt okunur her komutu uzak bir ajana yönlendir",
-      "NAS'ta, konteynerde, yaşlı glibc üzerinde çalışıyor",
-      "Ajan okur. Hiçbir şeyi silmiyor.",
+      "Tara, karşılaştır, dışa aktar",
+      "SSH üzerinden ve NAS'ta çalışır",
+      "Yalnızca okur — hiçbir zaman silmez",
     ],
-    cliCta: "Komutlar ve kurulum",
+    cliCta: "Komutları gör",
 
-    hubName: "Hub",
-    hubRole: "kendi sunucunda · tek ikili, tek SQLite dosyası",
+    hubName: "Pano",
+    hubRole: "Kendi sunucunda",
     hubPitch:
-      "Ajanlar anlık görüntülerini buraya gönderiyor. Hub geçmişi tutuyor, neyin büyüdüğünü hesaplıyor ve bir disk dolmadan önce sana söylüyor.",
+      "Sunucuların kendini tarar ve buraya bildirir. Hangi diskin önce dolacağını tek sayfada görürsün.",
     hubPoints: [
-      "Aciliyete göre sıralanan filo panosu, sunucu adına göre değil",
-      "Büyüme hızı ve “N gün içinde dolar” tahmini",
-      "Webhook ile iletilen eşik kuralları",
-      "İzlediği makinelere hiç dokunmuyor",
+      "En çok dikkat gerektirene göre sıralı",
+      "Disk dolmadan önce uyarır",
+      "İzlediği makinelere hiç dokunmaz",
     ],
-    hubCta: "Hub'ı çalıştır",
+    hubCta: "Panoyu gör",
   },
 
   trust: {
-    duTitle: "Toplamlar kabuğunla birebir aynı",
-    duBody:
-      "Mantıksal yalnızca dosya baytları ve du -sb ile birebir. Diskte, gerçekten tahsis edilen bloklar — dizin blokları dâhil — ve du -s --block-size=1 ile birebir. 141 bin dosyalı /usr üzerinde doğrulandı.",
-    capacityTitle: "Toplamın boşu, asla “% dolu” değil",
+    duTitle: "Toplamlar terminalinle birebir aynı",
+    duBody: "du ile aynı sayılar, 141.000 dosyalık bir klasörde doğrulandı.",
+    capacityTitle: "Boş alan, hiçbir zaman “% dolu” değil",
     capacityBody:
-      "Kapasite df'in raporladığı gibi raporlanıyor. Bir APFS konteynerinde, btrfs alt biriminde ya da ince LVM'de “kullanılan” rakamı kardeşleri de içerir ve aynı bağlama noktası için df ile çelişir — bu yüzden basılmıyor.",
-    forecastTitle: "Tahmin, gösterildiğinden daha sık gizleniyor",
+      "df nasıl bildiriyorsa öyle bildirilir. Yanıltıcı olacağı yerde hiç gösterilmez.",
+    forecastTitle: "Tahmin, emin olmadıkça sessiz kalır",
     forecastBody:
-      "“N gün içinde dolar” için en az bir günü kapsayan üç anlık görüntü, r² ≥ 0,5 doğrusal uyum, gerçekten ölçülmüş bir kapasite ve on yıl içinde bir cevap gerekiyor. Kendinden emin ama yanlış bir tarih, tarih olmamasından kötüdür.",
-    snapshotTitle: "Anlık görüntü düpedüz bir SQLite dosyası",
-    snapshotBody:
-      "Bir dışa aktarma biçimi değil, kapalı bir blob değil. Ajanın sakladığı şey telde giden şeyle ve dizüstüne inen şeyle aynı; yani uzak bir anlık görüntü yerel biriyle birebir aynı kod tarafından gezilir.",
-    errorsTitle: "Hatalar sayılıyor, yutulmuyor",
-    errorsBody:
-      "Okunamayan yol bildiriliyor ve örnekleniyor; tarama devam ediyor. İptal edilen tarama hiç ağaç döndürmüyor, çünkü kısmi bir ağaç tam görünür ve hiçbir diskte hiç doğru olmamış bir toplam bildirir.",
-    deleteTitle: "Ajanda silme yok",
-    deleteBody:
-      "Sunucuya kurduğun yazılım, korkutucu şeyi yapamayarak güven kazanır. Masaüstü uygulaması girdileri Çöp Kutusu'na taşıyabiliyor — yalnızca başında oturduğun makinenin canlı taramasında ve yalnızca sorduktan sonra.",
+      "Kendinden emin ama yanlış bir tarih, hiç tarih olmamasından kötüdür; bu yüzden “12 gün içinde dolar” çoğu zaman hiç gösterilmez.",
+    snapshotTitle: "Tarama, düpedüz bir SQLite dosyası",
+    snapshotBody: "Kilitli bir biçim değil. Dosya senin, ve üç araç da onu okuyabilir.",
+    errorsTitle: "Hatalar sayılıyor, gizlenmiyor",
+    errorsBody: "Okunamayan bir klasör bildirilir ve tarama devam eder.",
+    deleteTitle: "Sunucu ajanı silemez",
+    deleteBody: "Yalnızca okur. İçinde silme diye bir şey yok.",
   },
 
   desktop: {
     title: "Masaüstü uygulaması — spacetrace",
     description:
       "Diskleri neyin doldurduğunu dosya türüne göre renklenmiş, yakınlaşabilir bir treemap olarak gösteren uygulama; anlık görüntüler, uzak ajanlar ve karşılaştırma ile. macOS, Windows ve Linux.",
-    kicker: "Tauri ve Rust · doğal bir tarayıcının üstünde küçük bir pencere",
-    headlineGiven: "Diskinin haritası.",
-    headlineSecond: "Sonra üzerinde neyin değiştiğinin haritası.",
-    lede: "Bir klasörü tara ve dosya türüne göre renklenmiş bir treemap olarak gez. Ya da geçen haftadan bir anlık görüntüyü, ya da bir sunucuda duran birini aç ve ikisini yan yana koy.",
+    headline: "Diskini harita olarak gör",
+    lede: "Bir klasörü tara ve içinde gez. Renk, hangi tür dosyalara baktığını gösterir. Geçen haftaki taramayı bugünkünün yanına aç ve neyin değiştiğini gör.",
     ctaPrimary: "Uygulamayı indir",
     ctaSecondary: "Bütün dosyaları gör",
 
@@ -245,10 +230,8 @@ export const tr: Dictionary = {
     title: "Komut satırı — spacetrace",
     description:
       "spacetrace komut satırı aracı ve sunucu ajanı: tara, anlık görüntü al, karşılaştır ve HTTP üzerinden uzak bir makineyi oku. Tek statik ikili, Apache-2.0.",
-    kicker: "Tek statik ikili · kurulacak çalışma zamanı yok · Apache-2.0",
-    headlineGiven: "Aynı çekirdek, pencere olmadan.",
-    headlineSecond: "Betiklenebilir, ve sunucuda evinde.",
-    lede: "Uygulamanın yaptığı her şey, bir cron işine koyabileceğin bir komut olarak — artı zamanlanmış tarama yapıp HTTP üzerinden cevap veren bir ajan; böylece hiç bağlanmadığın bir makine bile diskine ne olduğunu söyleyebiliyor.",
+    headline: "Aynı tarama motoru, terminalinde",
+    lede: "Uygulamanın yaptığı her şey, betikleyebileceğin bir komut olarak. Ayrıca zamanlanmış tarama yapan bir ajan var; böylece hiç giriş yapmadığın bir makine bile diskine ne olduğunu anlatabilir.",
     installTitle: "Kurulum",
     installNote:
       "spacetrace ve spacetrace-agent'ı /usr/local/bin içine kuruyor. Bilinçli olarak sıkıcı POSIX sh, çünkü kabuğu busybox olan NAS yazılımlarında da çalışması gerekiyor.",
@@ -264,6 +247,17 @@ export const tr: Dictionary = {
     tour3Body: "Bir kökün son iki anlık görüntüsünü, ya da en yenisini diskin şu anki hâliyle karşılaştırıyor.",
     tour4Title: "Başka bir makineyi oku",
     tour4Body: "Salt okunur her komut --remote alıyor. Aynı alt komutlar, başka yere yönlenmiş.",
+
+    aiTitle: "Bir yapay zeka asistanının kullanması kolay",
+    aiLede:
+      "Her komut JSON basar ve araçta bir dosyayı silebilecek hiçbir şey yok. Yani bir asistanın bir makineyi taramasına, sayıları okumasına ve diski neyin doldurduğunu açıklamasına izin verebilirsin — bir ayrıştırıcı yazmadan ve risk almadan.",
+    aiPoints: [
+      "Her komutta --json var, yani hiçbir şeyin insan için yazılmış metinden ayıklanması gerekmez",
+      "Yalnızca okur: bir modelin uzanabileceği bir silme işlevi yok",
+      "Tek statik ikili dosya, yani her konteynere ya da sandbox'a bırakılabilir",
+      "--remote ve düz SSH, yani bir asistan bütün bir filoya bakabilir",
+      "Toplamlar du ve df ile eşleşir, yani vardığı sonucu kontrol edebilirsin",
+    ],
 
     agentTitle: "Ajan",
     agentLede:
@@ -281,19 +275,17 @@ export const tr: Dictionary = {
     dockerNote:
       "Ana makineyi salt okunur bağla ve onu tara. İmaj amd64 ve arm64'ü birlikte taşıyor.",
 
-    openTitle: "Açık kaynak, ve öyle kalıyor",
+    openTitle: "Kodu okuyabilirsin",
     openBody:
-      "Tarayıcı, anlık görüntü deposu, karşılaştırma ve iki ikili de Apache-2.0. Ajan senin sunucularında çalışıyor, dolayısıyla onu okuyabilmen gerekir. Masaüstü uygulaması ve hub ticari kısım.",
+      "Tarama motoru, anlık görüntü deposu, karşılaştırma ve iki ikili de Apache-2.0. Kendi sunucularına kurduğun yazılım, inceleyebileceğin yazılım olmalı.",
   },
 
   hub: {
     title: "Hub — spacetrace",
     description:
       "Kendi sunucunda çalışan spacetrace hub'ı: ajanlar anlık görüntü gönderiyor, hub geçmişi tutuyor, neyin büyüdüğünü hesaplıyor ve bir disk dolmadan önce haber veriyor.",
-    kicker: "Kendi sunucunda · tek ikili, tek SQLite dosyası · telemetri yok",
-    headlineGiven: "Kırk makine, kırk disk.",
-    headlineSecond: "Tek sayfa, en kötüsü başta.",
-    lede: "Ajanlar kendi makinelerini tarıyor ve anlık görüntüleri buraya gönderiyor. Hub geçmişi tutuyor, neyin büyüdüğünü hesaplıyor ve bir disk dolmadan önce sana söylüyor. İzlediği makinelere hiç dokunmuyor.",
+    headline: "Kırk makine. Tek sayfa.",
+    lede: "Sunucuların kendini tarar ve bildirir. En önce dolacak disk en üstte. Hub, izlediği makinelere hiç dokunmaz.",
     ctaBinaries: "İkili dosyalar",
     dashCaption:
       "Ekran görüntüsü değil, çizim. Gerçek pano sunucuda oluşturulan HTML — kendi sunucunda çalışan bir aracın sana bir sayfa göstermek için npm install istemesi, onu daha kötü bir araç yapar.",

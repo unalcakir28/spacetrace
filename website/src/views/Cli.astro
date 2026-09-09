@@ -67,11 +67,7 @@ const dockerRun = `docker run -d --name spacetrace \\
   description={dict.cli.description}
 >
   <section class="wrap hero">
-    <p class="kicker">{dict.cli.kicker}</p>
-    <h1>
-      <span class="given">{dict.cli.headlineGiven}</span>
-      <span class="second">{dict.cli.headlineSecond}</span>
-    </h1>
+    <h1>{dict.cli.headline}</h1>
     <p class="lede">{dict.cli.lede}</p>
 
     <h2 class="sub">{dict.cli.installTitle}</h2>
@@ -104,6 +100,25 @@ const dockerRun = `docker run -d --name spacetrace \\
             </article>
           ))
         }
+      </div>
+    </div>
+  </section>
+
+  <!-- Placed straight after the four commands: the reason this suits an
+       assistant is that those commands already print JSON and cannot delete
+       anything, so it reads as a consequence rather than a claim. -->
+  <section class="band">
+    <div class="wrap">
+      <div class="split aside">
+        <div data-reveal>
+          <h2>{dict.cli.aiTitle}</h2>
+          <p class="dim">{dict.cli.aiLede}</p>
+        </div>
+        <div data-reveal data-reveal-delay="1">
+          <ul class="ticks">
+            {dict.cli.aiPoints.map((point) => <li>{point}</li>)}
+          </ul>
+        </div>
       </div>
     </div>
   </section>
@@ -155,15 +170,7 @@ const dockerRun = `docker run -d --name spacetrace \\
     padding-block: clamp(44px, 7vw, 76px) clamp(20px, 4vw, 40px);
   }
 
-  .given {
-    display: block;
-    color: var(--faint);
-  }
 
-  .second {
-    display: block;
-    color: #fff;
-  }
 
   h1 {
     max-width: 22ch;
@@ -174,7 +181,7 @@ const dockerRun = `docker run -d --name spacetrace \\
   }
 
   .sub {
-    font-size: 1.16rem;
+    font-size: var(--t-md);
     margin: 30px 0 12px;
   }
 
@@ -184,7 +191,7 @@ const dockerRun = `docker run -d --name spacetrace \\
   }
 
   .small {
-    font-size: 0.88rem;
+    font-size: var(--t-sm);
     max-width: 72ch;
   }
 
@@ -204,7 +211,7 @@ const dockerRun = `docker run -d --name spacetrace \\
 
   .tour p {
     color: var(--dim);
-    font-size: 0.94rem;
+    font-size: var(--t-sm);
     max-width: none;
   }
 
@@ -227,7 +234,7 @@ const dockerRun = `docker run -d --name spacetrace \\
     padding-left: 26px;
     margin-bottom: 12px;
     color: var(--dim);
-    font-size: 0.95rem;
+    font-size: var(--t-sm);
   }
 
   .ticks li::before {

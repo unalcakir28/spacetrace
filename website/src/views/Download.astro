@@ -85,7 +85,7 @@ cargo build --release
           label={`${dict.common.download} · .dmg`}
           variant="btn btn-primary"
         />
-        <span class="faint mono" data-size></span>
+        <span class="faint tnum" data-size></span>
       </div>
       <p class="also">{dict.download.alsoCli}</p>
       <Command locale={locale} command={INSTALL_COMMAND} />
@@ -107,7 +107,7 @@ cargo build --release
           label={`${dict.common.download} · .exe`}
           variant="btn btn-primary"
         />
-        <span class="faint mono" data-size></span>
+        <span class="faint tnum" data-size></span>
         <DownloadLink
           locale={locale}
           asset={find(CLI_ASSETS, "x86_64-pc-windows-msvc.zip")}
@@ -132,7 +132,7 @@ cargo build --release
           label={`${dict.common.download} · .deb`}
           variant="btn btn-primary"
         />
-        <span class="faint mono" data-size></span>
+        <span class="faint tnum" data-size></span>
         <DownloadLink
           locale={locale}
           asset={find(DESKTOP_ASSETS, "linux-x86_64.AppImage")}
@@ -193,7 +193,7 @@ cargo build --release
                   <td>
                     <DownloadLink locale={locale} asset={row.asset} showFilename />
                   </td>
-                  <td class="faint mono nowrap" data-size />
+                  <td class="faint nowrap" data-size />
                   <td class="faint small">{row.note}</td>
                 </tr>
               ))
@@ -267,7 +267,7 @@ cargo build --release
                   <td>
                     <DownloadLink locale={locale} asset={row.asset} showFilename />
                   </td>
-                  <td class="faint mono nowrap" data-size />
+                  <td class="faint nowrap" data-size />
                   <td class="faint small">{row.note}</td>
                 </tr>
               ))
@@ -324,7 +324,7 @@ cargo build --release
                   <td>
                     <DownloadLink locale={locale} asset={row.asset} showFilename />
                   </td>
-                  <td class="faint mono nowrap" data-size />
+                  <td class="faint nowrap" data-size />
                   <td class="faint small">{row.note}</td>
                 </tr>
               ))
@@ -371,9 +371,9 @@ cargo build --release
   }
 
   .os {
-    font-family: var(--cond);
+    font-stretch: var(--w-sub);
     font-weight: 700;
-    font-size: 1.35rem;
+    font-size: var(--t-md);
     margin: 0;
   }
 
@@ -384,7 +384,7 @@ cargo build --release
 
   .sub {
     font-family: var(--mono);
-    font-size: 0.8rem;
+    font-size: var(--t-xs);
     color: var(--faint);
     margin: 6px 0 0;
     max-width: none;
@@ -397,11 +397,11 @@ cargo build --release
   .also {
     margin: 22px 0 10px;
     color: var(--dim);
-    font-size: 0.92rem;
+    font-size: var(--t-sm);
   }
 
   .tiny {
-    font-size: 0.84rem;
+    font-size: var(--t-xs);
     margin: 10px 0 0;
   }
 
@@ -419,7 +419,7 @@ cargo build --release
   }
 
   .small {
-    font-size: 0.86rem;
+    font-size: var(--t-xs);
   }
 
   .nowrap {

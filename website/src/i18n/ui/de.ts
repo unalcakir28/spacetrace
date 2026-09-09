@@ -43,38 +43,31 @@ export const de: Dictionary = {
   },
 
   home: {
-    title: "spacetrace — sehen, was die Platte füllt, und was sich verändert hat",
+    title: "spacetrace — sehen, was Ihre Platte frisst",
     description:
-      "Eine Desktop-App, die zeigt, was Ihre Platten füllt, Momentaufnahmen aufbewahrt und sagt, welcher Ordner wirklich gewachsen ist. Mit einem Kommandozeilenwerkzeug und einem selbst gehosteten Dashboard für Server.",
-    kicker: "macOS · Windows · Linux",
-    headlineGiven: "Jeder Speicheranalysator zeigt, was auf der Platte liegt.",
-    headlineSecond: "Dieser zeigt auch, was sich verändert hat.",
-    lede: "Ein Laufwerk scannen und als lebende Treemap durchsehen. Das Ergebnis als Momentaufnahme aufbewahren, nächste Woche wiederkommen — und den einen Ordner bekommen, der wirklich gewachsen ist, nicht das Wurzelverzeichnis darüber.",
+      "Sehen Sie als anklickbare Karte, was Ihre Platte füllt. Nächste Woche erneut scannen, und spacetrace nennt den Ordner, der gewachsen ist. Kostenlos für macOS, Windows und Linux.",
+
+    headline: "Was frisst Ihre Platte?",
+    lede: "Ein Laufwerk scannen und als Karte sehen. Nächste Woche erneut scannen und genau sehen, was gewachsen ist.",
     ctaPrimary: "App herunterladen",
-    ctaSecondary: "Oder die Kommandozeile nutzen",
-    noAccount: "Kein Konto, keine Telemetrie, nichts wird irgendwohin geschickt.",
+    ctaSecondary: "Terminal nutzen",
+    noAccount: "Kostenlos. Kein Konto, und nichts verlässt Ihren Rechner.",
+    demoCap: "Das ist die echte Karte, hier live. Klicken Sie eine Kachel an. Doppelklick geht tiefer.",
 
-    demoTitle: "Das ist die App. Machen Sie eine Probefahrt.",
-    demoLede:
-      "Das Original zeichnet Zehntausende Kacheln auf ein Canvas. Diese Version führt dasselbe Squarified-Layout auf einem kleineren Baum aus — direkt auf der Seite.",
-
-    diffTitle: "Ein Scan ist eine Fotografie. Zwei sind eine Antwort.",
+    diffTitle: "Welcher Ordner ist wirklich gewachsen?",
     diffLede:
-      "Einen Scan als Momentaufnahme speichern und dann vergleichen. Ordner, die eine Veränderung nur weitergeben, werden übersprungen; berichtet wird die erste Ebene, auf der sich das Wachstum wirklich verteilt.",
-    diffPoint:
-      "Es nennt den Ordner, an dem Sie etwas ändern können — nicht seine Vorfahren.",
+      "Vergleichen Sie zwei Scans, und spacetrace nennt den Ordner, an dem Sie etwas tun können — nicht den übergeordneten, in dem er zufällig liegt.",
 
-    partsTitle: "Ein Kern, drei Zugänge",
+    partsTitle: "Ein Werkzeug, drei Zugänge",
     partsLede:
-      "Scanner, Momentaufnahmen-Speicher, Vergleich und Treemap-Layout sind eine einzige Rust-Bibliothek. Eine Momentaufnahme, die eines davon schreibt, können die beiden anderen lesen.",
+      "Fangen Sie mit der App an. Terminal und Server-Dashboard nutzen darunter denselben Scanner.",
 
     trustTitle: "Zahlen, die Sie nachprüfen können",
     trustLede:
-      "Ein Speicherwerkzeug, dessen Zahlen Sie mit Ihrer eigenen Shell nicht in Übereinstimmung bringen können, hat die Diskussion verloren. Das sind Testbedingungen im Repository, keine Versprechen.",
+      "Ein Speicherwerkzeug, dessen Zahlen Sie mit Ihrer eigenen Shell nicht nachvollziehen können, hat die Diskussion verloren.",
 
     ctaTitle: "Finden Sie heraus, was gewachsen ist, während Sie nicht hingesehen haben.",
-    ctaLede:
-      "Die Desktop-App ist kostenlos herunterzuladen. Scanner, Kommandozeilenwerkzeug und Server-Agent sind Open Source und bleiben es.",
+    ctaLede: "Kostenlos für macOS, Windows und Linux.",
   },
 
   demo: {
@@ -112,72 +105,63 @@ export const de: Dictionary = {
   },
 
   parts: {
-    desktopName: "Desktop-App",
-    desktopRole: "macOS · Windows · Linux",
+    desktopName: "Die App",
+    desktopRole: "macOS, Windows, Linux",
     desktopPitch:
-      "Eine navigierbare Treemap, nach Dateityp gefärbt — Ordnerliste, Karte und Inspektor sind sich einig, welches Maß sie zeigen.",
+      "Auf ein Laufwerk richten und durch die Karte klicken. Die Farbe sagt, welche Art von Dateien Sie vor sich haben.",
     desktopPoints: [
-      "Einen laufenden Scan, eine gespeicherte Momentaufnahme oder einen Server über HTTP durchsehen",
-      "Zwei Momentaufnahmen vergleichen und den gewachsenen Ordner sehen",
-      "Einträge in den Papierkorb legen, ohne die Stelle zu verlieren",
-      "Das Fenster bleibt während eines Scans benutzbar",
+      "Einen laufenden Scan durchsehen oder einen früher gespeicherten",
+      "Zwei Scans vergleichen und finden, was gewachsen ist",
+      "Direkt aus der Karte löschen",
     ],
-    desktopCta: "Was die App macht",
+    desktopCta: "Die App ansehen",
 
-    cliName: "Kommandozeile",
-    cliRole: "eine statische Binärdatei · plus ein Server-Agent",
+    cliName: "Das Terminal",
+    cliRole: "Eine Binärdatei, keine Laufzeit",
     cliPitch:
-      "Derselbe Kern — als skriptbarer Befehl und als Dienst, der nach Zeitplan scannt und über HTTP antwortet.",
+      "Derselbe Scanner als Befehl, den Sie skripten können — mit JSON-Ausgabe für jedes Ergebnis.",
     cliPoints: [
-      "Scannen, aufbewahren, vergleichen, auflisten, für ncdu exportieren",
-      "Jeden lesenden Befehl auf einen entfernten Agenten richten",
-      "Läuft auf einem NAS, im Container, auf altem glibc",
-      "Der Agent liest. Er löscht nie etwas.",
+      "Scannen, vergleichen, exportieren",
+      "Läuft über SSH und auf einem NAS",
+      "Liest nur — löscht nie etwas",
     ],
-    cliCta: "Befehle und Einrichtung",
+    cliCta: "Die Befehle ansehen",
 
-    hubName: "Hub",
-    hubRole: "selbst gehostet · eine Binärdatei, eine SQLite-Datei",
+    hubName: "Das Dashboard",
+    hubRole: "Selbst gehostet",
     hubPitch:
-      "Agenten schicken ihre Momentaufnahmen hierher. Der Hub bewahrt den Verlauf, rechnet aus, was wächst, und meldet sich, bevor eine Platte voll ist.",
+      "Ihre Server melden sich. Eine Seite zeigt, welche Platte zuerst voll ist.",
     hubPoints: [
-      "Flotten-Dashboard nach Dringlichkeit sortiert, nicht nach Hostname",
-      "Wachstumsrate und Prognose „voll in N Tagen“",
-      "Schwellenwertregeln, per Webhook zugestellt",
+      "Sortiert nach dem, was jetzt Aufmerksamkeit braucht",
+      "Warnt, bevor eine Platte voll ist",
       "Berührt die überwachten Maschinen nie",
     ],
-    hubCta: "Hub betreiben",
+    hubCta: "Das Dashboard ansehen",
   },
 
   trust: {
-    duTitle: "Summen stimmen exakt mit Ihrer Shell überein",
-    duBody:
-      "Logisch zählt nur Dateibytes und stimmt mit du -sb überein. Auf der Platte sind die tatsächlich belegten Blöcke einschließlich Verzeichnisblöcke und stimmt mit du -s --block-size=1 überein. Geprüft auf /usr mit 141k Dateien.",
-    capacityTitle: "Frei von gesamt, niemals „% belegt“",
+    duTitle: "Summen stimmen mit Ihrer Shell überein",
+    duBody: "Dieselben Zahlen wie du, geprüft an einem Ordner mit 141.000 Dateien.",
+    capacityTitle: "Freier Platz, nie eine „% belegt“-Zahl",
     capacityBody:
-      "Die Kapazität wird so gemeldet, wie df sie meldet. In einem APFS-Container, einem btrfs-Subvolume oder Thin-LVM würde eine Belegt-Zahl die Geschwister mitzählen und df für denselben Mountpunkt widersprechen — deshalb wird sie nicht ausgegeben.",
-    forecastTitle: "Die Prognose wird häufiger zurückgehalten als gezeigt",
+      "Gemeldet, wie df es meldet. Wo die Zahl irreführen würde, bleibt sie weg.",
+    forecastTitle: "Die Prognose bleibt still, solange sie unsicher ist",
     forecastBody:
-      "„Voll in N Tagen“ braucht mindestens drei Momentaufnahmen über mindestens einen Tag, eine lineare Anpassung mit r² ≥ 0,5, eine tatsächlich gemessene Kapazität und eine Antwort innerhalb von zehn Jahren. Ein selbstsicher falsches Datum ist schlimmer als gar keines.",
-    snapshotTitle: "Eine Momentaufnahme ist eine gewöhnliche SQLite-Datei",
-    snapshotBody:
-      "Kein Exportformat, kein proprietärer Blob. Was der Agent aufbewahrt, ist dasselbe, was über die Leitung geht und auf Ihrem Rechner landet: eine entfernte Momentaufnahme wird mit demselben Code durchgesehen wie eine lokale.",
-    errorsTitle: "Fehler werden gezählt, nicht verschluckt",
-    errorsBody:
-      "Ein unlesbarer Pfad wird gemeldet und stichprobenartig gezeigt; der Scan läuft weiter. Ein abgebrochener Scan gibt überhaupt keinen Baum zurück, denn ein Teilbaum sieht vollständig aus und meldet eine Summe, die für keine Platte je gestimmt hat.",
-    deleteTitle: "Der Agent kann nicht löschen",
-    deleteBody:
-      "Software, die Sie auf einem Server installieren, gewinnt Vertrauen dadurch, dass sie das Beängstigende nicht kann. Die Desktop-App kann Einträge in den Papierkorb legen — nur bei einem laufenden Scan der Maschine, an der Sie sitzen, und nur nach Rückfrage.",
+      "Ein selbstsicher falsches Datum ist schlimmer als keines, deshalb wird „voll in 12 Tagen“ häufiger zurückgehalten als gezeigt.",
+    snapshotTitle: "Ein Scan ist eine gewöhnliche SQLite-Datei",
+    snapshotBody: "Kein verschlossenes Format. Sie gehört Ihnen, und alle drei Werkzeuge können sie lesen.",
+    errorsTitle: "Fehler werden gezählt, nicht versteckt",
+    errorsBody: "Ein unlesbarer Ordner wird gemeldet, und der Scan läuft weiter.",
+    deleteTitle: "Der Server-Agent kann nicht löschen",
+    deleteBody: "Er liest. Löschen gibt es in ihm überhaupt nicht.",
   },
 
   desktop: {
     title: "Desktop-App — spacetrace",
     description:
       "Eine navigierbare Treemap davon, was Ihre Platten füllt, nach Dateityp gefärbt, mit Momentaufnahmen, entfernten Agenten und Vergleichen. macOS, Windows und Linux.",
-    kicker: "Tauri und Rust · ein schlankes Fenster über einem nativen Scanner",
-    headlineGiven: "Eine Karte Ihrer Platte.",
-    headlineSecond: "Dann eine Karte davon, was sich verändert hat.",
-    lede: "Einen Ordner scannen und als nach Dateityp gefärbte Treemap durchsehen. Oder eine Momentaufnahme von letzter Woche öffnen, oder eine, die auf einem Server liegt, und beide nebeneinander legen.",
+    headline: "Ihre Platte als Karte",
+    lede: "Einen Ordner scannen und durchklicken. Die Farbe sagt, welche Art von Dateien Sie vor sich haben. Den Scan von letzter Woche neben den von heute legen und sehen, was sich verändert hat.",
     ctaPrimary: "App herunterladen",
     ctaSecondary: "Alle Dateien ansehen",
 
@@ -245,10 +229,8 @@ export const de: Dictionary = {
     title: "Kommandozeile — spacetrace",
     description:
       "Das spacetrace-Kommandozeilenwerkzeug und der Server-Agent: scannen, aufbewahren, vergleichen und eine entfernte Maschine über HTTP lesen. Eine statische Binärdatei, Apache-2.0.",
-    kicker: "Eine statische Binärdatei · keine Laufzeit zu installieren · Apache-2.0",
-    headlineGiven: "Derselbe Kern, ohne Fenster.",
-    headlineSecond: "Skriptbar — und auf einem Server zu Hause.",
-    lede: "Alles, was die App kann, als Befehl für einen Cron-Job — dazu ein Agent, der nach Zeitplan scannt und über HTTP antwortet, damit auch eine Maschine, auf der Sie sich nie anmelden, sagen kann, was mit ihrer Platte passiert ist.",
+    headline: "Derselbe Scanner, in Ihrem Terminal",
+    lede: "Alles, was die App kann, als Befehl, den Sie skripten können. Dazu ein Agent, der nach Zeitplan scannt — damit auch eine Maschine, auf der Sie sich nie anmelden, sagen kann, was mit ihrer Platte passiert ist.",
     installTitle: "Installation",
     installNote:
       "Installiert spacetrace und spacetrace-agent nach /usr/local/bin. Absichtlich langweiliges POSIX-sh, weil es auch auf NAS-Firmware laufen muss, deren Shell busybox ist.",
@@ -264,6 +246,17 @@ export const de: Dictionary = {
     tour3Body: "Vergleicht die letzten beiden Momentaufnahmen einer Wurzel — oder die neueste mit der Platte, wie sie jetzt ist.",
     tour4Title: "Eine andere Maschine lesen",
     tour4Body: "Jeder lesende Befehl nimmt --remote. Dieselben Unterbefehle, nur woanders hin gerichtet.",
+
+    aiTitle: "Leicht für einen KI-Assistenten zu bedienen",
+    aiLede:
+      "Jeder Befehl gibt JSON aus, und nichts im Werkzeug kann eine Datei löschen. Sie können also einen Assistenten eine Maschine scannen lassen, die Zahlen zurücklesen und erklären lassen, was die Platte gefüllt hat — ohne einen Parser zu schreiben und ohne ein Risiko einzugehen.",
+    aiPoints: [
+      "--json bei jedem Befehl, es muss also nichts aus menschlichem Text herausgekratzt werden",
+      "Nur lesend: Löschen gibt es darin nicht, wonach ein Modell greifen könnte",
+      "Eine statische Binärdatei, sie passt also in jeden Container und jede Sandbox",
+      "--remote und einfaches SSH, ein Assistent kann also eine ganze Flotte ansehen",
+      "Summen stimmen mit du und df überein, Sie können sein Ergebnis also nachprüfen",
+    ],
 
     agentTitle: "Der Agent",
     agentLede:
@@ -281,19 +274,17 @@ export const de: Dictionary = {
     dockerNote:
       "Den Host schreibgeschützt einhängen und den scannen. Das Image enthält amd64 und arm64.",
 
-    openTitle: "Open Source — und das bleibt so",
+    openTitle: "Sie können den Code lesen",
     openBody:
-      "Scanner, Momentaufnahmen-Speicher, Vergleich und beide Binärdateien stehen unter Apache-2.0. Der Agent läuft auf Ihren Servern, also müssen Sie ihn lesen können. Desktop-App und Hub sind der kommerzielle Teil.",
+      "Scanner, Momentaufnahmen-Speicher, Vergleich und beide Binärdateien stehen unter Apache-2.0. Software, die Sie auf Ihren eigenen Servern installieren, sollte Software sein, die Sie prüfen können.",
   },
 
   hub: {
     title: "Hub — spacetrace",
     description:
       "Der selbst gehostete spacetrace-Hub: Agenten schicken Momentaufnahmen, der Hub bewahrt den Verlauf, rechnet aus, was wächst, und meldet sich, bevor eine Platte voll ist.",
-    kicker: "Selbst gehostet · eine Binärdatei, eine SQLite-Datei · keine Telemetrie",
-    headlineGiven: "Vierzig Maschinen, vierzig Platten.",
-    headlineSecond: "Eine Seite, das Schlimmste zuerst.",
-    lede: "Agenten scannen ihre eigenen Maschinen und schicken die Momentaufnahmen hierher. Der Hub bewahrt den Verlauf, rechnet aus, was wächst, und meldet sich, bevor eine Platte voll ist. Er berührt die überwachten Maschinen nie.",
+    headline: "Vierzig Maschinen. Eine Seite.",
+    lede: "Ihre Server scannen sich selbst und melden sich. Die Platte, die zuerst voll ist, steht oben. Der Hub berührt die überwachten Maschinen nie.",
     ctaBinaries: "Binärdateien",
     dashCaption:
       "Gezeichnet, kein Bildschirmfoto. Das echte Dashboard ist serverseitig gerendertes HTML — ein selbst gehostetes Werkzeug, das erst ein npm install verlangt, bevor es eine Seite zeigt, ist ein schlechteres Werkzeug.",

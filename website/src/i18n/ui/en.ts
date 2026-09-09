@@ -50,38 +50,36 @@ export const en = {
   },
 
   home: {
-    title: "spacetrace — see what fills your disk, and what changed",
+    title: "spacetrace — find what is eating your disk",
     description:
-      "A desktop app that maps what is filling your disks, keeps snapshots, and tells you which folder actually grew. With a command line tool and a self-hosted fleet dashboard for servers.",
-    kicker: "macOS · Windows · Linux",
-    headlineGiven: "Every disk analyser maps what is on the disk.",
-    headlineSecond: "This one also shows what changed.",
-    lede: "Scan a drive and browse it as a live treemap. Keep the result as a snapshot, come back next week, and get the one folder that actually grew — not the root it happens to sit under.",
+      "See what fills your disk as a map you can click through. Scan again next week and spacetrace names the folder that grew. Free for macOS, Windows and Linux.",
+
+    // The reader arrives with a full disk and a question. Ask it back to them
+    // in their own words, then answer it in the next line. The old headline
+    // opened by describing the category ("Every disk analyser maps what is on
+    // the disk"), which asks the reader to care about the category first.
+    headline: "What is eating your disk?",
+    lede: "Scan a drive and see it as a map. Scan it again next week and see exactly what grew.",
     ctaPrimary: "Download the app",
-    ctaSecondary: "Or use the command line",
-    noAccount: "No account, no telemetry, no upload of anything.",
+    ctaSecondary: "Use the terminal",
+    noAccount: "Free. No account, and nothing leaves your machine.",
+    demoCap: "This is the real map, running here. Click a tile. Double-click to go deeper.",
 
-    demoTitle: "This is the app. Take it for a drive.",
-    demoLede:
-      "The real thing renders tens of thousands of tiles on a canvas. This one runs the same squarified layout on a smaller tree, right here in the page.",
-
-    diffTitle: "One scan is a photograph. Two are an answer.",
+    diffTitle: "Which folder actually grew?",
     diffLede:
-      "Save a scan as a snapshot, then compare. Folders that merely pass a change through get skipped, and the first level where growth genuinely spreads out is the one reported.",
-    diffPoint:
-      "It names the folder you can act on, not its ancestors.",
+      "Compare two scans and spacetrace names the folder you can act on — not the parent folder it happens to sit in.",
 
-    partsTitle: "One core, three ways in",
+    partsTitle: "One tool, three ways in",
     partsLede:
-      "The scanner, the snapshot store, the diff and the treemap layout are one Rust library. A snapshot written by any of these is readable by the other two.",
+      "Start with the app. The terminal and the server dashboard run the same scanner underneath.",
 
     trustTitle: "Numbers you can check",
     trustLede:
-      "A disk tool that prints a figure you cannot reconcile with your own shell has lost the argument. These are test conditions in the repository, not promises.",
+      "A disk tool whose figures you cannot reconcile with your own shell has lost the argument.",
 
     ctaTitle: "Find out what grew while you were not looking.",
-    ctaLede:
-      "The desktop app is free to download. The scanner, the command line tool and the server agent are open source and always will be.",
+    ctaLede: "Free for macOS, Windows and Linux.",
+
   },
 
   demo: {
@@ -119,72 +117,68 @@ export const en = {
   },
 
   parts: {
-    desktopName: "Desktop app",
-    desktopRole: "macOS · Windows · Linux",
+    desktopName: "The app",
+    desktopRole: "macOS, Windows, Linux",
     desktopPitch:
-      "A zoomable treemap coloured by file type, with the folder list, the map and the inspector all agreeing on which measure they show.",
+      "Point it at a drive and click through the map. Colour tells you what kind of files you are looking at.",
     desktopPoints: [
-      "Browse a live scan, a stored snapshot, or a server over HTTP",
-      "Compare two snapshots and see the folder that grew",
-      "Move entries to the Trash without losing your place",
-      "The window stays usable while a scan runs",
+      "Browse a live scan or one you saved earlier",
+      "Compare two scans to find what grew",
+      "Delete straight from the map",
     ],
-    desktopCta: "What the app does",
+    desktopCta: "See the app",
 
-    cliName: "Command line",
-    cliRole: "one static binary · plus a server agent",
+    cliName: "The terminal",
+    cliRole: "One binary, no runtime",
     cliPitch:
-      "The same core as a command you can script, and as a service that scans on a schedule and answers over HTTP.",
+      "The same scanner as a command you can script, with JSON output for every result.",
     cliPoints: [
-      "Scan, snapshot, diff, list, export to ncdu",
-      "Point any read-only command at a remote agent",
-      "Runs on a NAS, in a container, on elderly glibc",
-      "The agent reads. It never deletes anything.",
+      "Scan, compare, export",
+      "Works over SSH and on a NAS",
+      "Reads only — it never deletes",
     ],
-    cliCta: "Commands and setup",
+    cliCta: "See the commands",
 
-    hubName: "Hub",
-    hubRole: "self-hosted · one binary, one SQLite file",
+    hubName: "The dashboard",
+    hubRole: "Self-hosted",
     hubPitch:
-      "Agents push their snapshots to it. It keeps the history, works out what is growing, and tells you before a disk fills up.",
+      "Your servers report in. One page shows you which disk fills up first.",
     hubPoints: [
-      "Fleet dashboard ordered by urgency, not by hostname",
-      "Growth rate and a “fills in N days” forecast",
-      "Threshold rules delivered by webhook",
+      "Ordered by what needs attention now",
+      "Warns you before a disk is full",
       "Never touches the machines it watches",
     ],
-    hubCta: "Run the hub",
+    hubCta: "See the dashboard",
+
   },
 
   trust: {
-    duTitle: "Totals match your shell exactly",
-    duBody:
-      "Logical is file bytes only and matches du -sb. On disk is the blocks actually allocated, directory blocks included, and matches du -s --block-size=1. Verified on /usr with 141k files.",
-    capacityTitle: "Free of total, never “% used”",
+    // Kept because this honesty is the product's real differentiator, but cut
+    // to one line each: the full derivations (du flags, r-squared thresholds,
+    // filesystem caveats) belong on the product pages, not the home page.
+    duTitle: "Totals match your shell",
+    duBody: "The same numbers as du, checked against a folder of 141,000 files.",
+    capacityTitle: "Free space, never a “% used” figure",
     capacityBody:
-      "Capacity is reported the way df reports it. On an APFS container, a btrfs subvolume or thin LVM, a used figure includes the siblings and disagrees with df about the same mount — so it is not printed.",
-    forecastTitle: "The forecast is withheld more often than shown",
+      "Reported the way df reports it. Where that number would mislead, it is left out.",
+    forecastTitle: "The forecast stays quiet unless it is sure",
     forecastBody:
-      "“Fills in N days” needs at least three snapshots spanning a day, a linear fit of r² ≥ 0.5, a capacity that was actually measured, and an answer inside ten years. A confident wrong date is worse than no date.",
-    snapshotTitle: "A snapshot is a plain SQLite file",
-    snapshotBody:
-      "Not an export format, not a proprietary blob. What the agent stores is what travels over the wire and what lands on your laptop, so a remote snapshot is browsed by the identical code as a local one.",
-    errorsTitle: "Errors are counted, not swallowed",
-    errorsBody:
-      "An unreadable path is reported and sampled; the scan carries on. A cancelled scan returns no tree at all, because a partial tree looks complete and reports a total that was never true of any disk.",
-    deleteTitle: "The agent has no delete",
-    deleteBody:
-      "Software you install on a server earns trust by not being able to do the frightening thing. The desktop app can move entries to the Trash — only on a live scan of the machine you are sitting at, and only after asking.",
+      "A confident wrong date is worse than no date, so “fills in 12 days” is withheld more often than it is shown.",
+    snapshotTitle: "A scan is a plain SQLite file",
+    snapshotBody: "Not a locked format. It is yours, and all three tools can read it.",
+    errorsTitle: "Errors are counted, not hidden",
+    errorsBody: "An unreadable folder is reported and the scan carries on.",
+    deleteTitle: "The server agent cannot delete",
+    deleteBody: "It reads. There is no delete in it at all.",
+
   },
 
   desktop: {
     title: "Desktop app — spacetrace",
     description:
       "A zoomable treemap of what is filling your disks, coloured by file type, with snapshots, remote agents and diffs. macOS, Windows and Linux.",
-    kicker: "Tauri and Rust · a small window over a native scanner",
-    headlineGiven: "A map of your disk.",
-    headlineSecond: "Then a map of what changed on it.",
-    lede: "Scan a folder and browse it as a treemap coloured by file type. Or open a snapshot from last week, or one sitting on a server, and put the two side by side.",
+    headline: "See your disk as a map",
+    lede: "Scan a folder and click through it. Colour tells you what kind of files you are looking at. Open last week's scan beside today's and see what changed.",
     ctaPrimary: "Download the app",
     ctaSecondary: "See every file",
 
@@ -252,10 +246,8 @@ export const en = {
     title: "Command line — spacetrace",
     description:
       "The spacetrace command line tool and server agent: scan, snapshot, diff, and read a remote machine over HTTP. One static binary, Apache-2.0.",
-    kicker: "One static binary · no runtime to install · Apache-2.0",
-    headlineGiven: "The same core, without a window.",
-    headlineSecond: "Scriptable, and at home on a server.",
-    lede: "Everything the app does, as a command you can put in a cron job — plus an agent that scans on a schedule and answers over HTTP, so a machine you never log in to can still tell you what happened to its disk.",
+    headline: "The same scanner, in your terminal",
+    lede: "Everything the app does, as a command you can script. Plus an agent that scans on a schedule, so a machine you never log into can still tell you what happened to its disk.",
     installTitle: "Install",
     installNote:
       "Installs spacetrace and spacetrace-agent into /usr/local/bin. Deliberately boring POSIX sh, because it also has to run on NAS firmware whose shell is busybox.",
@@ -271,6 +263,20 @@ export const en = {
     tour3Body: "Compares the last two snapshots of a root, or the newest one against the disk right now.",
     tour4Title: "Read another machine",
     tour4Body: "Any read-only command takes --remote. Same subcommands, pointed elsewhere.",
+
+    // The user asked for this section: an agent driving a CLI is a real and
+    // growing way this tool gets used, and the reasons it suits that are
+    // properties the product already has rather than a claim bolted on.
+    aiTitle: "Easy for an AI assistant to drive",
+    aiLede:
+      "Every command prints JSON, and nothing in the tool can delete a file. So you can let an assistant scan a machine, read the numbers back, and explain what filled the disk — without writing a parser and without taking a risk.",
+    aiPoints: [
+      "--json on every command, so nothing has to be scraped out of human text",
+      "Read-only: there is no delete in it for a model to reach for",
+      "One static binary, so it drops into any container or sandbox",
+      "--remote and plain SSH, so an assistant can look at a whole fleet",
+      "Totals match du and df, so you can check what it concluded",
+    ],
 
     agentTitle: "The agent",
     agentLede:
@@ -288,19 +294,17 @@ export const en = {
     dockerNote:
       "Mount the host read-only and scan that. The image carries both amd64 and arm64.",
 
-    openTitle: "Open source, and staying that way",
+    openTitle: "You can read the code",
     openBody:
-      "The scanner, the snapshot store, the diff and both binaries are Apache-2.0. The agent runs on your servers, so you should be able to read it. The desktop app and the hub are the commercial part.",
+      "The scanner, the snapshot store, the diff and both binaries are Apache-2.0. Software you install on your own servers should be software you can inspect.",
   },
 
   hub: {
     title: "Hub — spacetrace",
     description:
       "The self-hosted spacetrace hub: agents push snapshots, the hub keeps the history, works out what is growing, and tells you before a disk fills up.",
-    kicker: "Self-hosted · one binary, one SQLite file · no telemetry",
-    headlineGiven: "Forty machines, forty disks.",
-    headlineSecond: "One page, worst first.",
-    lede: "Agents scan their own machines and push the snapshots here. The hub keeps the history, works out what is growing, and tells you before a disk fills up. It never touches the machines it watches.",
+    headline: "Forty machines. One page.",
+    lede: "Your servers scan themselves and report in. The disk that fills up first is at the top. The hub never touches the machines it watches.",
     ctaBinaries: "Binaries",
     dashCaption:
       "Drawn rather than screenshotted. The real dashboard is server-rendered HTML — a self-hosted tool that needs an npm install before it will show you a page is a worse tool.",

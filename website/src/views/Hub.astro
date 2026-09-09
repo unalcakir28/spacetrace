@@ -5,7 +5,7 @@ import FleetTable from "../components/FleetTable.astro";
 import ReleaseScript from "../components/ReleaseScript.astro";
 import { t, type Locale } from "../i18n";
 import { localeUrl } from "../i18n/routing";
-import { HUB_IMAGE, HUB_REPO_URL } from "../data/releases";
+import { HUB_IMAGE } from "../data/releases";
 
 interface Props {
   locale: Locale;
@@ -43,11 +43,7 @@ keep_per_target = 90`;
   description={dict.hub.description}
 >
   <section class="wrap hero">
-    <p class="kicker">{dict.hub.kicker}</p>
-    <h1>
-      <span class="given">{dict.hub.headlineGiven}</span>
-      <span class="second">{dict.hub.headlineSecond}</span>
-    </h1>
+    <h1>{dict.hub.headline}</h1>
     <p class="lede">{dict.hub.lede}</p>
 
     <div class="row hero-actions">
@@ -206,9 +202,6 @@ keep_per_target = 90`;
         <div data-reveal data-reveal-delay="1">
           <p class="dim">{dict.hub.noRollupBody1}</p>
           <p class="dim">{dict.hub.noRollupBody2}</p>
-          <p>
-            <a href={HUB_REPO_URL}>{HUB_REPO_URL.replace("https://", "")}</a>
-          </p>
         </div>
       </div>
     </div>
@@ -222,15 +215,7 @@ keep_per_target = 90`;
     padding-block: clamp(44px, 7vw, 76px) clamp(48px, 7vw, 80px);
   }
 
-  .given {
-    display: block;
-    color: var(--faint);
-  }
 
-  .second {
-    display: block;
-    color: #fff;
-  }
 
   h1 {
     max-width: 22ch;
@@ -256,17 +241,17 @@ keep_per_target = 90`;
 
   .cap {
     margin-top: 12px;
-    font-size: 0.86rem;
+    font-size: var(--t-xs);
     max-width: 76ch;
   }
 
   .small {
-    font-size: 0.88rem;
+    font-size: var(--t-sm);
   }
 
   table.api th {
     font-family: var(--mono);
-    font-size: 0.84rem;
+    font-size: var(--t-xs);
     font-weight: 400;
     color: var(--accent-bright);
     white-space: nowrap;

@@ -257,17 +257,17 @@ spacetrace --db snap.sqlite scans</pre>
             </thead>
             <tbody>
               <tr>
-                <th scope="row" class="mono">{dict.guide.sizeLogical}</th>
+                <th scope="row">{dict.guide.sizeLogical}</th>
                 <td>{dict.guide.sizeLogicalWhat}</td>
                 <td class="mono" translate="no">du -sb</td>
               </tr>
               <tr>
-                <th scope="row" class="mono">{dict.guide.sizeOnDisk}</th>
+                <th scope="row">{dict.guide.sizeOnDisk}</th>
                 <td>{dict.guide.sizeOnDiskWhat}</td>
                 <td class="mono" translate="no">du -s --block-size=1</td>
               </tr>
               <tr>
-                <th scope="row" class="mono">{dict.guide.sizeCapacity}</th>
+                <th scope="row">{dict.guide.sizeCapacity}</th>
                 <td>{dict.guide.sizeCapacityWhat}</td>
                 <td>{dict.guide.sizeCapacityMatches}</td>
               </tr>
@@ -357,15 +357,15 @@ spacetrace --db snap.sqlite scans</pre>
     position: sticky;
     top: 84px;
     align-self: start;
-    font-size: 0.92rem;
+    font-size: var(--t-sm);
   }
 
   .toc-title {
-    font-family: var(--cond);
+    font-stretch: var(--w-sub);
     font-weight: 600;
     color: var(--faint);
     margin: 0 0 10px;
-    font-size: 0.9rem;
+    font-size: var(--t-sm);
   }
 
   .toc ol {
@@ -442,7 +442,7 @@ spacetrace --db snap.sqlite scans</pre>
   .opts li {
     margin: 0;
     font-family: var(--mono);
-    font-size: 0.82rem;
+    font-size: var(--t-xs);
     color: var(--dim);
     background: var(--panel-raised);
     border: 1px solid var(--line);

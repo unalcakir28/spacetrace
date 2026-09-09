@@ -43,38 +43,32 @@ export const it: Dictionary = {
   },
 
   home: {
-    title: "spacetrace — vedi cosa riempie il disco e cosa è cambiato",
+    title: "spacetrace — scopri cosa sta riempiendo il tuo disco",
     description:
-      "Un'app desktop che mappa cosa sta riempiendo i tuoi dischi, conserva istantanee e ti dice quale cartella è davvero cresciuta. Con uno strumento a riga di comando e una dashboard self-hosted per i server.",
-    kicker: "macOS · Windows · Linux",
-    headlineGiven: "Ogni analizzatore di dischi mappa cosa c'è sul disco.",
-    headlineSecond: "Questo mostra anche cosa è cambiato.",
-    lede: "Scansiona un'unità ed esplorala come una treemap dal vivo. Conserva il risultato come istantanea, torna la settimana dopo e ottieni l'unica cartella che è davvero cresciuta — non la radice sotto cui si trova.",
+      "Vedi cosa riempie il disco come una mappa che puoi esplorare. Scansiona di nuovo la settimana prossima e spacetrace ti dice quale cartella è cresciuta. Gratis per macOS, Windows e Linux.",
+
+    headline: "Cosa sta riempiendo il tuo disco?",
+    lede: "Scansiona un'unità e guardala come una mappa. Scansionala di nuovo la settimana prossima e vedi esattamente cosa è cresciuto.",
     ctaPrimary: "Scarica l'app",
-    ctaSecondary: "Oppure usa la riga di comando",
-    noAccount: "Nessun account, nessuna telemetria, nessun caricamento di nulla.",
+    ctaSecondary: "Usa il terminale",
+    noAccount: "Gratis. Nessun account, e nulla lascia il tuo computer.",
+    demoCap: "Questa è la mappa vera, in esecuzione qui. Fai clic su un riquadro. Doppio clic per entrare più a fondo.",
 
-    demoTitle: "Questa è l'app. Fai un giro di prova.",
-    demoLede:
-      "Quella vera disegna decine di migliaia di riquadri su un canvas. Questa esegue lo stesso layout squarified su un albero più piccolo, direttamente in pagina.",
-
-    diffTitle: "Una scansione è una fotografia. Due sono una risposta.",
+    diffTitle: "Quale cartella è davvero cresciuta?",
     diffLede:
-      "Salva una scansione come istantanea, poi confronta. Le cartelle che si limitano a trasmettere una variazione vengono saltate, e viene riportato il primo livello in cui la crescita si distribuisce davvero.",
-    diffPoint:
-      "Nomina la cartella su cui puoi agire, non i suoi antenati.",
+      "Confronta due scansioni e spacetrace indica la cartella su cui puoi agire — non la cartella madre in cui si trova per caso.",
 
-    partsTitle: "Un solo nucleo, tre modi di entrarci",
+    partsTitle: "Un solo strumento, tre modi per usarlo",
     partsLede:
-      "Lo scanner, l'archivio delle istantanee, il confronto e il layout della treemap sono un'unica libreria Rust. Un'istantanea scritta da uno di questi è leggibile dagli altri due.",
+      "Inizia con l'app. Il terminale e la dashboard del server usano sotto lo stesso scanner.",
 
     trustTitle: "Numeri che puoi verificare",
     trustLede:
-      "Uno strumento per dischi che stampa una cifra non riconciliabile con la tua shell ha già perso la discussione. Queste sono condizioni di test nel repository, non promesse.",
+      "Uno strumento per dischi le cui cifre non puoi verificare con la tua shell ha già perso la discussione.",
 
     ctaTitle: "Scopri cosa è cresciuto mentre non guardavi.",
-    ctaLede:
-      "L'app desktop è scaricabile gratuitamente. Lo scanner, lo strumento a riga di comando e l'agente per server sono open source e lo resteranno.",
+    ctaLede: "Gratis per macOS, Windows e Linux.",
+
   },
 
   demo: {
@@ -112,72 +106,63 @@ export const it: Dictionary = {
   },
 
   parts: {
-    desktopName: "App desktop",
-    desktopRole: "macOS · Windows · Linux",
+    desktopName: "L'app",
+    desktopRole: "macOS, Windows, Linux",
     desktopPitch:
-      "Una treemap navigabile colorata per tipo di file, in cui l'elenco delle cartelle, la mappa e l'ispettore concordano su quale misura stanno mostrando.",
+      "Puntala su un'unità ed esplora la mappa. Il colore ti dice che tipo di file stai guardando.",
     desktopPoints: [
-      "Esplora una scansione dal vivo, un'istantanea salvata o un server via HTTP",
-      "Confronta due istantanee e vedi la cartella che è cresciuta",
-      "Sposta voci nel Cestino senza perdere il punto in cui eri",
-      "La finestra resta usabile mentre una scansione è in corso",
+      "Esplora una scansione dal vivo o una salvata in precedenza",
+      "Confronta due scansioni per scoprire cosa è cresciuto",
+      "Elimina direttamente dalla mappa",
     ],
-    desktopCta: "Cosa fa l'app",
+    desktopCta: "Vedi l'app",
 
-    cliName: "Riga di comando",
-    cliRole: "un binario statico · più un agente per server",
+    cliName: "Il terminale",
+    cliRole: "Un binario, nessun runtime",
     cliPitch:
-      "Lo stesso nucleo, come comando da script e come servizio che scansiona su pianificazione e risponde via HTTP.",
+      "Lo stesso scanner come comando da usare negli script, con output JSON per ogni risultato.",
     cliPoints: [
-      "Scansiona, salva istantanee, confronta, elenca, esporta per ncdu",
-      "Punta qualsiasi comando di sola lettura verso un agente remoto",
-      "Funziona su un NAS, in un container, su glibc datate",
-      "L'agente legge. Non cancella mai nulla.",
+      "Scansiona, confronta, esporta",
+      "Funziona via SSH e su un NAS",
+      "Solo lettura — non cancella mai nulla",
     ],
-    cliCta: "Comandi e configurazione",
+    cliCta: "Vedi i comandi",
 
-    hubName: "Hub",
-    hubRole: "self-hosted · un binario, un file SQLite",
+    hubName: "La dashboard",
+    hubRole: "Self-hosted",
     hubPitch:
-      "Gli agenti gli inviano le loro istantanee. L'hub conserva la cronologia, calcola cosa sta crescendo e ti avverte prima che un disco si riempia.",
+      "I tuoi server inviano i dati. Una pagina ti mostra quale disco si riempie per primo.",
     hubPoints: [
-      "Dashboard della flotta ordinata per urgenza, non per nome host",
-      "Tasso di crescita e previsione “si riempie in N giorni”",
-      "Regole di soglia consegnate via webhook",
+      "Ordinata per ciò che richiede attenzione ora",
+      "Ti avvisa prima che un disco sia pieno",
       "Non tocca mai le macchine che osserva",
     ],
-    hubCta: "Avvia l'hub",
+    hubCta: "Vedi la dashboard",
   },
 
   trust: {
-    duTitle: "I totali coincidono esattamente con la tua shell",
-    duBody:
-      "Logica conta solo i byte dei file e coincide con du -sb. Su disco sono i blocchi effettivamente allocati, inclusi quelli delle directory, e coincide con du -s --block-size=1. Verificato su /usr con 141k file.",
-    capacityTitle: "Libero sul totale, mai “% usato”",
+    duTitle: "I totali coincidono con la tua shell",
+    duBody: "Gli stessi numeri di du, verificati su una cartella di 141.000 file.",
+    capacityTitle: "Spazio libero, mai “% usato”",
     capacityBody:
-      "La capacità è riportata come la riporta df. Su un container APFS, un subvolume btrfs o un LVM thin, una cifra di spazio usato includerebbe i fratelli e contraddirebbe df sullo stesso mount — quindi non viene stampata.",
-    forecastTitle: "La previsione viene taciuta più spesso di quanto sia mostrata",
+      "Riportato come lo riporta df. Dove quel numero sarebbe fuorviante, viene omesso.",
+    forecastTitle: "La previsione tace se non è sicura",
     forecastBody:
-      "“Si riempie in N giorni” richiede almeno tre istantanee su almeno un giorno, un fit lineare con r² ≥ 0,5, una capacità davvero misurata e una risposta entro dieci anni. Una data sbagliata ma sicura è peggio di nessuna data.",
-    snapshotTitle: "Un'istantanea è un semplice file SQLite",
-    snapshotBody:
-      "Non un formato di esportazione, non un blob proprietario. Ciò che l'agente conserva è ciò che viaggia in rete ed è ciò che arriva sul tuo portatile: un'istantanea remota si esplora con lo stesso codice di una locale.",
-    errorsTitle: "Gli errori si contano, non si ingoiano",
-    errorsBody:
-      "Un percorso illeggibile viene segnalato e campionato; la scansione continua. Una scansione annullata non restituisce alcun albero, perché un albero parziale sembra completo e riporta un totale che non è mai stato vero per nessun disco.",
-    deleteTitle: "L'agente non ha la cancellazione",
-    deleteBody:
-      "Il software che installi su un server guadagna fiducia non potendo fare la cosa spaventosa. L'app desktop può spostare voci nel Cestino — solo su una scansione dal vivo della macchina davanti a te, e solo dopo aver chiesto.",
+      "Una data sbagliata detta con sicurezza è peggio di nessuna data, quindi “si riempie in 12 giorni” viene taciuto più spesso di quanto venga mostrato.",
+    snapshotTitle: "Una scansione è un semplice file SQLite",
+    snapshotBody: "Non un formato chiuso. È tuo, e tutti e tre gli strumenti sanno leggerlo.",
+    errorsTitle: "Gli errori si contano, non si nascondono",
+    errorsBody: "Una cartella illeggibile viene segnalata e la scansione continua.",
+    deleteTitle: "L'agente del server non può cancellare",
+    deleteBody: "Legge soltanto. Non c'è alcuna cancellazione al suo interno.",
   },
 
   desktop: {
     title: "App desktop — spacetrace",
     description:
       "Una treemap navigabile di cosa sta riempiendo i tuoi dischi, colorata per tipo di file, con istantanee, agenti remoti e confronti. macOS, Windows e Linux.",
-    kicker: "Tauri e Rust · una finestra leggera su uno scanner nativo",
-    headlineGiven: "Una mappa del tuo disco.",
-    headlineSecond: "Poi una mappa di cosa è cambiato.",
-    lede: "Scansiona una cartella ed esplorala come treemap colorata per tipo di file. Oppure apri un'istantanea della settimana scorsa, o una che sta su un server, e mettile a confronto.",
+    headline: "Vedi il tuo disco come una mappa",
+    lede: "Scansiona una cartella ed esplorala con un clic. Il colore ti dice che tipo di file stai guardando. Apri la scansione della settimana scorsa accanto a quella di oggi e vedi cosa è cambiato.",
     ctaPrimary: "Scarica l'app",
     ctaSecondary: "Vedi tutti i file",
 
@@ -245,10 +230,8 @@ export const it: Dictionary = {
     title: "Riga di comando — spacetrace",
     description:
       "Lo strumento a riga di comando spacetrace e l'agente per server: scansiona, salva istantanee, confronta e leggi una macchina remota via HTTP. Un binario statico, Apache-2.0.",
-    kicker: "Un binario statico · nessun runtime da installare · Apache-2.0",
-    headlineGiven: "Lo stesso nucleo, senza finestra.",
-    headlineSecond: "Scriptabile, e a casa su un server.",
-    lede: "Tutto ciò che fa l'app, come comando da mettere in un cron job — più un agente che scansiona su pianificazione e risponde via HTTP, così anche una macchina a cui non accedi mai può dirti cosa è successo al suo disco.",
+    headline: "Lo stesso scanner, nel tuo terminale",
+    lede: "Tutto ciò che fa l'app, come comando da usare negli script. Più un agente che scansiona su una pianificazione, così anche una macchina a cui non accedi mai può dirti cosa è successo al suo disco.",
     installTitle: "Installazione",
     installNote:
       "Installa spacetrace e spacetrace-agent in /usr/local/bin. Deliberatamente noioso sh POSIX, perché deve girare anche sul firmware di un NAS la cui shell è busybox.",
@@ -264,6 +247,17 @@ export const it: Dictionary = {
     tour3Body: "Confronta le ultime due istantanee di una radice, o la più recente con il disco così com'è ora.",
     tour4Title: "Leggi un'altra macchina",
     tour4Body: "Qualsiasi comando di sola lettura accetta --remote. Stessi sottocomandi, puntati altrove.",
+
+    aiTitle: "Facile da usare per un assistente AI",
+    aiLede:
+      "Ogni comando stampa JSON, e nello strumento non c'è nulla che possa cancellare un file. Così puoi lasciare che un assistente scansioni una macchina, legga i numeri e spieghi cosa ha riempito il disco — senza scrivere un parser e senza correre rischi.",
+    aiPoints: [
+      "--json su ogni comando, così non c'è nulla da estrarre da testo pensato per un umano",
+      "Sola lettura: non c'è alcuna cancellazione a cui un modello possa ricorrere",
+      "Un binario statico, così entra in qualsiasi container o sandbox",
+      "--remote e SSH semplice, così un assistente può osservare un'intera flotta",
+      "I totali coincidono con du e df, così puoi verificare le sue conclusioni",
+    ],
 
     agentTitle: "L'agente",
     agentLede:
@@ -281,19 +275,17 @@ export const it: Dictionary = {
     dockerNote:
       "Monta l'host in sola lettura e scansiona quello. L'immagine contiene sia amd64 sia arm64.",
 
-    openTitle: "Open source, e così resterà",
+    openTitle: "Puoi leggere il codice",
     openBody:
-      "Lo scanner, l'archivio delle istantanee, il confronto ed entrambi i binari sono Apache-2.0. L'agente gira sui tuoi server, quindi devi poterlo leggere. L'app desktop e l'hub sono la parte commerciale.",
+      "Lo scanner, l'archivio delle istantanee, il confronto ed entrambi i binari sono Apache-2.0. Il software che installi sui tuoi server dovrebbe essere software che puoi ispezionare.",
   },
 
   hub: {
     title: "Hub — spacetrace",
     description:
       "L'hub spacetrace self-hosted: gli agenti inviano istantanee, l'hub conserva la cronologia, calcola cosa sta crescendo e ti avverte prima che un disco si riempia.",
-    kicker: "Self-hosted · un binario, un file SQLite · nessuna telemetria",
-    headlineGiven: "Quaranta macchine, quaranta dischi.",
-    headlineSecond: "Una pagina, prima i peggiori.",
-    lede: "Gli agenti scansionano le proprie macchine e inviano qui le istantanee. L'hub conserva la cronologia, calcola cosa sta crescendo e ti avverte prima che un disco si riempia. Non tocca mai le macchine che osserva.",
+    headline: "Quaranta macchine. Una pagina.",
+    lede: "I tuoi server si scansionano da soli e inviano i dati. Il disco che si riempie per primo è in cima. L'hub non tocca mai le macchine che osserva.",
     ctaBinaries: "Binari",
     dashCaption:
       "Disegnata, non uno screenshot. La dashboard reale è HTML generato dal server: uno strumento self-hosted che ha bisogno di un npm install prima di mostrarti una pagina è uno strumento peggiore.",

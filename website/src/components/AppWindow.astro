@@ -43,7 +43,9 @@ const CATEGORIES = [
 
   <div class="win-bar">
     <span class="app" translate="no">spacetrace</span>
-    <span class="faint">{dict.home.kicker}</span>
+    <!-- Mock window chrome: a real title bar shows the scan target, and a
+         path is not a translatable string. -->
+    <span class="faint" translate="no">~/Projects</span>
     <span class="spacer"></span>
     <span class="basis" role="img" aria-label={dict.demo.basisLabel}>
       <span class="on">{dict.demo.onDisk}</span><span>{dict.demo.logical}</span>
@@ -159,7 +161,7 @@ const CATEGORIES = [
     background: var(--bg);
     box-shadow: 0 30px 80px -34px rgba(0, 0, 0, 0.95);
     font-family: var(--mono);
-    font-size: 0.73rem;
+    font-size: var(--t-2xs);
     line-height: 1.5;
   }
 
@@ -174,9 +176,9 @@ const CATEGORIES = [
   }
 
   .app {
-    font-family: var(--cond);
+    font-stretch: var(--w-sub);
     font-weight: 700;
-    font-size: 0.9rem;
+    font-size: var(--t-sm);
     color: var(--text);
   }
 
@@ -360,12 +362,12 @@ const CATEGORIES = [
   }
 
   .tile.big {
-    font-size: 0.92rem;
+    font-size: var(--t-sm);
   }
 
   .flag {
     margin-top: auto;
-    font-size: 0.68rem;
+    font-size: var(--t-2xs);
     opacity: 0.8;
   }
 
@@ -375,7 +377,7 @@ const CATEGORIES = [
 
   .inspect h4 {
     font-family: var(--mono);
-    font-size: 0.84rem;
+    font-size: var(--t-xs);
     color: #fff;
     margin-bottom: 8px;
   }
@@ -401,7 +403,7 @@ const CATEGORIES = [
     margin: 10px 0 0;
     max-width: none;
     color: var(--hot);
-    font-size: 0.7rem;
+    font-size: var(--t-2xs);
     line-height: 1.45;
   }
 
@@ -420,7 +422,7 @@ const CATEGORIES = [
     max-width: none;
     list-style: none;
     color: var(--faint);
-    font-size: 0.68rem;
+    font-size: var(--t-2xs);
   }
 
   .legend li {

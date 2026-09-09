@@ -11,8 +11,10 @@ export const OWNER = "unalcakir28";
 export const REPO = "spacetrace";
 export const REPO_SLUG = `${OWNER}/${REPO}`;
 export const REPO_URL = `https://github.com/${REPO_SLUG}`;
-export const DESKTOP_REPO_URL = `https://github.com/${OWNER}/spacetrace-desktop`;
-export const HUB_REPO_URL = `https://github.com/${OWNER}/spacetrace-hub`;
+// Only the public repository is ever linked from the site. The desktop and
+// hub sources are private, so a link to them would send a visitor to a sign-in
+// page; their downloads are published into the public repo instead, which is
+// what the asset URLs below point at.
 export const RELEASES_API = `https://api.github.com/repos/${REPO_SLUG}/releases?per_page=40`;
 export const INSTALL_SH = `https://raw.githubusercontent.com/${REPO_SLUG}/main/install.sh`;
 

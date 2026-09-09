@@ -79,9 +79,9 @@ const items: { page: Page; label: string }[] = [
     display: inline-flex;
     align-items: center;
     gap: 9px;
-    font-family: var(--cond);
+    font-stretch: var(--w-sub);
     font-weight: 700;
-    font-size: 1.06rem;
+    font-size: var(--t-base);
     color: var(--text);
     text-decoration: none;
     letter-spacing: -0.01em;
@@ -96,7 +96,7 @@ const items: { page: Page; label: string }[] = [
     display: flex;
     gap: 22px;
     align-items: center;
-    font-size: 0.94rem;
+    font-size: var(--t-sm);
     min-width: 0;
     flex-wrap: wrap;
   }
@@ -131,7 +131,7 @@ const items: { page: Page; label: string }[] = [
 
   .head-cta {
     padding: 9px 15px;
-    font-size: 0.9rem;
+    font-size: var(--t-sm);
   }
 
   @media (max-width: 780px) {
@@ -153,7 +153,7 @@ const items: { page: Page; label: string }[] = [
       flex-wrap: nowrap;
       overflow-x: auto;
       scrollbar-width: none;
-      font-size: 0.9rem;
+      font-size: var(--t-sm);
     }
 
     .site-nav::-webkit-scrollbar {

@@ -44,10 +44,6 @@ function colorOf(category: Category): string {
   return `var(--cat-${category})`;
 }
 
-/** `other` and `directory` are surface tones rather than hues, so dark label
- *  text on them is the one place the palette does not carry its own contrast. */
-const DARK_TILES: Category[] = ["other", "directory"];
-
 const GAP = 3;
 
 export default function Treemap({ labels, locale }: Props) {
@@ -208,15 +204,13 @@ export default function Treemap({ labels, locale }: Props) {
                 <button
                   type="button"
                   key={item.name}
-                  className={`tm-tile${isSelected ? " sel" : ""}${
-                    DARK_TILES.includes(category) ? " on-dark" : ""
-                  }`}
+                  className={`tm-tile${isSelected ? " sel" : ""}`}
                   style={{
                     left: rect.x + GAP / 2,
                     top: rect.y + GAP / 2,
                     width: Math.max(0, rect.w - GAP),
                     height: Math.max(0, rect.h - GAP),
-                    background: colorOf(category),
+                    ["--tint" as string]: colorOf(category),
                     animationDelay: `${Math.min(index * 30, 260)}ms`,
                   }}
                   onClick={() => setSelectedName(item.name)}
