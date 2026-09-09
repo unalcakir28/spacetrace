@@ -14,6 +14,7 @@ because anyone can install them.
 
 ### Added
 
+- The agent reports on `/status` when a newer release exists. A notice only: it never installs anything itself. Once a day, sending nothing about the machine, and `update_check = false` turns it off entirely.
 - `spacetrace update` installs the newest release over the running one, after verifying the download against the published `SHA256SUMS`.
 - A once-a-day check for a newer release, printed as one line on stderr. It runs only on a tagged build in a terminal, explains itself the first time, and stops entirely with `SPACETRACE_NO_UPDATE_CHECK=1`.
 - `--version` now says which build it is: the commit, the date it was built and the channel. The agent reports the same on `/health` and `/status`.

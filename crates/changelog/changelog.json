@@ -6,6 +6,16 @@
         {
           "kind": "added",
           "text": {
+            "de": "Der Agent meldet auf `/status`, wenn eine neuere Version vorliegt. Nur eine Meldung: er installiert nichts von selbst. Einmal täglich, ohne Angaben über die Maschine, und mit `update_check = false` ganz abschaltbar.",
+            "en": "The agent reports on `/status` when a newer release exists. A notice only: it never installs anything itself. Once a day, sending nothing about the machine, and `update_check = false` turns it off entirely.",
+            "fr": "L'agent signale sur `/status` qu'une version plus récente existe. Une simple information : il n'installe jamais rien de lui-même. Une fois par jour, sans rien transmettre sur la machine, et `update_check = false` le désactive complètement.",
+            "it": "L'agente segnala su `/status` quando esiste una versione più recente. Solo una segnalazione: non installa mai nulla da sé. Una volta al giorno, senza inviare nulla sulla macchina, e `update_check = false` lo disattiva del tutto.",
+            "tr": "Ajan, yeni bir sürüm olduğunda bunu `/status` üzerinden bildiriyor. Yalnızca bildirim: hiçbir şeyi kendisi kurmuyor. Günde bir kez, makine hakkında hiçbir şey göndermeden, ve `update_check = false` ile tamamen kapanıyor."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
             "de": "`spacetrace update` installiert die neueste Version über die laufende, nachdem der Download gegen die veröffentlichte `SHA256SUMS` geprüft wurde.",
             "en": "`spacetrace update` installs the newest release over the running one, after verifying the download against the published `SHA256SUMS`.",
             "fr": "`spacetrace update` installe la dernière version par-dessus celle en cours d'exécution, après avoir vérifié le téléchargement avec le fichier `SHA256SUMS` publié.",

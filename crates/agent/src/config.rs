@@ -30,6 +30,16 @@ pub struct Config {
     #[serde(default)]
     pub utc_offset_minutes: i32,
 
+    /// Ask GitHub once a day whether a newer release exists, and report the
+    /// answer on `/status`.
+    ///
+    /// Reporting only — the agent never installs anything (see `update.rs`).
+    /// On by default because an operator who does not know a fix shipped is
+    /// the reason the field exists, and off is one line away for anyone whose
+    /// agent should not reach the internet at all.
+    #[serde(default = "yes")]
+    pub update_check: bool,
+
     #[serde(default)]
     pub server: ServerConfig,
 
@@ -128,6 +138,11 @@ fn default_listen() -> SocketAddr {
 
 fn default_max_upload() -> usize {
     512 * 1024 * 1024
+}
+
+/// Serde needs a function for a `true` default.
+fn yes() -> bool {
+    true
 }
 
 fn default_dedupe() -> bool {
@@ -238,6 +253,11 @@ db = "/var/lib/spacetrace/snapshots.sqlite"
 # happen at, or leave it 0 and think in UTC.
 utc_offset_minutes = 0
 
+# Ask GitHub once a day whether a newer release exists and report it on
+# /status. Reporting only — this agent never installs anything. Set to false
+# if it should not reach the internet at all.
+update_check = true
+
 [server]
 # Loopback by default. Put a reverse proxy in front, or change this to
 # "0.0.0.0:7878" once you have set a token and, ideally, TLS.
@@ -271,6 +291,11 @@ db = 'C:\ProgramData\spacetrace\snapshots.sqlite'
 # timezone database, so DST is not handled: pick the offset you want scans to
 # happen at, or leave it 0 and think in UTC.
 utc_offset_minutes = 0
+
+# Ask GitHub once a day whether a newer release exists and report it on
+# /status. Reporting only — this agent never installs anything. Set to false
+# if it should not reach the internet at all.
+update_check = true
 
 [server]
 # Loopback by default. Put a reverse proxy in front, or change this to
@@ -387,6 +412,7 @@ mod tests {
         let path = dir.path().join("token");
         std::fs::write(&path, "  s3cret\n").unwrap();
         let cfg = Config {
+            update_check: false,
             db: PathBuf::from("/tmp/x"),
             utc_offset_minutes: 0,
             server: ServerConfig {
@@ -407,6 +433,7 @@ mod tests {
         let path = dir.path().join("token");
         std::fs::write(&path, "   \n").unwrap();
         let cfg = Config {
+            update_check: false,
             db: PathBuf::from("/tmp/x"),
             utc_offset_minutes: 0,
             server: ServerConfig {
@@ -419,5 +446,18 @@ mod tests {
             roots: vec![],
         };
         assert!(cfg.resolve_token().is_err());
+    }
+
+    /// Absent means on. An operator upgrading from a build that had no such
+    /// key must not silently lose the notice — and one who wrote `false` must
+    /// not silently regain it.
+    #[test]
+    fn the_update_check_defaults_to_on_and_can_be_switched_off() {
+        let bare: Config = toml::from_str(r#"db = "/tmp/x.sqlite""#).expect("parses");
+        assert!(bare.update_check);
+
+        let off: Config =
+            toml::from_str("db = \"/tmp/x.sqlite\"\nupdate_check = false\n").expect("parses");
+        assert!(!off.update_check);
     }
 }

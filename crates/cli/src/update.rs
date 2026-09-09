@@ -134,24 +134,12 @@ fn fetch_latest() -> Result<Option<String>> {
     Ok(Some(release.tag_name))
 }
 
-fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = text.trim_start_matches('v').split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch = parts.next()?.parse().ok()?;
-    Some((major, minor, patch))
-}
-
 /// Whether `tag` names a release newer than what is running.
 ///
-/// An unparseable tag is never newer: a release named something unexpected is
-/// a reason to say nothing, not a reason to nag.
+/// The comparison itself lives in `spacetrace-buildinfo`, which the agent uses
+/// too — one definition of "newer" for both binaries.
 pub fn is_newer(tag: &str) -> bool {
-    let (Some(theirs), Some(ours)) = (parse_version(tag), parse_version(env!("CARGO_PKG_VERSION")))
-    else {
-        return false;
-    };
-    theirs > ours
+    spacetrace_buildinfo::is_newer(tag, env!("CARGO_PKG_VERSION"))
 }
 
 /// Whether an update notice is allowed to appear at all.
@@ -456,13 +444,6 @@ mod tests {
         assert!(!is_newer("nightly"));
         assert!(!is_newer(""));
         assert!(!is_newer("v1.2"));
-    }
-
-    #[test]
-    fn versions_compare_by_number_not_by_text() {
-        assert_eq!(parse_version("v0.10.0"), Some((0, 10, 0)));
-        assert_eq!(parse_version("0.9.0"), Some((0, 9, 0)));
-        assert!(parse_version("v0.10.0") > parse_version("v0.9.0"));
     }
 
     #[test]

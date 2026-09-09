@@ -28,6 +28,7 @@ const ZSTD_LEVEL: i32 = 3;
 
 pub struct AppState {
     runner: Arc<Runner>,
+    updates: Arc<crate::update::UpdateWatch>,
     token: String,
     allow_adhoc_scans: bool,
     max_upload_bytes: usize,
@@ -37,6 +38,7 @@ pub struct AppState {
 pub fn router(runner: Arc<Runner>, config: &Config, token: String) -> Router {
     let state = Arc::new(AppState {
         runner,
+        updates: crate::update::UpdateWatch::start(config.update_check),
         token,
         allow_adhoc_scans: config.server.allow_adhoc_scans,
         max_upload_bytes: config.server.max_upload_bytes,
@@ -174,6 +176,11 @@ struct Status {
     roots: Vec<String>,
     scanning: Vec<String>,
     snapshots: usize,
+    /// The newer release, when there is one. Absent means up to date, not
+    /// checked yet, or checking switched off — to a reader they are the same
+    /// thing: no upgrade to mention. The agent never installs it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_available: Option<String>,
 }
 
 async fn status(State(state): State<Arc<AppState>>) -> Result<Json<Status>, ApiFailure> {
@@ -197,6 +204,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Result<Json<Status>, ApiF
             .map(|p| p.to_string_lossy().into_owned())
             .collect(),
         snapshots,
+        update_available: state.updates.available(),
     }))
 }
 

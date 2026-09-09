@@ -7,3 +7,4 @@ pub mod push;
 pub mod runner;
 pub mod scheduler;
 pub mod serve;
+pub mod update;
