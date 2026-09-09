@@ -4,9 +4,9 @@ Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
 rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 9 Eylül 2026 (rakip analizi ve ölçümler eklendi; **Sıra 1 ve
-Sıra 2 kapandı** — E1, E2, A4, A1, A2, A4w. Windows tarafı CI onayı bekliyor.
-Sıradaki iş "Rekabet açıkları" → Sıra 3: B1 bellek)
+Son güncelleme: 9 Eylül 2026 (**Sıra 1–3 kapandı** — E1, E2, A4, A1, A2, A4w,
+B1. Üç platformda CI yeşil. B1'in kalan maddesi **B1-K** ayrı bir oturumda
+Fable modeliyle derin araştırmaya ertelendi. Sıradaki iş → Sıra 4: A3, A5)
 
 ---
 
@@ -210,11 +210,11 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
 ### B. Hız — ölçülmüş açıklar
 
-- [ ] **B1 Bellek** — *(9 Eylül 2026'da ölçüldü ve parçalarına ayrıldı; kısmi
-      düzeltme yapıldı, asıl iş açık)*
+- [ ] **B1 Bellek** — *(9 Eylül 2026: ölçüldü, parçalandı, dördü yapıldı.
+      Kalan tek madde **B1-K**, derin araştırmaya ertelendi.)*
 
-      **Ölçülen dağılım** (`/Applications`, 412.232 girdi, tepe RSS 119 MB =
-      **290 B/girdi**), faz faz RSS probuyla:
+      **Dağılım — düzeltme öncesi** (`/Applications`, 412.232 girdi, tepe RSS
+      119 MB = **290 B/girdi**), faz faz RSS probuyla ölçüldü:
 
       | Kalem | MB | B/girdi |
       |---|---|---|
@@ -254,10 +254,8 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
             (`Children { names, entries }`), çocuklar `Option<Box<Children>>`.
             `to_string_lossy()` geçerli UTF-8'de ödünç döndürdüğü için girdi
             başına `String` tahsisi tamamen kalktı: **412k → 35k tahsis.**
-      - [ ] **Çift depolamayı kaldır** — kalan asıl kazanç. Yürüyüş DFS
-            üretiyor, arena BFS istiyor (değişmez #2), o yüzden bir ara yapı
-            kaçınılmaz görünüyor. Seçenek B (seviye-senkron BFS) bunu kökten
-            çözer ama iş-çalan DFS'in ölçülmüş 5.2× kazancını riske atıyor.
+      - [ ] **B1-K Çift depolamayı kaldır** — kalan asıl kazanç, **derin
+            araştırmaya ertelendi** (bkz. aşağıdaki not).
 
       **Hedef düzeltmesi:** RESEARCH.md'deki **~25 B/dosya** hedefi bizim alan
       kümemizle **ulaşılabilir değil** ve karşılaştırma elmayla armut. ncdu 2
@@ -267,6 +265,43 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       arena düğümü** mertebesi, 25 değil.
       *Rakip:* dua-cli 64 B arena düğümü + paylaşılan ad deposu, RSS %49 aşağı;
       ncdu 2 dosyada 25 B, dizinde 56 B.
+
+      ### B1-K — çift depolama, derin araştırmaya ertelendi
+
+      **Karar (9 Eylül 2026):** kalan iş sıradan bir optimizasyon değil, bir
+      mimari karar. Ayrı bir oturumda **Fable modeliyle** derinlemesine
+      araştırılacak; o araştırma bitmeden kod yazılmayacak.
+
+      **Problem tanımı.** Tepe bellek 231 B/girdi ve bunun **192'si çift
+      depolama**: yürüyüşün ürettiği `RawEntry` ara ağacı (48 B) ile arena
+      (`Node` 72 B) aynı anda yaşıyor, üstüne serbest bırakılan ara ağaç
+      belleği işletim sistemine geri dönmüyor (arena tek parça büyük bir
+      tahsis istiyor, boşalan 48 baytlık parçalar ona yaramıyor).
+
+      **Neden kolay değil.** Yürüyüş paralel DFS üretiyor, arena BFS düzeni
+      istiyor (değişmez #2: çocuklar bitişik, her çocuğun indeksi
+      ebeveyninden büyük). İki düzen arasında bir ara yapı kaçınılmaz
+      görünüyor. Bilinen tek kökten çözüm seviye-senkron BFS ve o da
+      iş-çalan DFS'in **ölçülmüş 5.2× kazancını** riske atıyor — yani
+      savunabildiğimiz tek hız iddiasını.
+
+      **Araştırmanın cevaplaması gerekenler:**
+      - Çift depolama, değişmez #2 korunarak kaldırılabilir mi?
+      - Seviye-senkron BFS derin ve dar ağaçlarda paralelliği ne kadar
+        kaybediyor? (Derin/dar en kötü durum; `/Applications` gibi geniş
+        ağaçlar iyimser örnek.)
+      - Ara yapı kaldırılamıyorsa, arena'nın tahsisini ara yapının boşalttığı
+        belleği kullanacak biçimde kurmak mümkün mü (arena chunk'lı olsun,
+        tek parça olmasın)? Bu, değişmez #2'yi bozmadan çift depolamanın
+        yarısını geri kazanabilir.
+      - dua-cli 64 B'a nasıl indi ve ara yapı sorununu nasıl çözdü?
+        (Kaynak kodu MIT, okunabilir — `[bulunamadı]` değil, okunmadı.)
+
+      **Araştırma öncesi zorunlu:** tekrarlanabilir bir benchmark koşumu.
+      Bugün ardışık ölçüm %12'lik **sahte** bir gerileme gösterdi; iki ikiliyi
+      dönüşümlü koşturunca tersi çıktı. Bellek **ve** hız birlikte, dönüşümlü
+      ve medyanlı ölçülmeden hiçbir tasarım kabul edilmeyecek.
+
 - [ ] **B2 Thread sayısı ayarı** — 16 thread'te 8'e göre **gerileme ölçüldü**
       (1.27 s vs 1.11 s, 412k girdi). Şu an hiç ayar yok, rayon varsayılanı
       (çekirdek sayısı) kullanılıyor — yani varsayılan en iyisi değil.
@@ -371,6 +406,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
 | 9 | C1, C2, C4–C9 | Özellik paritesi |
 | 10 | E3–E5, D2, D3 | Yayın hazırlığı |
+| **son** | **B1-K** | Çift depolama. Sıradan optimizasyon değil, mimari karar — **ayrı oturumda Fable modeliyle derin araştırma**, önce benchmark altyapısı |
 
 ---
 
