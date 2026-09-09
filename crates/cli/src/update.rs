@@ -28,7 +28,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const REPO: &str = "unalcakir28/spacetrace";
-const LATEST_API: &str = "https://api.github.com/repos/unalcakir28/spacetrace/releases/latest";
+/// The release list, not `releases/latest`. See [`is_ours`].
+const RELEASES_API: &str =
+    "https://api.github.com/repos/unalcakir28/spacetrace/releases?per_page=100";
 
 /// Long enough that nobody notices it, short enough to matter for a security
 /// fix. A tool run twenty times an hour must not ask twenty times.
@@ -114,24 +116,45 @@ fn client() -> Result<reqwest::blocking::Client> {
 #[derive(Deserialize)]
 struct ApiRelease {
     tag_name: String,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
 }
 
-/// The newest tagged release, or `None` if there has never been one.
+/// Whether a tag names a release of *this* tool.
+///
+/// The repository holds the downloads for all three components, so its
+/// releases are a mixture: `v0.4.0` is the CLI, `desktop-v0.3.0` and
+/// `hub-v0.3.0` are not, and `continuous` and friends are rolling builds.
+///
+/// This is why `releases/latest` cannot be used. GitHub's "latest" is whichever
+/// release was published most recently regardless of component, and on the day
+/// all three were first tagged that was the hub — which parses as no version at
+/// all, so the check went quiet and would have stayed quiet forever.
+fn is_ours(tag: &str) -> bool {
+    let mut chars = tag.chars();
+    chars.next() == Some('v') && chars.next().is_some_and(|c| c.is_ascii_digit())
+}
+
+/// The newest tagged release of this tool, or `None` if there has never been
+/// one.
 fn fetch_latest() -> Result<Option<String>> {
-    let response = client()?
-        .get(LATEST_API)
+    let releases: Vec<ApiRelease> = client()?
+        .get(RELEASES_API)
         .header("Accept", "application/vnd.github+json")
         .send()
-        .context("asking GitHub for the latest release")?;
+        .context("asking GitHub for the releases")?
+        .error_for_status()
+        .context("GitHub refused")?
+        .json()
+        .context("reading GitHub's answer")?;
 
-    // Before the first tagged release this endpoint answers 404, which is an
-    // expected state rather than a failure.
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
-    }
-    let response = response.error_for_status().context("GitHub refused")?;
-    let release: ApiRelease = response.json().context("reading GitHub's answer")?;
-    Ok(Some(release.tag_name))
+    // Newest first, which is the order GitHub returns.
+    Ok(releases
+        .into_iter()
+        .find(|release| !release.draft && !release.prerelease && is_ours(&release.tag_name))
+        .map(|release| release.tag_name))
 }
 
 /// Whether `tag` names a release newer than what is running.
@@ -434,6 +457,22 @@ pub fn clean_up_after_windows_update() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug this function exists for: all three components publish into one
+    /// repository, and two of them must not be mistaken for this one.
+    #[test]
+    fn only_this_tools_own_release_tags_are_recognised() {
+        assert!(is_ours("v0.4.0"));
+        assert!(is_ours("v1.0.0-rc1"));
+
+        assert!(!is_ours("hub-v0.3.0"), "the hub is not the CLI");
+        assert!(!is_ours("desktop-v0.3.0"), "the desktop app is not the CLI");
+        assert!(!is_ours("continuous"));
+        assert!(!is_ours("hub-continuous"));
+        assert!(!is_ours("version-2"), "a v must be followed by a digit");
+        assert!(!is_ours("v"));
+        assert!(!is_ours(""));
+    }
 
     #[test]
     fn only_a_higher_version_counts_as_newer() {

@@ -10,6 +10,12 @@ Versions marked *development milestone* were never tagged and have no
 downloadable files. They are recorded because the work happened, not
 because anyone can install them.
 
+## Unreleased
+
+### Fixed
+
+- `install.sh` and `spacetrace update` find the right release again. All three components publish into one repository, so GitHub's idea of the latest release briefly meant the hub's — which `install.sh` could not install, and which the update check read as no version at all.
+
 ## 0.4.0 — 2026-09-09
 
 ### Added

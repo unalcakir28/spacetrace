@@ -22,7 +22,9 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-const LATEST_API: &str = "https://api.github.com/repos/unalcakir28/spacetrace/releases/latest";
+/// The release list, not `releases/latest`. See [`is_ours`].
+const RELEASES_API: &str =
+    "https://api.github.com/repos/unalcakir28/spacetrace/releases?per_page=100";
 const CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -81,6 +83,25 @@ impl UpdateWatch {
 #[derive(serde::Deserialize)]
 struct ApiRelease {
     tag_name: String,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
+}
+
+/// Whether a tag names a release of the agent.
+///
+/// One repository carries the downloads for all three components, so its
+/// releases are a mixture: `v0.4.0` is this binary, `desktop-v…` and `hub-v…`
+/// are not, and `continuous` and friends are rolling builds.
+///
+/// This is why `releases/latest` cannot be used. GitHub's "latest" is whichever
+/// release went out most recently regardless of component, and on the day all
+/// three were first tagged that was the hub — which parses as no version at
+/// all, so the check went quiet and would have stayed quiet forever.
+fn is_ours(tag: &str) -> bool {
+    let mut chars = tag.chars();
+    chars.next() == Some('v') && chars.next().is_some_and(|c| c.is_ascii_digit())
 }
 
 /// `None` on any failure, including the 404 GitHub answers before the first
@@ -96,7 +117,7 @@ async fn fetch_latest() -> Option<String> {
         .ok()?;
 
     let response = client
-        .get(LATEST_API)
+        .get(RELEASES_API)
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
@@ -104,13 +125,28 @@ async fn fetch_latest() -> Option<String> {
     if !response.status().is_success() {
         return None;
     }
-    let release: ApiRelease = response.json().await.ok()?;
-    Some(release.tag_name)
+    let releases: Vec<ApiRelease> = response.json().await.ok()?;
+    // Newest first, which is the order GitHub returns.
+    releases
+        .into_iter()
+        .find(|release| !release.draft && !release.prerelease && is_ours(&release.tag_name))
+        .map(|release| release.tag_name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug this exists for: two other components publish into the same
+    /// repository and must not be mistaken for this one.
+    #[test]
+    fn only_the_agents_own_release_tags_are_recognised() {
+        assert!(is_ours("v0.4.0"));
+        assert!(!is_ours("hub-v0.3.0"));
+        assert!(!is_ours("desktop-v0.3.0"));
+        assert!(!is_ours("continuous"));
+        assert!(!is_ours("v"));
+    }
 
     #[test]
     fn an_idle_watch_reports_nothing() {

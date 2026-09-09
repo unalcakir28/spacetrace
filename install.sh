@@ -53,11 +53,21 @@ target="${arch_tag}-${os_tag}"
 
 if [ "$VERSION" = "latest" ]; then
     echo "Looking up the latest release..."
+    # NOT `releases/latest`. This repository holds all three components'
+    # downloads, so GitHub's idea of "latest" is whichever of them was
+    # published most recently — and on 9 Sept 2026 that was `hub-v0.3.0`. The
+    # asset name built from it, `spacetrace-hub-v0.3.0-…`, actually exists, so
+    # this downloaded the hub and then failed for having no `spacetrace` in it.
+    #
+    # The CLI's releases are the ones tagged `v<digit>`; `desktop-v…` and
+    # `hub-v…` are not ours and neither are the rolling `continuous` tags. The
+    # list comes back newest first.
+    #
     # stderr discarded: before the first tagged release this endpoint answers
-    # 404, which is an expected path handled below, not news. A real download
-    # failure further down still reports itself.
-    VERSION=$(fetch "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null |
-        sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' | head -n 1)
+    # an empty list, which is an expected path handled below, not news.
+    VERSION=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=100" 2>/dev/null |
+        grep -o '"tag_name" *: *"v[0-9][^"]*"' |
+        sed 's/.*"\(v[^"]*\)"$/\1/' | head -n 1)
     # `releases/latest` only ever names a non-prerelease, so before the first
     # tagged release it returns nothing at all. Falling back to the rolling
     # build rather than dying is what makes the documented one-liner work from

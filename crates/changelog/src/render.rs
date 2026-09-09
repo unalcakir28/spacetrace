@@ -143,16 +143,31 @@ mod tests {
         assert_eq!(heading(&published), "9.9.9 — 2026-01-01");
     }
 
+    /// Built here rather than read from the real changelog: what is under test
+    /// is the grouping, and searching the whole document for two headings finds
+    /// whichever release happens to contain them today. That is how this test
+    /// broke the first time a release was cut.
     #[test]
     fn kinds_are_grouped_in_a_fixed_order_not_in_source_order() {
-        let log = changelog();
-        let text = markdown(log, Component::Cli);
+        let say = |kind: Kind, text: &str| Entry {
+            kind,
+            text: std::collections::BTreeMap::from([(
+                DEFAULT_LOCALE.to_string(),
+                text.to_string(),
+            )]),
+        };
+        // Deliberately the wrong way round in the source.
+        let text = entries(&[
+            say(Kind::Fixed, "a bug"),
+            say(Kind::Added, "a feature"),
+            say(Kind::Changed, "a behaviour"),
+        ]);
 
-        // The unreleased block holds a `fixed` before a `changed` in the file;
-        // rendering must still put Changed above Fixed.
-        let changed = text.find("### Changed").expect("a Changed group");
-        let fixed = text.find("### Fixed").expect("a Fixed group");
-        assert!(changed < fixed, "Changed must render before Fixed");
+        let at = |heading: &str| text.find(heading).unwrap_or_else(|| panic!("no {heading}"));
+        assert!(at("### Added") < at("### Changed"));
+        assert!(at("### Changed") < at("### Fixed"));
+        // And a kind with nothing in it leaves no empty heading behind.
+        assert!(!text.contains("### Security"));
     }
 
     #[test]
