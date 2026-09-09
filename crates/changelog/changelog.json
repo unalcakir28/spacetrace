@@ -301,6 +301,26 @@
     "hub": {
       "unreleased": [
         {
+          "kind": "added",
+          "text": {
+            "de": "Die About-Seite zeigt jetzt, welcher Build läuft (Commit, Build-Datum und Kanal), und was sich in den letzten Versionen geändert hat.",
+            "en": "The About page now shows which build is running (commit, build date and channel) and what changed in the last few releases.",
+            "fr": "La page About indique désormais quelle build est en cours d'exécution (commit, date de compilation et canal) ainsi que ce qui a changé dans les dernières versions.",
+            "it": "La pagina About mostra ora quale build è in esecuzione (commit, data di compilazione e canale) e cosa è cambiato nelle ultime versioni.",
+            "tr": "Hakkında sayfası artık hangi derlemenin çalıştığını (commit, derleme tarihi ve kanal) ve son birkaç sürümde ne değiştiğini gösteriyor."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "`/health` meldet Commit und Kanal neben der Version, sodass sich ein laufender Container ohne Anmeldung identifizieren lässt.",
+            "en": "`/health` reports the commit and the channel next to the version, so a running container can be identified without signing in.",
+            "fr": "`/health` indique le commit et le canal à côté de la version, ce qui permet d'identifier un conteneur en cours d'exécution sans se connecter.",
+            "it": "`/health` riporta il commit e il canale accanto alla versione, così un container in esecuzione può essere identificato senza autenticarsi.",
+            "tr": "`/health` sürümün yanında commit ve kanalı da bildiriyor; böylece çalışan bir konteyner oturum açmadan tanınabiliyor."
+          }
+        },
+        {
           "kind": "performance",
           "text": {
             "de": "Das Laden eines großen Snapshots braucht weniger Speicher, dank der kompakteren Baumdarstellung im Scan-Kern.",
