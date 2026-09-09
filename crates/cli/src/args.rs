@@ -55,6 +55,15 @@ pub enum Command {
     Rm(RmArgs),
     /// Copy a snapshot from a remote agent into the local database
     Pull(PullArgs),
+    /// Install the newest release over this one
+    Update(UpdateArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct UpdateArgs {
+    /// Report what is available without installing anything
+    #[arg(long)]
+    pub check: bool,
 }
 
 #[derive(Args, Debug)]

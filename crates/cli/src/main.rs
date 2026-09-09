@@ -1,6 +1,7 @@
 mod args;
 mod fmt;
 mod remote;
+mod update;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -21,14 +22,34 @@ use crate::args::{
 use crate::remote::Remote;
 
 fn main() {
-    if let Err(err) = run() {
+    update::clean_up_after_windows_update();
+
+    let cli = Cli::parse();
+
+    // Decided once, before anything runs, and used for both halves: whether
+    // this run may talk to the network at all, and whether it may say anything
+    // about it afterwards.
+    let notices = update::notices_allowed(cli.json, std::io::stdout().is_terminal());
+    if notices {
+        update::maybe_check_in_background();
+    }
+
+    let outcome = run(&cli);
+
+    // Only after a command that worked, and never after `update` itself: a
+    // notice stapled underneath an error message buries the error, and one
+    // printed after `spacetrace update` would be reporting on itself.
+    if notices && outcome.is_ok() && !matches!(cli.command, Command::Update(_)) {
+        update::print_notice_if_due();
+    }
+
+    if let Err(err) = outcome {
         eprintln!("error: {err:#}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<()> {
-    let cli = Cli::parse();
+fn run(cli: &Cli) -> Result<()> {
     let db_path = cli.db.clone().map(Ok).unwrap_or_else(default_db_path)?;
 
     let remote = match &cli.remote {
@@ -63,6 +84,13 @@ fn run() -> Result<()> {
         Command::Prune(a) => cmd_prune(a, &db_path, cli.json),
         Command::Rm(a) => cmd_rm(a, &db_path),
         Command::Pull(a) => cmd_pull(a, &db_path, remote.as_ref(), cli.json),
+        Command::Update(a) => {
+            if a.check {
+                update::check_only(cli.json)
+            } else {
+                update::install(cli.json)
+            }
+        }
     }
 }
 
@@ -531,14 +559,21 @@ fn open_store(path: &Path) -> Result<Store> {
 /// `$XDG_DATA_HOME/spacetrace` on Linux, Application Support on macOS,
 /// `%APPDATA%` on Windows, always falling back to the working directory.
 fn default_db_path() -> Result<PathBuf> {
+    let dir = default_data_dir().context("cannot find home directory; pass a path with --db")?;
+    Ok(dir.join("snapshots.sqlite"))
+}
+
+/// Where this tool keeps its own files: the snapshot database, and the cache
+/// the update check writes.
+pub(crate) fn default_data_dir() -> Option<PathBuf> {
     let dir = if let Ok(x) = std::env::var("SPACETRACE_HOME") {
         PathBuf::from(x)
     } else if cfg!(target_os = "macos") {
-        home()?.join("Library/Application Support/spacetrace")
+        home().ok()?.join("Library/Application Support/spacetrace")
     } else if cfg!(target_os = "windows") {
         std::env::var("APPDATA")
             .map(PathBuf::from)
-            .unwrap_or(home()?)
+            .unwrap_or(home().ok()?)
             .join("spacetrace")
     } else {
         std::env::var("XDG_DATA_HOME")
@@ -546,7 +581,7 @@ fn default_db_path() -> Result<PathBuf> {
             .unwrap_or_else(|_| home().unwrap_or_default().join(".local/share"))
             .join("spacetrace")
     };
-    Ok(dir.join("snapshots.sqlite"))
+    Some(dir)
 }
 
 fn home() -> Result<PathBuf> {

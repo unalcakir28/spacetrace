@@ -36,6 +36,9 @@ clap = { version = "4", features = ["derive"] }
 humansize = "2"
 crossbeam-channel = "0.5"
 tempfile = "3"
+# Verifying a download against the published SHA256SUMS. std has no hash,
+# and a self-update that installs what it did not check is not an update.
+sha2 = "0.10"
 
 # Agent (phase 2). HTTP+JSON was chosen over gRPC; see docs/DECISIONS.md K3.
 axum = "0.8"

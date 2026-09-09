@@ -14,6 +14,8 @@ because anyone can install them.
 
 ### Added
 
+- `spacetrace update` installs the newest release over the running one, after verifying the download against the published `SHA256SUMS`.
+- A once-a-day check for a newer release, printed as one line on stderr. It runs only on a tagged build in a terminal, explains itself the first time, and stops entirely with `SPACETRACE_NO_UPDATE_CHECK=1`.
 - `--version` now says which build it is: the commit, the date it was built and the channel. The agent reports the same on `/health` and `/status`.
 - Every release now comes with written release notes in five languages, and the repository has a CHANGELOG.md.
 
@@ -27,6 +29,7 @@ because anyone can install them.
 
 ### Fixed
 
+- `install.sh` verifies the download against the published `SHA256SUMS`. The file was published with every release and never read.
 - APFS clones are counted once. Three 100 MB clones take 0 MB of extra room on the disk, and spacetrace now says so where `du` still reports 400 MB. Use `--no-clone-dedupe` to turn it off.
 - On Windows, spacetrace now reads the space a file really occupies and counts a hard-linked file once, instead of falling back to the length the file claims.
 

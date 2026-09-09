@@ -6,6 +6,36 @@
         {
           "kind": "added",
           "text": {
+            "de": "`spacetrace update` installiert die neueste Version über die laufende, nachdem der Download gegen die veröffentlichte `SHA256SUMS` geprüft wurde.",
+            "en": "`spacetrace update` installs the newest release over the running one, after verifying the download against the published `SHA256SUMS`.",
+            "fr": "`spacetrace update` installe la dernière version par-dessus celle en cours d'exécution, après avoir vérifié le téléchargement avec le fichier `SHA256SUMS` publié.",
+            "it": "`spacetrace update` installa la versione più recente al posto di quella in esecuzione, dopo aver verificato il download con il file `SHA256SUMS` pubblicato.",
+            "tr": "`spacetrace update` en yeni sürümü çalışan sürümün üzerine kuruyor; indirdiğini önce yayınlanan `SHA256SUMS` ile doğruluyor."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Eine tägliche Prüfung auf eine neuere Version, als eine Zeile auf stderr. Sie läuft nur bei einem getaggten Build im Terminal, erklärt sich beim ersten Mal und lässt sich mit `SPACETRACE_NO_UPDATE_CHECK=1` ganz abschalten.",
+            "en": "A once-a-day check for a newer release, printed as one line on stderr. It runs only on a tagged build in a terminal, explains itself the first time, and stops entirely with `SPACETRACE_NO_UPDATE_CHECK=1`.",
+            "fr": "Une vérification quotidienne de la présence d'une nouvelle version, affichée en une ligne sur stderr. Elle ne s'exécute que sur une version étiquetée dans un terminal, s'explique la première fois, et se désactive entièrement avec `SPACETRACE_NO_UPDATE_CHECK=1`.",
+            "it": "Un controllo giornaliero della presenza di una nuova versione, stampato su stderr in una riga. Funziona solo su una build taggata in un terminale, si spiega la prima volta e si disattiva del tutto con `SPACETRACE_NO_UPDATE_CHECK=1`.",
+            "tr": "Günde bir kez yeni sürüm kontrolü, stderr'e tek satır. Yalnızca etiketli bir derlemede ve terminalde çalışıyor, ilk seferinde ne yaptığını söylüyor, ve `SPACETRACE_NO_UPDATE_CHECK=1` ile tamamen kapanıyor."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "`install.sh` prüft den Download gegen die veröffentlichte `SHA256SUMS`. Die Datei wurde bei jeder Version veröffentlicht und nie gelesen.",
+            "en": "`install.sh` verifies the download against the published `SHA256SUMS`. The file was published with every release and never read.",
+            "fr": "`install.sh` vérifie le téléchargement avec le fichier `SHA256SUMS` publié. Ce fichier était publié à chaque version et n'était jamais lu.",
+            "it": "`install.sh` verifica il download con il file `SHA256SUMS` pubblicato. Il file veniva pubblicato a ogni versione e non veniva mai letto.",
+            "tr": "`install.sh` indirdiğini yayınlanan `SHA256SUMS` ile doğruluyor. Dosya her sürümde yayınlanıyordu ve hiç okunmuyordu."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
             "de": "`--version` sagt jetzt, um welchen Build es sich handelt: Commit, Build-Datum und Kanal. Der Agent meldet dasselbe unter `/health` und `/status`.",
             "en": "`--version` now says which build it is: the commit, the date it was built and the channel. The agent reports the same on `/health` and `/status`.",
             "fr": "`--version` indique désormais de quelle build il s'agit : le commit, la date de compilation et le canal. L'agent donne les mêmes informations sur `/health` et `/status`.",

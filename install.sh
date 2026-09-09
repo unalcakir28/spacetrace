@@ -78,6 +78,42 @@ trap "rm -rf '$tmp'" EXIT INT TERM
 
 echo "Downloading ${asset}..."
 fetch_to "$url" "$tmp/pkg.tar.gz" || die "download failed: $url"
+
+# Verify against the SHA256SUMS published beside the archive.
+#
+# This was missing until 9 Sept 2026: the file was published every release and
+# never read, so a truncated download or a tampered mirror installed silently.
+# It is a best-effort check on purpose — a NAS with no sha256 tool at all
+# should still be installable, and saying so is better than either failing or
+# pretending the check happened.
+sums_url="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+if fetch_to "$sums_url" "$tmp/SHA256SUMS" 2>/dev/null; then
+    # The `./` prefix is optional as a group: some tools write it, some do not.
+    expected=$(sed -n "s|^\([0-9a-fA-F]\{64\}\)  \(\./\)\{0,1\}${asset}$|\1|p" "$tmp/SHA256SUMS" | head -n 1)
+    [ -n "$expected" ] || die "SHA256SUMS does not list ${asset}"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$tmp/pkg.tar.gz" | cut -d' ' -f1)
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$tmp/pkg.tar.gz" | cut -d' ' -f1)
+    elif command -v openssl >/dev/null 2>&1; then
+        actual=$(openssl dgst -sha256 "$tmp/pkg.tar.gz" | sed 's/.*= *//')
+    else
+        actual=""
+        echo "No sha256 tool found; skipping checksum verification." >&2
+    fi
+
+    if [ -n "$actual" ]; then
+        # Lowercased both sides: openssl and shasum disagree about case.
+        expected=$(echo "$expected" | tr 'A-F' 'a-f')
+        actual=$(echo "$actual" | tr 'A-F' 'a-f')
+        [ "$actual" = "$expected" ] || die "checksum mismatch for ${asset}: expected $expected, got $actual"
+        echo "Checksum verified."
+    fi
+else
+    echo "Could not fetch SHA256SUMS; installing without verification." >&2
+fi
+
 tar -xzf "$tmp/pkg.tar.gz" -C "$tmp" || die "could not unpack $asset"
 
 # Only use sudo when the destination is not already writable, so this works
