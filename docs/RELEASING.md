@@ -175,7 +175,13 @@ Kolay bozulan yerler:
 - **Etkileşimli treemap tek React adası** (`src/components/demo/`). Sunucuda da
   makul bir geometriyle çiziliyor, yani JS olmadan da dolu görünüyor.
 - **`base: /spacetrace`** — her iç bağlantı `localeUrl()` üzerinden geçiyor. Elle
-  yazılan bir yol `astro dev`'de çalışır, üretimde 404 verir.
+  yazılan bir yol `astro dev`'de çalışır, üretimde 404 verir. Kendi alan adına
+  geçilirse bu `/` olur ve elle yazılmış adreslerin hepsi elden geçmek zorunda;
+  liste [TODO.md](../TODO.md) → "Yayın sonrası — SEO ve AISEO" içinde.
+
+SEO ve AI keşfedilebilirliği tarafında eksikler tespit edildi ama yayın sonrasına
+bırakıldı — `<head>` etiketlerine ya da site adresine dokunmadan önce
+[TODO.md](../TODO.md) içindeki o bölüme bak, ölçümler orada.
 
 ### Otomatik dil
 

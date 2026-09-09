@@ -3,7 +3,7 @@
 Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md).
 
-Son güncelleme: 7 Eylül 2026 (dört fazın hepsi çalışıyor)
+Son güncelleme: 9 Eylül 2026 (dört faz çalışıyor; site ve sürüm hattı yayında)
 
 ---
 
@@ -151,6 +151,58 @@ Ayrı depo: [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) (K2)
 - ~~Arayüz dizeleri koda gömülü, i18n yok~~ → borç değil, karar
       ([DECISIONS.md](docs/DECISIONS.md) K1). Dizeler İngilizce ve gömülü kalır.
 - [ ] Büyük ağaçlarda `store::save` tek transaction — ilerleme geri bildirimi yok
+
+---
+
+## Yayın sonrası — SEO ve AISEO
+
+Karara bağlandı ama **bilinçli olarak ertelendi** (9 Eylül 2026): ürün yayına
+çıkmadan bunlara girmek erken. Sıra geldiğinde audit'i baştan yapmak gerekmesin
+diye ölçümler burada.
+
+Durum tespiti (9 Eylül 2026, `website/dist` üzerinde ölçüldü) — **altyapı
+doğru**: 31 sayfa build sırasında HTML'e dönüyor, 26'sı hiç framework JS'i
+çekmiyor, React yalnızca treemap demosunun olduğu 5 ana sayfada iniyor. Bu
+kritik, çünkü AI tarayıcılarının çoğu (GPTBot, ClaudeBot, PerplexityBot)
+JavaScript çalıştırmıyor; SPA olsaydı boş sayfa görürlerdi. Sayfa başına tek
+`<h1>`, düzgün `h1→h2→h3`, `canonical`, beş dil için `hreflang` + `x-default`,
+30 URL'lik sitemap (dil alternatifleri `xhtml:link` ile içinde), `description`
+ve Open Graph başlıkları hazır.
+
+Eksikler, getirisi yüksek olandan başlayarak:
+
+- [ ] **Kendi alan adı** (ör. `spacetrace.dev`). En büyük kalem, çünkü diğer
+      ikisini o açıyor: `robots.txt` ve `llms.txt` yalnızca alan adının
+      **kökünde** geçerli, `/spacetrace/robots.txt` tarayıcılar tarafından
+      okunmaz — ve `https://unalcakir28.github.io/` şu an **404** (kullanıcı
+      sitesi deposu yok), yani kök bizim değil. Ayrıca github.io'nun bir alt
+      klasöründe olmak alan adı otoritesini paylaşmak demek.
+      Gerekenler: `website/public/CNAME`, DNS kaydı, `astro.config.mjs` içinde
+      `site` yeni alan adı ve `base: "/"`. Dikkat: `localeUrl()` iç linkleri
+      kendiliğinden düzeltir ama **elle yazılmış** adresler düzelmez —
+      `website/src/data/releases.ts`, üç README, `docs/RELEASING.md` ve
+      masaüstü deposunun sürüm notundaki indirme linki.
+- [ ] **JSON-LD yapısal veri** (şu an 0 tane). Hem SEO hem AISEO'nun en yüksek
+      getirili kalemi: `SoftwareApplication` şeması "bu nedir, hangi işletim
+      sistemi, hangi lisans, ücretsiz mi" sorularının makine tarafından
+      okunabilir cevabı. Sayfa ve dil başına üretilmeli.
+- [ ] **`og:image` ve Twitter kartı** (ikisi de yok). Şu an her paylaşım
+      LinkedIn/X/Slack/Discord'da çıplak link olarak görünüyor. 1200×630 bir
+      görsel gerekiyor; treemap'in kendisi doğal aday.
+- [ ] **`llms.txt`** — AI ajanlarına projeyi tanıtan, yeni yerleşen
+      konvansiyon. Alan adının kökünde durmak zorunda, yani 1. maddeyi bekler.
+- [ ] **Google Search Console + Bing Webmaster Tools kaydı ve sitemap
+      bildirimi.** "En hızlı indexlenme"nin gerçek cevabı bu ve kod işi değil,
+      hesap işi. Bing ayrıca ChatGPT aramasını besliyor.
+- [ ] Küçük: `og:locale` OG şartnamesinin istediği `en_US` biçiminde değil
+      (`en` yazıyor); Google Fonts harici stylesheet olarak çekiliyor,
+      woff2'leri kendimiz sunmak bir render-blocking üçüncü taraf isteğini
+      kaldırır.
+
+Beklenti ayarı: teknik taraf **indexlenmeyi engelleyen bir şey olmamasını**
+sağlar ve içeriği maksimum okunur yapar. Sıralamada yukarı çıkmak içerik ve dış
+bağlantı işi; yeni ve paylaşılan bir alan adındaki bir siteyi hiçbir teknik
+düzenleme hızla üst sıralara taşımaz.
 
 ---
 
