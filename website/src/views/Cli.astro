@@ -1,0 +1,249 @@
+---
+import Base from "../layouts/Base.astro";
+import Command from "../components/Command.astro";
+import ReleaseScript from "../components/ReleaseScript.astro";
+import { t, type Locale } from "../i18n";
+import { localeUrl } from "../i18n/routing";
+import { AGENT_IMAGE, INSTALL_COMMAND, REPO_URL } from "../data/releases";
+
+interface Props {
+  locale: Locale;
+}
+const { locale } = Astro.props;
+const dict = t(locale);
+
+const tours = [
+  {
+    title: dict.cli.tour1Title,
+    body: dict.cli.tour1Body,
+    command: "spacetrace scan ~/projects",
+    output: `scanned 84,213 entries in 1.9s
+total 12.4 GiB logical · 12.7 GiB on disk
+3 paths could not be read`,
+  },
+  {
+    title: dict.cli.tour2Title,
+    body: dict.cli.tour2Body,
+    command: "spacetrace scan /srv --save --label weekly",
+    output: "saved snapshot #1",
+  },
+  {
+    title: dict.cli.tour3Title,
+    body: dict.cli.tour3Body,
+    command: "spacetrace diff --path /srv",
+    output: `#1 2026-09-06 17:23 [weekly]  →  #2 2026-09-06 19:40
+total 23.8 MiB → 76.3 MiB   (+52.5 MiB)
+
+      CHANGE  STATUS          NEW  PATH
+   +40.1 MiB  grew       42.9 MiB  app/logs/
+   +14.3 MiB  grew       25.7 MiB  backups/
+    -1.9 MiB  removed         0 B  uploads/`,
+  },
+  {
+    title: dict.cli.tour4Title,
+    body: dict.cli.tour4Body,
+    command: "spacetrace --remote nas diff --path /var",
+    output: `#12 2026-09-01 03:00 [nightly]  →  #19 2026-09-08 03:00
+total 41.2 GiB → 58.9 GiB   (+17.7 GiB)
+
+      CHANGE  STATUS          NEW  PATH
+   +16.9 GiB  grew       21.4 GiB  lib/docker/overlay2/
+    +0.8 GiB  grew        3.1 GiB  log/journal/`,
+  },
+];
+
+const dockerRun = `docker run -d --name spacetrace \\
+  -v /:/host:ro \\
+  -v spacetrace-data:/var/lib/spacetrace \\
+  -v /etc/spacetrace:/etc/spacetrace:ro \\
+  -p 7878:7878 \\
+  ${AGENT_IMAGE}`;
+---
+
+<Base
+  locale={locale}
+  page="cli"
+  title={dict.cli.title}
+  description={dict.cli.description}
+>
+  <section class="wrap hero">
+    <p class="kicker">{dict.cli.kicker}</p>
+    <h1>
+      <span class="given">{dict.cli.headlineGiven}</span>
+      <span class="second">{dict.cli.headlineSecond}</span>
+    </h1>
+    <p class="lede">{dict.cli.lede}</p>
+
+    <h2 class="sub">{dict.cli.installTitle}</h2>
+    <div class="install">
+      <Command locale={locale} command={INSTALL_COMMAND} />
+    </div>
+    <p class="faint small">{dict.cli.installNote}</p>
+    <p class="faint small">{dict.cli.windowsNote}</p>
+    <div class="row">
+      <a class="btn" href={`${localeUrl(locale, "download")}#cli`}>
+        {dict.download.cliSection}
+      </a>
+      <a class="btn" href={localeUrl(locale, "guide")}>{dict.nav.guide}</a>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="band-head" data-reveal>
+        <h2>{dict.cli.toursTitle}</h2>
+      </div>
+      <div class="tours">
+        {
+          tours.map((tour, index) => (
+            <article class="tour" data-reveal data-reveal-delay={String(index % 2)}>
+              <h3>{tour.title}</h3>
+              <p>{tour.body}</p>
+              <pre translate="no">$ <b>{tour.command}</b>
+<span class="out">{tour.output}</span></pre>
+            </article>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="split aside">
+        <div data-reveal>
+          <h2>{dict.cli.agentTitle}</h2>
+          <p class="dim">{dict.cli.agentLede}</p>
+          <p>
+            <a href={`${localeUrl(locale, "guide")}#agent`}>{dict.cli.agentCta}</a>
+          </p>
+        </div>
+        <div data-reveal data-reveal-delay="1">
+          <ul class="ticks">
+            {dict.cli.agentPoints.map((point) => <li>{point}</li>)}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="split">
+        <div data-reveal>
+          <h2>{dict.cli.dockerTitle}</h2>
+          <p class="dim">{dict.cli.dockerNote}</p>
+          <pre translate="no">{dockerRun}</pre>
+        </div>
+        <div data-reveal data-reveal-delay="1">
+          <h2>{dict.cli.openTitle}</h2>
+          <p class="dim">{dict.cli.openBody}</p>
+          <div class="row">
+            <a class="btn" href={REPO_URL}>{dict.common.sourceOnGitHub}</a>
+            <a class="btn" href={localeUrl(locale, "hub")}>{dict.parts.hubName}</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <ReleaseScript locale={locale} />
+</Base>
+
+<style>
+  .hero {
+    padding-block: clamp(44px, 7vw, 76px) clamp(20px, 4vw, 40px);
+  }
+
+  .given {
+    display: block;
+    color: var(--faint);
+  }
+
+  .second {
+    display: block;
+    color: #fff;
+  }
+
+  h1 {
+    max-width: 22ch;
+  }
+
+  .lede {
+    margin-top: 20px;
+  }
+
+  .sub {
+    font-size: 1.16rem;
+    margin: 30px 0 12px;
+  }
+
+  .install {
+    max-width: 640px;
+    margin-bottom: 12px;
+  }
+
+  .small {
+    font-size: 0.88rem;
+    max-width: 72ch;
+  }
+
+  .row {
+    margin-top: 18px;
+  }
+
+  .tours {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 26px 32px;
+  }
+
+  .tour h3 {
+    margin-bottom: 6px;
+  }
+
+  .tour p {
+    color: var(--dim);
+    font-size: 0.94rem;
+    max-width: none;
+  }
+
+  .tour pre {
+    margin-bottom: 0;
+    white-space: pre;
+  }
+
+  /* A list of guarantees reads better with a mark than with a bullet: each
+     line is a thing the tool does, not an item in an inventory. */
+  .ticks {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-width: none;
+  }
+
+  .ticks li {
+    position: relative;
+    padding-left: 26px;
+    margin-bottom: 12px;
+    color: var(--dim);
+    font-size: 0.95rem;
+  }
+
+  .ticks li::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 0.55em;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    background: var(--cat-code);
+  }
+
+  @media (max-width: 900px) {
+    .tours {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>

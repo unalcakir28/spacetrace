@@ -152,9 +152,27 @@ gerektiriyor ve bunların hiçbiri yoksayılmıyor. Yine de olursa çıkış yol
 
 ## Site
 
-`website/` altında yapı adımı olmayan düz HTML. Tüm indirme bağlantıları
-işaretlemede gerçek dosyalara işaret ediyor (`continuous` etiketleri hiç
-kımıldamıyor), `assets/site.js` yalnızca üzerine bilgi ekliyor: sürüm, tarih,
-boyut ve kararlı bir sürüm çıktığında bağlantıların ona yükseltilmesi.
-JavaScript kapalıyken de çalışan bir indirme sayfası bırakmak şart — bu yüzden
-scriptteki her adım korumalı ve hata sessizce yutuluyor.
+`website/` bir **Astro** projesi. Beş dil (en, tr, it, fr, de) ve 31 statik
+sayfa üretiyor; `pages.yml` bunu derleyip Pages'e yüklüyor.
+
+Kolay bozulan yerler:
+
+- **Sözlükler İngilizceye karşı tipli.** `src/i18n/ui/en.ts` kaynak; diğer dört
+  dil `Dictionary` tipiyle ona uyuyor. Bir dile eklenip diğerlerinde unutulan
+  anahtar `yarn typecheck` ile derleme hatası veriyor, canlı sayfada boşluk
+  olarak değil. İş akışı bu yüzden `build`'den önce `typecheck` çalıştırıyor.
+- **`yarn check` yazma.** yarn 1.x'in kendi yerleşik komutu ve script'i
+  gölgeliyor — sessizce "Folder in sync" der ve tip denetimi hiç çalışmaz.
+  Script'in adı bu yüzden `typecheck`.
+- **İndirme sözleşmesi tek yerde:** `src/data/releases.ts`. Etiket adları ve
+  varlık adları yukarıdaki tablodakilerle aynı olmak zorunda; oradaki bir
+  yeniden adlandırma her indirme bağlantısını kırar.
+- **JS kapalıyken de çalışan bir indirme sayfası bırakmak şart.** Bağlantılar
+  işaretlemede gerçek dosyalara işaret ediyor (`continuous` etiketleri hiç
+  kımıldamıyor); `src/scripts/releases.ts` yalnızca üzerine bilgi ekliyor —
+  sürüm, tarih, boyut, ve kararlı sürüm çıktığında bağlantıların ona
+  yükseltilmesi. Her adım korumalı, hata sessizce yutuluyor.
+- **Etkileşimli treemap tek React adası** (`src/components/demo/`). Sunucuda da
+  makul bir geometriyle çiziliyor, yani JS olmadan da dolu görünüyor.
+- **`base: /spacetrace`** — her iç bağlantı `localeUrl()` üzerinden geçiyor. Elle
+  yazılan bir yol `astro dev`'de çalışır, üretimde 404 verir.

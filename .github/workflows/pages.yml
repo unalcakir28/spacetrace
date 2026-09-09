@@ -1,8 +1,8 @@
 name: Pages
 
-# The site in website/ is plain HTML with no build step, so this workflow only
-# uploads it. It is deliberately separate from Release: a typo fix on the
-# download page should not trigger a five-target binary build, and a binary
+# The site is an Astro project in website/, so this workflow builds it and
+# uploads the output. It is deliberately separate from Release: a typo fix on
+# the download page should not trigger a five-target binary build, and a binary
 # build should not have to succeed before a documentation fix goes live.
 
 on:
@@ -24,6 +24,10 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+defaults:
+  run:
+    working-directory: website
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -33,16 +37,27 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Reads the Pages configuration; `enablement` cannot bootstrap it, because
-      # GITHUB_TOKEN is not allowed to create a Pages site that has never
-      # existed ("Resource not accessible by integration"). Turning Pages on is
-      # a one-off, done once from the settings page or with
-      #   gh api -X POST repos/OWNER/REPO/pages -f build_type=workflow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: website/yarn.lock
+
+      - run: yarn install --frozen-lockfile
+
+      # `astro check` runs the TypeScript compiler over the .astro files and
+      # the React island. The five translation dictionaries are typed against
+      # the English one, so a key added in one language and forgotten in
+      # another fails here rather than leaving a blank space on a live page.
+      - run: yarn typecheck
+
+      - run: yarn build
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: website
+          path: website/dist
 
       - id: deploy
         uses: actions/deploy-pages@v4

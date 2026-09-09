@@ -1,0 +1,118 @@
+---
+import { t, type Locale } from "../i18n";
+
+interface Props {
+  locale: Locale;
+  command: string;
+  /** A `$` prompt is right for a shell line and wrong for a file path. */
+  prompt?: boolean;
+}
+const { locale, command, prompt = true } = Astro.props;
+const dict = t(locale);
+---
+
+<div class="cmd" data-cmd>
+  <code data-cmd-text set:text={command} data-prompt={prompt ? "yes" : "no"} translate="no" />
+  <button type="button" data-cmd-copy data-idle={dict.common.copy} data-done={dict.common.copied} aria-label={dict.common.copyCommand}>
+    {dict.common.copy}
+  </button>
+</div>
+
+<style>
+  .cmd {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--line);
+    border-radius: var(--r-control);
+    background: var(--panel);
+    overflow: hidden;
+    max-width: 100%;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    padding: 12px 14px;
+    color: var(--dim);
+    /* Wrapped rather than scrolled: a command you cannot see the end of is a
+       command you cannot check before running it. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    flex: 1;
+    min-width: 0;
+  }
+
+  code[data-prompt="yes"]::before {
+    content: "$ ";
+    color: var(--faint);
+  }
+
+  button {
+    flex: none;
+    border: 0;
+    border-left: 1px solid var(--line);
+    background: var(--panel-raised);
+    color: var(--dim);
+    font: 500 0.8rem/1 var(--sans);
+    padding-inline: 14px;
+    cursor: pointer;
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+
+  button:hover {
+    background: var(--panel-high);
+    color: #fff;
+  }
+
+  button[data-copied] {
+    color: var(--shrink);
+  }
+</style>
+
+<script>
+  for (const box of document.querySelectorAll<HTMLElement>("[data-cmd]")) {
+    const code = box.querySelector<HTMLElement>("[data-cmd-text]");
+    const button = box.querySelector<HTMLButtonElement>("[data-cmd-copy]");
+    if (!code || !button || button.dataset.wired) continue;
+    button.dataset.wired = "yes";
+
+    const idle = button.dataset.idle ?? "Copy";
+    const done = button.dataset.done ?? "Copied";
+
+    const confirm = () => {
+      button.textContent = done;
+      button.setAttribute("data-copied", "");
+      window.setTimeout(() => {
+        button.textContent = idle;
+        button.removeAttribute("data-copied");
+      }, 1600);
+    };
+
+    button.addEventListener("click", async () => {
+      const text = code.textContent?.trim() ?? "";
+      try {
+        await navigator.clipboard.writeText(text);
+        confirm();
+      } catch {
+        // Older Safari, or any non-secure context. The text stays selectable
+        // either way, so a failure here is not a dead end.
+        const field = document.createElement("textarea");
+        field.value = text;
+        field.setAttribute("readonly", "");
+        field.style.position = "fixed";
+        field.style.opacity = "0";
+        document.body.append(field);
+        field.select();
+        try {
+          document.execCommand("copy");
+          confirm();
+        } catch {
+          /* leave the button alone rather than claim success */
+        }
+        field.remove();
+      }
+    });
+  }
+</script>

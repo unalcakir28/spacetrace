@@ -12,3 +12,8 @@ tasks/
 
 # Playwright cache directory
 .playwright-mcp/
+
+# Site build output and dependencies (website/ is an Astro project).
+website/node_modules/
+website/dist/
+website/.astro/

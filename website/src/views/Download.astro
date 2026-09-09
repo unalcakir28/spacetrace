@@ -1,0 +1,428 @@
+---
+import Base from "../layouts/Base.astro";
+import Command from "../components/Command.astro";
+import DownloadLink from "../components/DownloadLink.astro";
+import ReleaseScript from "../components/ReleaseScript.astro";
+import { t, type Locale } from "../i18n";
+import { localeUrl } from "../i18n/routing";
+import {
+  CLI_ASSETS,
+  DESKTOP_ASSETS,
+  HUB_ASSETS,
+  HUB_IMAGE,
+  INSTALL_COMMAND,
+  REPO_URL,
+  checksumsUrl,
+  type Asset,
+} from "../data/releases";
+
+interface Props {
+  locale: Locale;
+}
+const { locale } = Astro.props;
+const dict = t(locale);
+
+const find = (assets: Asset[], match: string): Asset =>
+  assets.find((asset) => asset.match === match)!;
+
+const desktopRows = [
+  { plat: dict.download.platMacAny, asset: find(DESKTOP_ASSETS, "macos-universal.dmg"), note: dict.download.noteUniversal },
+  { plat: dict.download.platWin, asset: find(DESKTOP_ASSETS, "windows-x86_64-setup.exe"), note: dict.download.noteNsis },
+  { plat: dict.download.platDebian, asset: find(DESKTOP_ASSETS, "linux-x86_64.deb"), note: dict.download.noteDeb },
+  { plat: dict.download.platFedora, asset: find(DESKTOP_ASSETS, "linux-x86_64.rpm"), note: dict.download.noteRpm },
+  { plat: dict.download.platAnyLinux, asset: find(DESKTOP_ASSETS, "linux-x86_64.AppImage"), note: dict.download.noteAppImage },
+];
+
+const cliRows = [
+  { plat: dict.download.platMacArm, asset: find(CLI_ASSETS, "aarch64-apple-darwin.tar.gz"), note: dict.download.noteM1 },
+  { plat: dict.download.platMacIntel, asset: find(CLI_ASSETS, "x86_64-apple-darwin.tar.gz"), note: dict.download.noteMac11 },
+  { plat: dict.download.platLinuxX64, asset: find(CLI_ASSETS, "x86_64-unknown-linux-musl.tar.gz"), note: dict.download.noteStatic },
+  { plat: dict.download.platLinuxArm, asset: find(CLI_ASSETS, "aarch64-unknown-linux-musl.tar.gz"), note: dict.download.noteNas },
+  { plat: dict.download.platWin, asset: find(CLI_ASSETS, "x86_64-pc-windows-msvc.zip"), note: dict.download.noteWinAlloc },
+];
+
+const hubRows = [
+  { plat: dict.download.platLinuxX64, asset: find(HUB_ASSETS, "x86_64-unknown-linux-musl.tar.gz"), note: dict.download.noteHubServer },
+  { plat: dict.download.platLinuxArm, asset: find(HUB_ASSETS, "aarch64-unknown-linux-musl.tar.gz"), note: dict.download.noteNas },
+  { plat: dict.download.platMacArm, asset: find(HUB_ASSETS, "aarch64-apple-darwin.tar.gz"), note: dict.download.noteHubTry },
+  { plat: dict.download.platMacIntel, asset: find(HUB_ASSETS, "x86_64-apple-darwin.tar.gz"), note: dict.download.noteMac11 },
+];
+
+const verify = `curl -LO ${checksumsUrl("desktop")}
+sha256sum -c --ignore-missing SHA256SUMS`;
+
+const build = `git clone ${REPO_URL}
+cd spacetrace
+cargo build --release
+./target/release/spacetrace --help`;
+---
+
+<Base
+  locale={locale}
+  page="download"
+  title={dict.download.title}
+  description={dict.download.description}
+>
+  <section class="wrap top">
+    <h1>{dict.download.headline}</h1>
+    <p class="lede">{dict.download.lede}</p>
+
+    <!-- The generic card is the one in the markup, so a visitor without
+         JavaScript gets an answer that is always right. The script reveals the
+         platform-specific card and hides this one. -->
+    <div class="card" data-for-os="macos" hidden>
+      <p class="os">{dict.download.detectMac}</p>
+      <p class="sub">
+        {dict.download.detectMacSub}<span class="sep">·</span>
+        <span data-version="desktop">{dict.common.latestBuild}</span>
+        <span class="sep">·</span>
+        <span data-channel="desktop">{dict.common.notARelease}</span>
+      </p>
+      <div class="row">
+        <DownloadLink
+          locale={locale}
+          asset={find(DESKTOP_ASSETS, "macos-universal.dmg")}
+          label={`${dict.common.download} · .dmg`}
+          variant="btn btn-primary"
+        />
+        <span class="faint mono" data-size></span>
+      </div>
+      <p class="also">{dict.download.alsoCli}</p>
+      <Command locale={locale} command={INSTALL_COMMAND} />
+      <p class="faint tiny">{dict.download.cliAlongside}</p>
+    </div>
+
+    <div class="card" data-for-os="windows" hidden>
+      <p class="os">{dict.download.detectWindows}</p>
+      <p class="sub">
+        {dict.download.detectWindowsSub}<span class="sep">·</span>
+        <span data-version="desktop">{dict.common.latestBuild}</span>
+        <span class="sep">·</span>
+        <span data-channel="desktop">{dict.common.notARelease}</span>
+      </p>
+      <div class="row">
+        <DownloadLink
+          locale={locale}
+          asset={find(DESKTOP_ASSETS, "windows-x86_64-setup.exe")}
+          label={`${dict.common.download} · .exe`}
+          variant="btn btn-primary"
+        />
+        <span class="faint mono" data-size></span>
+        <DownloadLink
+          locale={locale}
+          asset={find(CLI_ASSETS, "x86_64-pc-windows-msvc.zip")}
+          label={`${dict.download.alsoCli} · .zip`}
+          variant="btn"
+        />
+      </div>
+    </div>
+
+    <div class="card" data-for-os="linux" hidden>
+      <p class="os">{dict.download.detectLinux}</p>
+      <p class="sub">
+        {dict.download.detectLinuxSub}<span class="sep">·</span>
+        <span data-version="desktop">{dict.common.latestBuild}</span>
+        <span class="sep">·</span>
+        <span data-channel="desktop">{dict.common.notARelease}</span>
+      </p>
+      <div class="row">
+        <DownloadLink
+          locale={locale}
+          asset={find(DESKTOP_ASSETS, "linux-x86_64.deb")}
+          label={`${dict.common.download} · .deb`}
+          variant="btn btn-primary"
+        />
+        <span class="faint mono" data-size></span>
+        <DownloadLink
+          locale={locale}
+          asset={find(DESKTOP_ASSETS, "linux-x86_64.AppImage")}
+          label=".AppImage"
+          variant="btn"
+        />
+        <DownloadLink
+          locale={locale}
+          asset={find(DESKTOP_ASSETS, "linux-x86_64.rpm")}
+          label=".rpm"
+          variant="btn"
+        />
+      </div>
+      <p class="also">{dict.download.alsoCli}</p>
+      <Command locale={locale} command={INSTALL_COMMAND} />
+    </div>
+
+    <div class="card" data-for-os="other">
+      <p class="os">{dict.download.detectUnknown}</p>
+      <p class="sub">{dict.download.detectUnknownSub}</p>
+      <div class="row">
+        <a class="btn btn-primary" href="#desktop">{dict.download.goToFiles}</a>
+      </div>
+    </div>
+
+    <div class="note warn">
+      <span class="note-title">{dict.download.continuousTitle}</span>
+      <p>{dict.download.continuousBody}</p>
+    </div>
+  </section>
+
+  <section class="band" id="desktop">
+    <div class="wrap">
+      <div class="band-head">
+        <h2>{dict.download.desktopSection}</h2>
+        <p>
+          {dict.download.desktopSectionLede}{" "}
+          <a href={localeUrl(locale, "desktop")}>{dict.parts.desktopCta}</a>
+        </p>
+      </div>
+
+      <div class="scroll-x">
+        <table class="data">
+          <caption>{dict.download.desktopCaption}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{dict.common.platform}</th>
+              <th scope="col">{dict.common.file}</th>
+              <th scope="col">{dict.common.size}</th>
+              <th scope="col">{dict.common.notes}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              desktopRows.map((row) => (
+                <tr>
+                  <th scope="row">{row.plat}</th>
+                  <td>
+                    <DownloadLink locale={locale} asset={row.asset} showFilename />
+                  </td>
+                  <td class="faint mono nowrap" data-size />
+                  <td class="faint small">{row.note}</td>
+                </tr>
+              ))
+            }
+            <tr>
+              <th scope="row">{dict.common.checksums}</th>
+              <td>
+                <a class="mono" href={checksumsUrl("desktop")}>SHA256SUMS</a>
+              </td>
+              <td />
+              <td class="faint small">{dict.download.noteAllArchives}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note warn spaced">
+        <span class="note-title">{dict.download.unsignedTitle}</span>
+        <p>{dict.download.unsignedBody}</p>
+      </div>
+
+      <ol class="steps">
+        <li>
+          <h4>{dict.download.installMacTitle}</h4>
+          <p>{dict.download.installMacBody}</p>
+          <Command
+            locale={locale}
+            command="xattr -dr com.apple.quarantine /Applications/spacetrace.app"
+          />
+          <p>{dict.download.installMacFda}</p>
+        </li>
+        <li>
+          <h4>{dict.download.installWinTitle}</h4>
+          <p>{dict.download.installWinBody}</p>
+        </li>
+        <li>
+          <h4>{dict.download.installLinuxTitle}</h4>
+          <Command
+            locale={locale}
+            command="sudo apt install ./spacetrace-desktop-*-linux-x86_64.deb"
+          />
+          <p>{dict.download.installLinuxBody}</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="band" id="cli">
+    <div class="wrap">
+      <div class="band-head">
+        <h2>{dict.download.cliSection}</h2>
+        <p>{dict.download.cliSectionLede}</p>
+      </div>
+
+      <div class="scroll-x">
+        <table class="data">
+          <caption>{dict.download.cliCaption}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{dict.common.platform}</th>
+              <th scope="col">{dict.common.file}</th>
+              <th scope="col">{dict.common.size}</th>
+              <th scope="col">{dict.common.notes}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              cliRows.map((row) => (
+                <tr>
+                  <th scope="row">{row.plat}</th>
+                  <td>
+                    <DownloadLink locale={locale} asset={row.asset} showFilename />
+                  </td>
+                  <td class="faint mono nowrap" data-size />
+                  <td class="faint small">{row.note}</td>
+                </tr>
+              ))
+            }
+            <tr>
+              <th scope="row">{dict.common.checksums}</th>
+              <td>
+                <a class="mono" href={checksumsUrl("cli")}>SHA256SUMS</a>
+              </td>
+              <td />
+              <td class="faint small">{dict.download.noteAllArchives}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="install-line">
+        <Command locale={locale} command={INSTALL_COMMAND} />
+      </div>
+      <p class="faint small">{dict.cli.installNote}</p>
+    </div>
+  </section>
+
+  <section class="band" id="hub">
+    <div class="wrap">
+      <div class="band-head">
+        <h2>{dict.download.hubSection}</h2>
+        <p>
+          {dict.download.hubSectionLede}{" "}
+          <a href={localeUrl(locale, "hub")}>{dict.parts.hubCta}</a>
+        </p>
+      </div>
+
+      <div class="install-line">
+        <Command locale={locale} command={`docker pull ${HUB_IMAGE}:main`} />
+      </div>
+
+      <div class="scroll-x">
+        <table class="data">
+          <caption>{dict.download.hubCaption}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{dict.common.platform}</th>
+              <th scope="col">{dict.common.file}</th>
+              <th scope="col">{dict.common.size}</th>
+              <th scope="col">{dict.common.notes}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              hubRows.map((row) => (
+                <tr>
+                  <th scope="row">{row.plat}</th>
+                  <td>
+                    <DownloadLink locale={locale} asset={row.asset} showFilename />
+                  </td>
+                  <td class="faint mono nowrap" data-size />
+                  <td class="faint small">{row.note}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="split">
+        <div>
+          <h2>{dict.download.verifyTitle}</h2>
+          <p class="dim">{dict.download.verifyBody}</p>
+          <pre translate="no">{verify}</pre>
+          <p class="faint small">{dict.download.verifyMacNote}</p>
+        </div>
+        <div>
+          <h2>{dict.download.buildTitle}</h2>
+          <p class="dim">{dict.download.buildBody}</p>
+          <pre translate="no">{build}</pre>
+          <p class="faint small">{dict.download.buildNote}</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <ReleaseScript locale={locale} />
+</Base>
+
+<style>
+  .top {
+    padding-block: clamp(40px, 6vw, 64px) clamp(40px, 6vw, 60px);
+  }
+
+  .card {
+    margin-top: 28px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-surface);
+    background: linear-gradient(180deg, var(--panel), #0c1120);
+    padding: clamp(20px, 4vw, 30px);
+  }
+
+  .os {
+    font-family: var(--cond);
+    font-weight: 700;
+    font-size: 1.35rem;
+    margin: 0;
+  }
+
+  .sep {
+    color: var(--line-strong);
+    margin-inline: 6px;
+  }
+
+  .sub {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--faint);
+    margin: 6px 0 0;
+    max-width: none;
+  }
+
+  .card .row {
+    margin-top: 20px;
+  }
+
+  .also {
+    margin: 22px 0 10px;
+    color: var(--dim);
+    font-size: 0.92rem;
+  }
+
+  .tiny {
+    font-size: 0.84rem;
+    margin: 10px 0 0;
+  }
+
+  .note.warn {
+    margin-top: 26px;
+  }
+
+  .note.warn.spaced {
+    margin-top: 30px;
+  }
+
+  .install-line {
+    max-width: 660px;
+    margin: 24px 0 10px;
+  }
+
+  .small {
+    font-size: 0.86rem;
+  }
+
+  .nowrap {
+    white-space: nowrap;
+  }
+</style>

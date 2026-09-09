@@ -1,0 +1,40 @@
+---
+import Base from "../layouts/Base.astro";
+import { t } from "../i18n";
+import { localeUrl } from "../i18n/routing";
+
+// GitHub Pages serves this for any unknown path, whatever language the visitor
+// was in, so it is deliberately English and deliberately short: it is a
+// signpost, not a page.
+const dict = t("en");
+---
+
+<Base
+  locale="en"
+  page=""
+  title="Not found — spacetrace"
+  description="That page does not exist."
+>
+  <section class="wrap miss">
+    <p class="kicker" translate="no">404</p>
+    <h1>That page is not here.</h1>
+    <p class="lede">
+      It may have moved, or the link may be old. These three always work.
+    </p>
+    <div class="row">
+      <a class="btn btn-primary" href={localeUrl("en", "")}>{dict.footer.home}</a>
+      <a class="btn" href={localeUrl("en", "download")}>{dict.nav.download}</a>
+      <a class="btn" href={localeUrl("en", "guide")}>{dict.nav.guide}</a>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .miss {
+    padding-block: clamp(64px, 12vw, 140px) clamp(80px, 14vw, 160px);
+  }
+
+  .row {
+    margin-top: 28px;
+  }
+</style>

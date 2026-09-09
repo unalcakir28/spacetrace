@@ -1,0 +1,163 @@
+---
+import Logo from "./Logo.astro";
+import LangSwitcher from "./LangSwitcher.astro";
+import { t, type Locale } from "../i18n";
+import { localeUrl, type Page } from "../i18n/routing";
+
+interface Props {
+  locale: Locale;
+  page: Page;
+}
+const { locale, page } = Astro.props;
+const dict = t(locale);
+
+// Marketing order, and it is the order everywhere: the desktop app is the
+// product, the command line is for people who prefer a terminal, the hub is
+// for whoever runs a fleet.
+const items: { page: Page; label: string }[] = [
+  { page: "desktop", label: dict.nav.desktop },
+  { page: "cli", label: dict.nav.cli },
+  { page: "hub", label: dict.nav.hub },
+  { page: "guide", label: dict.nav.guide },
+];
+---
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href={localeUrl(locale, "")}>
+      <Logo />
+      <span translate="no">spacetrace</span>
+    </a>
+
+    <nav class="site-nav" aria-label="spacetrace">
+      {
+        items.map((item) => (
+          <a
+            href={localeUrl(locale, item.page)}
+            aria-current={item.page === page ? "page" : undefined}
+          >
+            {item.label}
+          </a>
+        ))
+      }
+    </nav>
+
+    <div class="tail">
+      <LangSwitcher locale={locale} page={page} />
+      <a
+        class="btn btn-primary head-cta"
+        href={localeUrl(locale, "download")}
+        aria-current={page === "download" ? "page" : undefined}
+      >
+        {dict.nav.download}
+      </a>
+    </div>
+  </div>
+</header>
+
+<style>
+  .site-head {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    background: rgba(8, 11, 20, 0.84);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .site-head > .wrap {
+    display: flex;
+    align-items: center;
+    gap: 26px;
+    min-height: 60px;
+    padding-block: 10px;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--cond);
+    font-weight: 700;
+    font-size: 1.06rem;
+    color: var(--text);
+    text-decoration: none;
+    letter-spacing: -0.01em;
+    flex: none;
+  }
+
+  .brand:hover {
+    color: #fff;
+  }
+
+  .site-nav {
+    display: flex;
+    gap: 22px;
+    align-items: center;
+    font-size: 0.94rem;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .site-nav a {
+    color: var(--dim);
+    text-decoration: none;
+    padding: 4px 0;
+    border-bottom: 1px solid transparent;
+    white-space: nowrap;
+    transition:
+      color var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out);
+  }
+
+  .site-nav a:hover {
+    color: #fff;
+  }
+
+  .site-nav a[aria-current="page"] {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+
+  .tail {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+    flex: none;
+  }
+
+  .head-cta {
+    padding: 9px 15px;
+    font-size: 0.9rem;
+  }
+
+  @media (max-width: 780px) {
+    .site-head > .wrap {
+      gap: 10px 18px;
+    }
+
+    .tail {
+      margin-left: auto;
+    }
+
+    .site-nav {
+      order: 3;
+      width: 100%;
+      gap: 18px;
+      /* nowrap with a scroller, not wrap: four links on two rows push the
+         page's actual content further down on the smallest screens, and the
+         row scrolls perfectly well. */
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      scrollbar-width: none;
+      font-size: 0.9rem;
+    }
+
+    .site-nav::-webkit-scrollbar {
+      display: none;
+    }
+  }
+</style>

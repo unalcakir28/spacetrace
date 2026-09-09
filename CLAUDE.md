@@ -129,18 +129,23 @@ Tam anlatım [docs/RELEASING.md](docs/RELEASING.md); kolay bozulan kısımlar:
   yüzden masaüstü ve hub kendi CI'larında derleyip buraya yayınlıyor
   (`RELEASE_TOKEN` sırrı ile). Etiketler: `continuous` / `v*` (CLI),
   `desktop-continuous` / `desktop-v*`, `hub-continuous` / `hub-v*`.
-- **Etiket ve varlık adları sabit sözleşme.** `website/download.html` bunlara
-  doğrudan bağlanıyor ve `install.sh` dosya adını verilen sürümden kuruyor;
-  yeniden adlandırmak indirme sayfasını sessizce kırar.
+- **Etiket ve varlık adları sabit sözleşme.**
+  `website/src/data/releases.ts` bunlara doğrudan bağlanıyor ve `install.sh`
+  dosya adını verilen sürümden kuruyor; yeniden adlandırmak indirme sayfasını
+  sessizce kırar.
 - **Konteyner imajları önceden derlenmiş musl ikililerinden kuruluyor**
   (`.github/docker/Dockerfile.release`), kökteki `Dockerfile`'dan değil. QEMU
   altında Rust derlemek arm64 imajını dakikalar yerine on dakikalar sürdürüyor.
   Kökteki Dockerfile duruyor çünkü `docker build .` bir klonda çalışsın diye var.
-- **`website/` yapı adımı olmayan düz HTML** ve JavaScript kapalıyken de çalışan
-  bir indirme sayfası bırakmak zorunda: bağlantılar işaretlemede gerçek dosyalara
-  işaret ediyor, `site.js` yalnızca sürüm/tarih/boyut ekliyor. Renk paleti
-  masaüstünün `theme.css`'inden alınmış — ikinci bir palet icat etmek, ürüne
-  benzemeyen bir site demek.
+- **`website/` bir Astro projesi**, beş dilde (en/tr/it/fr/de) 31 statik sayfa.
+  Sözlükler `src/i18n/ui/en.ts`'e karşı tipli, yani eksik çeviri anahtarı
+  derleme hatası. `yarn check` yazma — yarn'ın yerleşik komutu script'i
+  gölgeliyor; doğrusu `yarn typecheck`. İndirme sözleşmesi
+  `src/data/releases.ts` içinde tek yerde. JavaScript kapalıyken de çalışan bir
+  indirme sayfası bırakmak zorunlu. Renk paleti masaüstünün `theme.css`'inden
+  alınmış — ikinci bir palet icat etmek, ürüne benzemeyen bir site demek.
+  Pazarlama sırası masaüstü → CLI → hub; navigasyon ve ana sayfa bu sırayı
+  izliyor.
 - Sürüm iş akışı belge ve site değişikliklerinde çalışmıyor (`paths-ignore`),
   Pages iş akışı yalnızca `website/**` değişince çalışıyor.
 

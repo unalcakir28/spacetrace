@@ -1,0 +1,274 @@
+---
+import Base from "../layouts/Base.astro";
+import Command from "../components/Command.astro";
+import FleetTable from "../components/FleetTable.astro";
+import ReleaseScript from "../components/ReleaseScript.astro";
+import { t, type Locale } from "../i18n";
+import { localeUrl } from "../i18n/routing";
+import { HUB_IMAGE, HUB_REPO_URL } from "../data/releases";
+
+interface Props {
+  locale: Locale;
+}
+const { locale } = Astro.props;
+const dict = t(locale);
+
+const forecast = [
+  { title: dict.hub.fc1Title, body: dict.hub.fc1Body },
+  { title: dict.hub.fc2Title, body: dict.hub.fc2Body },
+  { title: dict.hub.fc3Title, body: dict.hub.fc3Body },
+  { title: dict.hub.fc4Title, body: dict.hub.fc4Body },
+  { title: dict.hub.fc5Title, body: dict.hub.fc5Body },
+];
+
+const api = [
+  { route: "GET /health", who: "—", purpose: dict.common.version },
+  { route: "POST /snapshots", who: dict.hub.agentToken, purpose: dict.hub.agentCan },
+  { route: "GET /api/fleet", who: dict.hub.adminToken, purpose: "JSON" },
+  { route: "GET /target?host=&root=", who: dict.hub.adminToken, purpose: dict.hub.fleetTrend },
+  { route: "GET /alerts", who: dict.hub.adminToken, purpose: dict.hub.alertsTitle },
+  { route: "GET /tokens", who: dict.hub.adminToken, purpose: dict.hub.agentToken },
+];
+
+const config = `db = "/var/lib/spacetrace-hub/hub.sqlite"
+listen = "0.0.0.0:8080"
+admin_token_file = "/run/secrets/admin-token"
+keep_per_target = 90`;
+---
+
+<Base
+  locale={locale}
+  page="hub"
+  title={dict.hub.title}
+  description={dict.hub.description}
+>
+  <section class="wrap hero">
+    <p class="kicker">{dict.hub.kicker}</p>
+    <h1>
+      <span class="given">{dict.hub.headlineGiven}</span>
+      <span class="second">{dict.hub.headlineSecond}</span>
+    </h1>
+    <p class="lede">{dict.hub.lede}</p>
+
+    <div class="row hero-actions">
+      <div class="pull">
+        <Command locale={locale} command={`docker pull ${HUB_IMAGE}:main`} />
+      </div>
+      <a class="btn" href={`${localeUrl(locale, "download")}#hub`}>
+        {dict.hub.ctaBinaries}
+      </a>
+    </div>
+
+    <div class="dash" data-reveal>
+      <FleetTable locale={locale} />
+    </div>
+    <p class="faint cap">{dict.hub.dashCaption}</p>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="band-head" data-reveal>
+        <h2>{dict.hub.setupTitle}</h2>
+        <p>{dict.hub.setupLede}</p>
+      </div>
+
+      <ol class="steps">
+        <li data-reveal>
+          <h4>{dict.hub.step1Title}</h4>
+          <Command
+            locale={locale}
+            command="head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > admin-token"
+          />
+          <pre translate="no">{config}</pre>
+          <p>{dict.hub.step1Body}</p>
+        </li>
+        <li data-reveal>
+          <h4>{dict.hub.step2Title}</h4>
+          <p>{dict.hub.step2Body}</p>
+          <Command
+            locale={locale}
+            command="spacetrace-hub --config hub.toml token nas"
+          />
+        </li>
+        <li data-reveal>
+          <h4>{dict.hub.step3Title}</h4>
+          <Command
+            locale={locale}
+            command="spacetrace-agent --config /etc/spacetrace/agent.toml push https://hub.example.com --token <agent token>"
+          />
+          <p>{dict.hub.step3Body}</p>
+        </li>
+        <li data-reveal>
+          <h4>{dict.hub.step4Title}</h4>
+          <p>{dict.hub.step4Body}</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="split aside">
+        <div data-reveal>
+          <h2>{dict.hub.credsTitle}</h2>
+          <p class="dim">{dict.hub.credsBody1}</p>
+          <p class="dim">{dict.hub.credsBody2}</p>
+          <p class="faint small">{dict.hub.credsTested}</p>
+        </div>
+        <div class="scroll-x" data-reveal data-reveal-delay="1">
+          <table class="data">
+            <thead>
+              <tr>
+                <th scope="col">{dict.hub.credCol}</th>
+                <th scope="col">{dict.hub.credCan}</th>
+                <th scope="col">{dict.hub.credCannot}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">{dict.hub.agentToken}</th>
+                <td>{dict.hub.agentCan}</td>
+                <td class="faint">{dict.hub.agentCannot}</td>
+              </tr>
+              <tr>
+                <th scope="row">{dict.hub.adminToken}</th>
+                <td>{dict.hub.adminCan}</td>
+                <td class="faint">{dict.hub.adminCannot}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="band-head" data-reveal>
+        <h2>{dict.hub.forecastTitle}</h2>
+        <p>{dict.hub.forecastLede}</p>
+      </div>
+      <ul class="claims">
+        {
+          forecast.map((item) => (
+            <li data-reveal>
+              <h3>{item.title}</h3>
+              <div>
+                <p>{item.body}</p>
+              </div>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="split">
+        <div data-reveal>
+          <h2>{dict.hub.alertsTitle}</h2>
+          <p class="dim">{dict.hub.alertsLede}</p>
+          <ul class="dim">
+            {dict.hub.alerts.map((alert) => <li>{alert}</li>)}
+          </ul>
+          <p class="faint small">{dict.hub.alertsMissing}</p>
+        </div>
+        <div data-reveal data-reveal-delay="1">
+          <h2>{dict.hub.apiTitle}</h2>
+          <div class="scroll-x">
+            <table class="data api">
+              <tbody>
+                {
+                  api.map((row) => (
+                    <tr>
+                      <th scope="row" class="mono" translate="no">
+                        {row.route}
+                      </th>
+                      <td class="faint">{row.who}</td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="split aside">
+        <div data-reveal>
+          <h2>{dict.hub.noRollupTitle}</h2>
+        </div>
+        <div data-reveal data-reveal-delay="1">
+          <p class="dim">{dict.hub.noRollupBody1}</p>
+          <p class="dim">{dict.hub.noRollupBody2}</p>
+          <p>
+            <a href={HUB_REPO_URL}>{HUB_REPO_URL.replace("https://", "")}</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <ReleaseScript locale={locale} />
+</Base>
+
+<style>
+  .hero {
+    padding-block: clamp(44px, 7vw, 76px) clamp(48px, 7vw, 80px);
+  }
+
+  .given {
+    display: block;
+    color: var(--faint);
+  }
+
+  .second {
+    display: block;
+    color: #fff;
+  }
+
+  h1 {
+    max-width: 22ch;
+  }
+
+  .lede {
+    margin-top: 20px;
+  }
+
+  .hero-actions {
+    margin: 26px 0 0;
+    align-items: stretch;
+  }
+
+  .pull {
+    flex: 1 1 380px;
+    min-width: 0;
+  }
+
+  .dash {
+    margin-top: 36px;
+  }
+
+  .cap {
+    margin-top: 12px;
+    font-size: 0.86rem;
+    max-width: 76ch;
+  }
+
+  .small {
+    font-size: 0.88rem;
+  }
+
+  table.api th {
+    font-family: var(--mono);
+    font-size: 0.84rem;
+    font-weight: 400;
+    color: var(--accent-bright);
+    white-space: nowrap;
+  }
+</style>

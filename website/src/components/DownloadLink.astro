@@ -1,0 +1,48 @@
+---
+import { t, type Locale } from "../i18n";
+import { fallbackUrl, type Asset } from "../data/releases";
+
+interface Props {
+  locale: Locale;
+  asset: Asset;
+  label?: string;
+  variant?: "btn" | "btn btn-primary" | "plain";
+  /** Show the file name as the link text and keep it in sync with the API. */
+  showFilename?: boolean;
+}
+const {
+  locale,
+  asset,
+  label,
+  variant = "plain",
+  showFilename = false,
+} = Astro.props;
+const dict = t(locale);
+const text = label ?? dict.common.download;
+---
+
+<a
+  class={variant === "plain" ? "dl" : `dl ${variant}`}
+  href={fallbackUrl(asset)}
+  data-dl={asset.component}
+  data-match={asset.match}
+>
+  {
+    showFilename ? (
+      <span data-filename translate="no">
+        {asset.fallbackName}
+      </span>
+    ) : (
+      text
+    )
+  }
+</a>
+
+<style>
+  .dl[data-filename],
+  .dl > :global([data-filename]) {
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    overflow-wrap: anywhere;
+  }
+</style>
