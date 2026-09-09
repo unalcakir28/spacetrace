@@ -211,6 +211,26 @@
     "desktop": {
       "unreleased": [
         {
+          "kind": "added",
+          "text": {
+            "de": "Die App spricht fünf Sprachen: Englisch, Türkisch, Italienisch, Französisch und Deutsch. Beim ersten Start folgt sie der Sprache Ihres Systems, und die Auswahl lässt sich jederzeit ändern.",
+            "en": "The app speaks five languages: English, Turkish, Italian, French and German. It follows your system's language on first launch, and the choice can be changed at any time.",
+            "fr": "L'application parle cinq langues : anglais, turc, italien, français et allemand. Au premier lancement elle suit la langue de votre système, et ce choix peut être modifié à tout moment.",
+            "it": "L'app parla cinque lingue: inglese, turco, italiano, francese e tedesco. Al primo avvio segue la lingua del sistema e la scelta si può cambiare in qualsiasi momento.",
+            "tr": "Uygulama beş dil konuşuyor: İngilizce, Türkçe, İtalyanca, Fransızca ve Almanca. İlk açılışta sisteminizin dilini izliyor, ve bu seçim istendiği zaman değiştirilebiliyor."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Ein Panel mit der laufenden Version und dem Build sowie den Neuerungen der letzten Versionen. Es funktioniert offline: Das Changelog steckt in der App selbst.",
+            "en": "A panel showing which version and which build you are running, plus what changed in recent releases. It works offline: the changelog is compiled into the app itself.",
+            "fr": "Un panneau indiquant la version et la build en cours d'exécution, ainsi que les nouveautés des dernières versions. Il fonctionne hors ligne : le journal des modifications est intégré à l'application.",
+            "it": "Un pannello con la versione e la build in esecuzione e le novità delle ultime versioni. Funziona anche offline: il changelog è compilato dentro l'app stessa.",
+            "tr": "Hangi sürümü ve hangi derlemeyi çalıştırdığınızı, ve son sürümlerde ne değiştiğini gösteren bir pencere. Çevrimdışı çalışıyor: changelog uygulamanın içine derleniyor."
+          }
+        },
+        {
           "kind": "performance",
           "text": {
             "de": "Das Öffnen eines großen Scans braucht weniger Speicher, dank der kompakteren Baumdarstellung im Scan-Kern.",
