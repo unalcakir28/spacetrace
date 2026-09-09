@@ -187,6 +187,51 @@ sürüm kesmek `Cargo.toml` / `package.json` / `tauri.conf.json` değiştirmeyi
 gerektiriyor ve bunların hiçbiri yoksayılmıyor. Yine de olursa çıkış yolu
 `workflow_dispatch` + `publish: true`.
 
+## Kod imzalama — durum ve çıkış planı
+
+**Hiçbir şey imzalı değil.** macOS'ta bundle yalnızca linker'ın arm64 için
+zorunlu attığı ad-hoc imzayı taşıyor (`codesign` → `Signature=adhoc`,
+`TeamIdentifier=not set`, `spctl` → `rejected, no usable signature`); Windows
+kurulumu tamamen imzasız.
+
+Bunun bedeli 10 Eylül 2026'da ölçüldü: macOS 26.5.2'de indirilen `.dmg`
+açılmıyor, ve **Apple'ın "sağ tık → Aç" kısayolunu macOS 15'te kaldırmış
+olması** yüzünden sitede yıllardır yazan talimat geçersizdi. Geriye Sistem
+Ayarları → Gizlilik ve Güvenlik → Yine de Aç kalıyor, ve o düğmenin ad-hoc
+imzalı bir uygulamada göründüğü **doğrulanmadı**.
+
+Geçici çözüm olarak `install-desktop.sh` ve `install-desktop.ps1` eklendi.
+Bunlar Gatekeeper'ı kandırmıyor: ilk açılış kontrolünü tetikleyen
+`com.apple.quarantine` özniteliğini (Windows'ta Mark-of-the-Web) **tarayıcı**
+yazıyor, curl ve `Invoke-WebRequest` yazmıyor. Ölçüldü — curl ile inen dmg'de
+hiç genişletilmiş öznitelik yok, içinden çıkan uygulama tek diyalog görmeden
+açılıyor. Karşılığında imzanın verdiği *kimlik* garantisi yerine yalnızca
+SHA256SUMS'ın verdiği *bütünlük* garantisi kalıyor; betikler bunu açıkça yazıyor.
+
+Homebrew bu boşluğu dolduramaz: `--no-quarantine` Homebrew 4.7'de kaldırıldı ve
+Gatekeeper'dan geçemeyen cask'lar **1 Eylül 2026'da** kendi tap'inizde bile
+desteklenmez oldu.
+
+Maliyet, karar verilirse:
+
+| | Ücret | Sonuç |
+|---|---|---|
+| Apple Developer Program | $99/yıl | Notarize edilmiş `.dmg`, macOS uyarısı tamamen kalkar |
+| Windows OV sertifikası | ~$220–400/yıl | SmartScreen anında temizlenmez, itibar birikir |
+| Windows EV sertifikası | ~$500–660/yıl | SmartScreen ilk günden temiz |
+
+Azure Artifact Signing ($9.99/ay) **Türkiye'ye kapalı** — ABD, Kanada, AB ve
+İngiltere ile sınırlı, yani Windows için ucuz yol yok.
+
+**İmzalama geldiğinde yapılacaklar** (bu bölümün varlık sebebi bu liste):
+
+1. `install-desktop.sh` ve `install-desktop.ps1` **silinir** — bakımı yapılacak
+   dosyalar değil, bir eksiğin yaması.
+2. Site deposunda `installAltTitle` / `installAltBody` / `installAltNote`
+   anahtarları ve `Download.astro`'daki alternatif kutusu kaldırılır.
+3. `installMacBody` "çift tıkla, açılır" hâline döner.
+4. Masaüstü `release.yml`'deki "Not code-signed" sürüm notu paragrafı silinir.
+
 ## Site
 
 Site artık bu depoda değil:

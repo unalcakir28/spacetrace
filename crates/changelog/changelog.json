@@ -272,7 +272,28 @@
       ]
     },
     "desktop": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Die Installationsanleitung für macOS beschrieb den Rechtsklick-Öffnen-Trick, den Apple in macOS 15 entfernt hat. Sie nennt jetzt den Weg über Systemeinstellungen → Datenschutz & Sicherheit → Dennoch öffnen.",
+            "en": "The macOS install instructions described the right-click Open trick, which Apple removed in macOS 15. They now give the System Settings → Privacy & Security → Open Anyway route instead.",
+            "fr": "Les instructions d'installation pour macOS décrivaient l'astuce du clic droit puis Ouvrir, retirée par Apple dans macOS 15. Elles indiquent désormais le chemin Réglages Système → Confidentialité et sécurité → Ouvrir quand même.",
+            "it": "Le istruzioni di installazione per macOS descrivevano il trucco del clic destro e Apri, rimosso da Apple in macOS 15. Ora indicano il percorso Impostazioni di Sistema → Privacy e sicurezza → Apri comunque.",
+            "tr": "macOS kurulum talimatı, Apple'ın macOS 15'te kaldırdığı sağ tık → Aç yöntemini anlatıyordu. Artık Sistem Ayarları → Gizlilik ve Güvenlik → Yine de Aç yolunu gösteriyor."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Vorübergehende Installationsskripte für macOS und Windows, die das Paket per curl bzw. Invoke-WebRequest holen, gegen SHA256SUMS prüfen und installieren. Weil ein so geholter Download die Markierungen eines Browsers nicht trägt, melden sich Gatekeeper und SmartScreen gar nicht erst. Sie verschwinden wieder, sobald die App signiert ist.",
+            "en": "Temporary install scripts for macOS and Windows that fetch the bundle with curl or Invoke-WebRequest, verify it against SHA256SUMS and install it. A download made that way carries none of the marks a browser writes, so Gatekeeper and SmartScreen never fire. They go away once the app is signed.",
+            "fr": "Scripts d'installation temporaires pour macOS et Windows qui récupèrent le paquet avec curl ou Invoke-WebRequest, le vérifient contre SHA256SUMS et l'installent. Un téléchargement fait ainsi ne porte aucune des marques qu'écrit un navigateur, donc Gatekeeper et SmartScreen ne se déclenchent pas. Ils disparaîtront une fois l'application signée.",
+            "it": "Script di installazione temporanei per macOS e Windows che scaricano il pacchetto con curl o Invoke-WebRequest, lo verificano con SHA256SUMS e lo installano. Un download fatto così non porta i contrassegni scritti da un browser, quindi Gatekeeper e SmartScreen non scattano. Spariranno quando l'app sarà firmata.",
+            "tr": "macOS ve Windows için geçici kurulum betikleri: paketi curl ya da Invoke-WebRequest ile indirir, SHA256SUMS ile doğrular ve kurar. Bu şekilde inen bir dosya tarayıcının yazdığı işaretleri taşımadığı için Gatekeeper ve SmartScreen hiç devreye girmiyor. Uygulama imzalandığında kaldırılacaklar."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.3.1",
