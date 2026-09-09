@@ -53,6 +53,14 @@ jobs:
 
       - run: yarn build
 
+      # Runs the language redirector out of `dist/` in a stub browser and
+      # checks where it sends each kind of reader. This exists because the
+      # feature once shipped inert: an Astro templating mistake emitted a
+      # script that parsed, contained `window.location.replace`, and did
+      # nothing at all. The build was green and the HTML looked right, so only
+      # executing the built script catches it.
+      - run: yarn verify
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3

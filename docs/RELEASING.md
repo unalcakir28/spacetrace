@@ -208,5 +208,23 @@ bayrağıyla tek seferlik — okunduğu anda siliniyor.
 `404` sayfasında algılama kapalı (`detectLanguage={false}`): yolu çevrilmiş
 rotalardan biri değil.
 
-Karar tablosu 13 vakayla doğrulandı (tarayıcı dil listesi × kayıtlı seçim);
-davranışı değiştirirken o tabloyu birlikte güncelle.
+#### Doğrulama zorunlu, ve derlenmiş çıktıya karşı
+
+`yarn verify` (`website/scripts/verify-lang.mjs`) yönlendiriciyi **`dist/`'ten
+çıkarıp sahte bir tarayıcıda çalıştırıyor** ve 20 vakada okuyucunun nereye
+gittiğini ölçüyor. Pages iş akışında `yarn build`'den sonra çalışıyor.
+
+Bu adım bir sebeple var: özellik bir kez **etkisiz halde canlıya çıktı**.
+Astro'da satır içi script gövdesini JSX çocuğu olarak `` {`…`} `` ile sarmak,
+sarmalayıcıyı olduğu gibi HTML'e basıyor; ortaya çıkan kod bir blok içinde
+değerlendirilip atılan bir string oluyor. Sonuç: derleme yeşil, script sayfada,
+içinde `window.location.replace` **geçiyor**, ve hiçbir şey yapmıyor. Yani
+"script var mı" ya da "içinde şu ifade var mı" diye bakan bir test bunu
+onaylardı — tek dişli kontrol script'i çalıştırmak.
+
+İkinci tuzak: `define:vars` ile `set:html` birlikte kullanılamıyor, `define:vars`
+kazanıyor ve gövde tamamen kayboluyor. Bu yüzden tek mekanizma var — değerler
+dahil tüm script frontmatter'da string olarak kuruluyor ve `set:html` ile
+veriliyor.
+
+Davranışı değiştirirken `verify-lang.mjs`'deki vakaları birlikte güncelle.
