@@ -116,7 +116,7 @@ fn children_are_contiguous_and_sorted_by_size_on_demand() {
         sizes.windows(2).all(|w| w[0] >= w[1]),
         "descending: {sizes:?}"
     );
-    assert_eq!(tree.node(by_size[0]).name, "node_modules");
+    assert_eq!(tree.name(by_size[0]), "node_modules");
 }
 
 #[test]
@@ -125,8 +125,8 @@ fn largest_files_are_ranked() {
     let (tree, _) = run(dir.path(), ScanOptions::default());
 
     let top = tree.largest(2, Some(EntryKind::File));
-    assert_eq!(tree.node(top[0]).name, "junk");
-    assert_eq!(tree.node(top[1]).name, "b.bin");
+    assert_eq!(tree.name(top[0]), "junk");
+    assert_eq!(tree.name(top[1]), "b.bin");
 }
 
 #[test]
@@ -356,12 +356,12 @@ mod removal {
         let (mut tree, _) = run(dir.path(), ScanOptions::default());
 
         let keep = tree.find("a.txt").unwrap();
-        let keep_name = tree.node(keep).name.clone();
+        let keep_name = tree.name(keep).to_string();
         let keep_size = tree.node(keep).size;
 
         tree.remove_subtree(tree.find("sub").unwrap()).unwrap();
 
-        assert_eq!(tree.node(keep).name, keep_name);
+        assert_eq!(tree.name(keep), keep_name);
         assert_eq!(tree.node(keep).size, keep_size);
         assert_eq!(tree.rel_path(keep), "a.txt");
     }
@@ -406,9 +406,28 @@ mod removal {
         let (mut tree, _) = run(dir.path(), ScanOptions::default());
         tree.remove_subtree(tree.find("sub").unwrap()).unwrap();
 
-        let nodes = tree.nodes().to_vec();
-        let path = tree.root_path().to_path_buf();
-        spacetrace_scan_core::Tree::from_parts_checked(nodes, path)
+        // Round-trip it the way a snapshot would be: rebuilding through the
+        // assembler runs exactly the checks a loaded tree gets.
+        let mut asm = spacetrace_scan_core::TreeAssembler::with_capacity(tree.len());
+        for id in tree.iter() {
+            let n = tree.node(id);
+            asm.push(spacetrace_scan_core::StoredNode {
+                parent: n.parent,
+                name: tree.name(id),
+                kind: n.kind,
+                size: n.size,
+                alloc: n.alloc,
+                own_size: n.own_size,
+                own_alloc: n.own_alloc,
+                mtime: n.mtime,
+                nlink: n.nlink,
+                files: n.files,
+                dirs: n.dirs,
+                children_start: n.children_start,
+                children_len: n.children_len,
+            });
+        }
+        asm.finish(tree.root_path().to_path_buf())
             .expect("the edited arena is still well formed");
     }
 }
@@ -419,45 +438,62 @@ mod removal {
 /// be checked rather than assumed. Each case here would otherwise panic on an
 /// out-of-range index or loop forever.
 mod untrusted {
-    use spacetrace_scan_core::{EntryKind, Node, Tree, TreeError};
+    use spacetrace_scan_core::{EntryKind, StoredNode, Tree, TreeAssembler, TreeError};
     use std::path::PathBuf;
 
-    fn node(parent: u32, children_start: u32, children_len: u32) -> Node {
-        Node {
+    struct Row {
+        parent: u32,
+        children_start: u32,
+        children_len: u32,
+    }
+
+    fn node(parent: u32, children_start: u32, children_len: u32) -> Row {
+        Row {
             parent,
-            name: "n".into(),
-            kind: EntryKind::Dir,
-            size: 0,
-            alloc: 0,
-            own_size: 0,
-            own_alloc: 0,
-            mtime: 0,
-            nlink: 1,
-            files: 0,
-            dirs: 0,
             children_start,
             children_len,
         }
     }
 
-    fn root(children_start: u32, children_len: u32) -> Node {
+    fn root(children_start: u32, children_len: u32) -> Row {
         node(Tree::NO_PARENT, children_start, children_len)
+    }
+
+    /// Push the rows through the assembler, which is the only way a loaded
+    /// snapshot becomes a tree and therefore the only place worth testing.
+    fn build(rows: Vec<Row>) -> Result<Tree, TreeError> {
+        let mut asm = TreeAssembler::with_capacity(rows.len());
+        for r in rows {
+            asm.push(StoredNode {
+                parent: r.parent,
+                name: "n",
+                kind: EntryKind::Dir,
+                size: 0,
+                alloc: 0,
+                own_size: 0,
+                own_alloc: 0,
+                mtime: 0,
+                nlink: 1,
+                files: 0,
+                dirs: 0,
+                children_start: r.children_start,
+                children_len: r.children_len,
+            });
+        }
+        asm.finish(PathBuf::from("/x"))
     }
 
     #[test]
     fn a_well_formed_arena_is_accepted() {
         let nodes = vec![root(1, 2), node(0, 0, 0), node(0, 0, 0)];
-        let tree = Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap();
+        let tree = build(nodes).unwrap();
         assert_eq!(tree.len(), 3);
         assert_eq!(tree.children(tree.root()).count(), 2);
     }
 
     #[test]
     fn an_empty_arena_is_rejected() {
-        assert_eq!(
-            Tree::from_parts_checked(vec![], PathBuf::from("/x")).unwrap_err(),
-            TreeError::Empty
-        );
+        assert_eq!(build(vec![]).unwrap_err(), TreeError::Empty);
     }
 
     #[test]
@@ -465,7 +501,7 @@ mod untrusted {
         // Would index out of bounds on the first traversal.
         let nodes = vec![root(1, 9), node(0, 0, 0)];
         assert!(matches!(
-            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
+            build(nodes).unwrap_err(),
             TreeError::ChildrenOutOfBounds { .. }
         ));
     }
@@ -475,7 +511,7 @@ mod untrusted {
         // Would make a cycle: node 1's children include node 1.
         let nodes = vec![root(1, 1), node(0, 1, 1)];
         assert!(matches!(
-            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
+            build(nodes).unwrap_err(),
             TreeError::ChildrenNotAfterParent { .. }
         ));
     }
@@ -484,7 +520,7 @@ mod untrusted {
     fn a_node_pointing_at_itself_as_a_child_is_rejected() {
         let nodes = vec![root(0, 1)];
         assert!(matches!(
-            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
+            build(nodes).unwrap_err(),
             TreeError::ChildrenNotAfterParent { .. }
         ));
     }
@@ -494,7 +530,7 @@ mod untrusted {
         // rel_path walks parent pointers upward; this would never terminate.
         let nodes = vec![root(1, 1), node(2, 0, 0), node(1, 0, 0)];
         assert!(matches!(
-            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
+            build(nodes).unwrap_err(),
             TreeError::ParentNotBeforeChild { .. }
         ));
     }
@@ -502,10 +538,7 @@ mod untrusted {
     #[test]
     fn a_root_claiming_a_parent_is_rejected() {
         let nodes = vec![node(0, 0, 0)];
-        assert_eq!(
-            Tree::from_parts_checked(nodes, PathBuf::from("/x")).unwrap_err(),
-            TreeError::RootHasParent
-        );
+        assert_eq!(build(nodes).unwrap_err(), TreeError::RootHasParent);
     }
 
     #[test]
@@ -513,7 +546,7 @@ mod untrusted {
         // children_len == 0 means children_start is meaningless, and the
         // scanner does leave it at 0 — this must not be mistaken for a cycle.
         let nodes = vec![root(1, 1), node(0, 0, 0)];
-        assert!(Tree::from_parts_checked(nodes, PathBuf::from("/x")).is_ok());
+        assert!(build(nodes).is_ok());
     }
 }
 
@@ -567,7 +600,7 @@ mod basis {
         )
         .unwrap();
 
-        let name_of = |id| tree.node(id).name.clone();
+        let name_of = |id| tree.name(id).to_string();
 
         let logical = tree.children_by(tree.root(), SizeBasis::Logical);
         assert_eq!(

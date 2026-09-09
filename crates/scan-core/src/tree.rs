@@ -32,10 +32,20 @@ pub enum SizeBasis {
 
 /// One entry in the arena. Children of a node occupy the contiguous index
 /// range `children_start .. children_start + children_len`.
+///
+/// The name is **not** here. It lives in the tree's shared name arena, and a
+/// node only points into it — see [`Tree::name`]. A `String` per node cost 24
+/// bytes inline plus its own heap allocation, and on a real disk the names come
+/// to 8.6 MB of text held in 13.2 MB of allocations, one `malloc` header at a
+/// time. The counters are sized to what a filesystem can actually hold rather
+/// than to `u64` out of habit; together the two changes took this struct from
+/// 104 bytes to 72.
 #[derive(Debug, Clone)]
 pub struct Node {
     pub parent: NodeId,
-    pub name: String,
+    /// Byte range of this node's name inside the tree's name arena.
+    name_off: u32,
+    name_len: u16,
     pub kind: EntryKind,
     /// Logical size of this node's whole subtree (own size for files).
     pub size: u64,
@@ -45,11 +55,11 @@ pub struct Node {
     pub own_size: u64,
     pub own_alloc: u64,
     pub mtime: i64,
-    pub nlink: u64,
+    pub nlink: u32,
     /// Number of files in this subtree (a file counts itself).
-    pub files: u64,
+    pub files: u32,
     /// Number of directories in this subtree, excluding itself.
-    pub dirs: u64,
+    pub dirs: u32,
     pub children_start: NodeId,
     pub children_len: u32,
 }
@@ -76,36 +86,53 @@ impl Node {
 #[derive(Debug, Clone)]
 pub struct Tree {
     nodes: Vec<Node>,
+    /// Every node's name, concatenated. Nodes hold offsets into this.
+    names: String,
     /// Absolute path the scan started from.
     root_path: PathBuf,
 }
 
 impl Tree {
-    pub(crate) fn new(nodes: Vec<Node>, root_path: PathBuf) -> Self {
+    pub(crate) fn new(nodes: Vec<Node>, names: String, root_path: PathBuf) -> Self {
         debug_assert!(!nodes.is_empty(), "a tree always has at least a root");
-        Tree { nodes, root_path }
+        Tree {
+            nodes,
+            names,
+            root_path,
+        }
     }
 
-    /// Rebuild a tree from stored nodes, e.g. after loading a snapshot.
-    /// The caller must preserve the BFS layout: a node's children occupy
-    /// `children_start .. children_start + children_len`, and every child has a
-    /// higher index than its parent. Totals are taken as already aggregated.
+    /// This node's name.
     ///
-    /// Only use this for nodes you produced yourself. Anything that came off a
-    /// disk or a network must go through [`Tree::from_parts_checked`] first.
-    pub fn from_parts(nodes: Vec<Node>, root_path: PathBuf) -> Self {
-        Tree::new(nodes, root_path)
+    /// Offsets cannot be wrong: the only two places that write them —
+    /// `TreeBuilder` and [`TreeAssembler`] — take a `&str` and intern it here,
+    /// so a caller never gets to invent a range. The empty-string fallback is
+    /// therefore unreachable, and exists only so that a lookup can never panic:
+    /// on a disk tool, a nameless row beats a crash.
+    pub fn name(&self, id: NodeId) -> &str {
+        let n = self.node(id);
+        let start = n.name_off as usize;
+        self.names
+            .get(start..start + n.name_len as usize)
+            .unwrap_or_default()
     }
 
-    /// Rebuild a tree from nodes that are not trusted, verifying the arena
-    /// invariants before anything walks them.
+    /// The backing name arena, for a writer that stores the tree as-is.
+    pub fn names(&self) -> &str {
+        &self.names
+    }
+
+    /// Verify the arena invariants on a tree that is not trusted.
     ///
     /// A snapshot can arrive from another machine (`spacetrace --remote`, or an
     /// agent receiving a push), and the layout is not self-describing: a bad
     /// `children_start` indexes out of bounds, and a child pointing backwards
     /// turns every traversal into an infinite loop. Both are cheap to rule out
     /// in one linear pass, and doing it here means every consumer is covered.
-    pub fn from_parts_checked(nodes: Vec<Node>, root_path: PathBuf) -> Result<Self, TreeError> {
+    ///
+    /// Reached through [`TreeAssembler::finish`], which is the only way to build
+    /// a tree from stored rows.
+    fn check(nodes: &[Node]) -> Result<(), TreeError> {
         let len = nodes.len();
         if len == 0 {
             return Err(TreeError::Empty);
@@ -149,7 +176,7 @@ impl Tree {
             }
         }
 
-        Ok(Tree::new(nodes, root_path))
+        Ok(())
     }
 
     /// The sentinel stored in `Node::parent` for the root.
@@ -200,9 +227,8 @@ impl Tree {
         let mut parts: Vec<&str> = Vec::new();
         let mut cur = id;
         while cur != ROOT {
-            let n = self.node(cur);
-            parts.push(&n.name);
-            cur = n.parent;
+            parts.push(self.name(cur));
+            cur = self.node(cur).parent;
         }
         let mut p = self.root_path.clone();
         for part in parts.iter().rev() {
@@ -217,9 +243,8 @@ impl Tree {
         let mut parts: Vec<&str> = Vec::new();
         let mut cur = id;
         while cur != ROOT {
-            let n = self.node(cur);
-            parts.push(&n.name);
-            cur = n.parent;
+            parts.push(self.name(cur));
+            cur = self.node(cur).parent;
         }
         parts.reverse();
         parts.join("/")
@@ -292,7 +317,7 @@ impl Tree {
             files: entry.files,
             // `dirs` excludes the node itself, so a removed directory takes one
             // more away from its ancestors than it counted for itself.
-            dirs: entry.dirs + u64::from(entry.is_dir()),
+            dirs: entry.dirs + u32::from(entry.is_dir()),
             nodes,
         };
 
@@ -329,7 +354,7 @@ impl Tree {
     pub fn find(&self, rel: &str) -> Option<NodeId> {
         let mut cur = ROOT;
         for part in rel.split('/').filter(|s| !s.is_empty() && *s != ".") {
-            cur = self.children(cur).find(|&c| self.node(c).name == part)?;
+            cur = self.children(cur).find(|&c| self.name(c) == part)?;
         }
         Some(cur)
     }
@@ -337,32 +362,39 @@ impl Tree {
 
 /// One entry as handed to the builder. Its `size`/`alloc` are the entry's own
 /// cost; subtree totals are computed later by [`TreeBuilder::aggregate`].
-pub(crate) struct NewNode {
-    pub(crate) name: String,
+pub(crate) struct NewNode<'a> {
+    pub(crate) name: &'a str,
     pub(crate) kind: EntryKind,
     pub(crate) size: u64,
     pub(crate) alloc: u64,
     pub(crate) mtime: i64,
-    pub(crate) nlink: u64,
+    pub(crate) nlink: u32,
 }
 
 /// Builder used by the scanner to flatten its recursive result into the arena.
 pub(crate) struct TreeBuilder {
     pub(crate) nodes: Vec<Node>,
+    names: String,
 }
 
 impl TreeBuilder {
     pub(crate) fn with_capacity(cap: usize) -> Self {
         TreeBuilder {
             nodes: Vec::with_capacity(cap),
+            // Roughly the average name length measured on a real disk (20.9
+            // bytes). Only an opening guess — being wrong costs a few
+            // reallocations, being absent costs one per doubling from zero.
+            names: String::with_capacity(cap * 24),
         }
     }
 
-    pub(crate) fn push(&mut self, parent: NodeId, entry: NewNode) -> NodeId {
+    pub(crate) fn push(&mut self, parent: NodeId, entry: NewNode<'_>) -> NodeId {
         let id = self.nodes.len() as NodeId;
+        let (name_off, name_len) = intern(&mut self.names, entry.name);
         self.nodes.push(Node {
             parent,
-            name: entry.name,
+            name_off,
+            name_len,
             kind: entry.kind,
             size: entry.size,
             alloc: entry.alloc,
@@ -370,7 +402,7 @@ impl TreeBuilder {
             own_alloc: entry.alloc,
             mtime: entry.mtime,
             nlink: entry.nlink,
-            files: u64::from(entry.kind != EntryKind::Dir),
+            files: u32::from(entry.kind != EntryKind::Dir),
             dirs: 0,
             children_start: 0,
             children_len: 0,
@@ -378,7 +410,7 @@ impl TreeBuilder {
         id
     }
 
-    pub(crate) fn push_root(&mut self, entry: NewNode) -> NodeId {
+    pub(crate) fn push_root(&mut self, entry: NewNode<'_>) -> NodeId {
         self.push(NO_PARENT, entry)
     }
 
@@ -395,13 +427,111 @@ impl TreeBuilder {
             p.size += size;
             p.alloc += alloc;
             p.files += files;
-            p.dirs += dirs + u64::from(is_dir);
+            p.dirs += dirs + u32::from(is_dir);
         }
     }
 
     pub(crate) fn finish(mut self, root_path: PathBuf) -> Tree {
         self.aggregate();
-        Tree::new(self.nodes, root_path)
+        Tree::new(self.nodes, self.names, root_path)
+    }
+}
+
+/// Append `name` to `arena` and return the range that addresses it.
+///
+/// A name longer than `u16::MAX` cannot be pointed at, and is truncated on a
+/// character boundary rather than rejected: no filesystem produces one (255
+/// bytes is the usual ceiling and `PATH_MAX` is 4096, so only the root's
+/// display name comes anywhere near), and losing a scan over an unnameable
+/// entry would be a worse answer than a shortened label.
+fn intern(arena: &mut String, name: &str) -> (u32, u16) {
+    let mut name = name;
+    if name.len() > u16::MAX as usize {
+        let mut end = u16::MAX as usize;
+        while end > 0 && !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        name = &name[..end];
+    }
+    let off = arena.len() as u32;
+    arena.push_str(name);
+    (off, name.len() as u16)
+}
+
+/// One stored row on its way back into a tree.
+///
+/// Separate from [`Node`] because a node addresses its name by offset, and an
+/// offset is only meaningful next to the arena it points into. Handing the
+/// caller a `&str` and interning it here means a wrong offset cannot be
+/// constructed at all.
+pub struct StoredNode<'a> {
+    pub parent: NodeId,
+    pub name: &'a str,
+    pub kind: EntryKind,
+    pub size: u64,
+    pub alloc: u64,
+    pub own_size: u64,
+    pub own_alloc: u64,
+    pub mtime: i64,
+    pub nlink: u32,
+    pub files: u32,
+    pub dirs: u32,
+    pub children_start: NodeId,
+    pub children_len: u32,
+}
+
+/// Rebuilds a tree from stored rows — a snapshot on disk, or one pulled from
+/// another machine.
+///
+/// Totals are taken as already aggregated: a snapshot stores what the scan
+/// computed, and recomputing it would hide a corrupt file rather than reveal
+/// it. Structure is not taken on trust, though; [`TreeAssembler::finish`] is
+/// the boundary every loaded tree passes through.
+pub struct TreeAssembler {
+    nodes: Vec<Node>,
+    names: String,
+}
+
+impl TreeAssembler {
+    pub fn with_capacity(nodes: usize) -> Self {
+        TreeAssembler {
+            nodes: Vec::with_capacity(nodes),
+            names: String::with_capacity(nodes * 24),
+        }
+    }
+
+    pub fn push(&mut self, row: StoredNode<'_>) {
+        let (name_off, name_len) = intern(&mut self.names, row.name);
+        self.nodes.push(Node {
+            parent: row.parent,
+            name_off,
+            name_len,
+            kind: row.kind,
+            size: row.size,
+            alloc: row.alloc,
+            own_size: row.own_size,
+            own_alloc: row.own_alloc,
+            mtime: row.mtime,
+            nlink: row.nlink,
+            files: row.files,
+            dirs: row.dirs,
+            children_start: row.children_start,
+            children_len: row.children_len,
+        });
+    }
+
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// Check the arena invariants and hand back the tree.
+    pub fn finish(self, root_path: PathBuf) -> Result<Tree, TreeError> {
+        Tree::check(&self.nodes)?;
+        Ok(Tree::new(self.nodes, self.names, root_path))
     }
 }
 
@@ -410,9 +540,9 @@ impl TreeBuilder {
 pub struct Removed {
     pub size: u64,
     pub alloc: u64,
-    pub files: u64,
+    pub files: u32,
     /// Directories that went with it, counting the entry itself when it was one.
-    pub dirs: u64,
+    pub dirs: u32,
     /// Every id that is now gone, the entry itself first.
     pub nodes: Vec<NodeId>,
 }

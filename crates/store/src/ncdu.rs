@@ -45,7 +45,7 @@ fn write_node(tree: &Tree, id: NodeId, out: &mut impl Write) -> io::Result<()> {
         (node.size, node.alloc)
     };
 
-    write!(out, "{{\"name\":{}", json_str(&node.name))?;
+    write!(out, "{{\"name\":{}", json_str(tree.name(id)))?;
     if asize > 0 {
         write!(out, ",\"asize\":{asize}")?;
     }

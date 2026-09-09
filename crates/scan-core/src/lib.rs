@@ -13,4 +13,4 @@ mod tree;
 pub use capacity::{capacity_of, Capacity};
 pub use meta::{EntryKind, FileIdentity, RawMeta};
 pub use scan::{scan, ScanOptions, ScanProgress, ScanStats};
-pub use tree::{Node, NodeId, Removed, SizeBasis, Tree, TreeError};
+pub use tree::{Node, NodeId, Removed, SizeBasis, StoredNode, Tree, TreeAssembler, TreeError};

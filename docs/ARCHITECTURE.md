@@ -55,8 +55,23 @@ with nodes laid out in **BFS order**. This has three consequences:
    recursion.
 3. Treemap layout and rendering scan the array in order — cache-friendly.
 
-Reference point: ncdu 2 holds 3.8M files in 162 MB, about ~25 bytes per
-file; that's the order of magnitude we're targeting.
+Names are not stored per node. They are concatenated into one buffer on the
+tree, and a node holds a `(u32, u16)` range into it — a `String` per node cost
+24 bytes inline plus a heap allocation each, and on a real disk that is 8.6 MB
+of text living in 13.2 MB of allocations. Together with counters sized to what
+a filesystem can hold (`u32` link and entry counts rather than `u64`), `Node`
+is **72 bytes**.
+
+Because a node addresses its name by offset, `Node` cannot be constructed from
+outside: [`TreeAssembler`] takes a `&str` per row and interns it, so a wrong
+offset is not something a caller can produce.
+
+Reference points: ncdu 2 holds 3.8M files in 162 MB (~25 B/file), and dua-cli
+uses a 64-byte arena node. ncdu's figure is not a fair target for us — it does
+not keep `own_size`, `own_alloc`, `files` and `dirs` per node — so **dua-cli's
+64 bytes is the number to aim at**. Measured peak is 231 B/entry all in, and
+the remaining gap is not the arena: the walk's intermediate tree and the arena
+are alive at the same time (see TODO B1).
 
 ## Scan
 

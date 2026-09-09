@@ -143,7 +143,8 @@ Karşılaştırma noktaları:
 | ncdu 2.0 | dosya **25 B**, dizin **56 B** | `[satıcı]` doğrulandı |
 | ncdu 1.16 | dosya 78 B, dizin 78 B | `[satıcı]` |
 | dua-cli 2.44.0 | **64 B** arena düğümü | `[satıcı]` |
-| **spacetrace** | **~276–437 B** | `[ölçüm]` |
+| **spacetrace** (9 Eyl, önce) | ~276–437 B | `[ölçüm]` |
+| **spacetrace** (9 Eyl, sonra) | **231 B** (`Node` 72 B) | `[ölçüm]` |
 
 `dua-cli` 2.44.0 çözümü açıkça yazmış: **64 baytlık arena düğümü + paylaşılan
 dosya adı deposu + yoğun dizin id'leri**, tepe RSS %49 aşağı (525 MB → 268 MB).

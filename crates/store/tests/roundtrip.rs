@@ -43,7 +43,7 @@ fn a_saved_tree_loads_back_identically() {
 
     for id in tree.iter() {
         let (a, b) = (tree.node(id), loaded.node(id));
-        assert_eq!(a.name, b.name, "node {id}");
+        assert_eq!(tree.name(id), loaded.name(id), "node {id}");
         assert_eq!(a.size, b.size);
         assert_eq!(a.alloc, b.alloc);
         assert_eq!(a.kind, b.kind);
@@ -192,7 +192,7 @@ fn an_exported_snapshot_is_a_standalone_database() {
     assert_eq!(loaded.total_size(), tree.total_size());
     assert_eq!(loaded.total_alloc(), tree.total_alloc());
     for node in tree.iter() {
-        assert_eq!(tree.node(node).name, loaded.node(node).name);
+        assert_eq!(tree.name(node), loaded.name(node));
         assert_eq!(tree.node(node).size, loaded.node(node).size);
     }
 }
@@ -366,7 +366,7 @@ fn an_imported_snapshot_keeps_its_identity_and_gets_a_local_id() {
     assert_eq!(loaded.len(), tree.len());
     assert_eq!(loaded.total_size(), tree.total_size());
     for node in tree.iter() {
-        assert_eq!(tree.node(node).name, loaded.node(node).name);
+        assert_eq!(tree.name(node), loaded.name(node));
         assert_eq!(tree.rel_path(node), loaded.rel_path(node));
     }
     assert_eq!(receiver.list().unwrap().len(), 2);

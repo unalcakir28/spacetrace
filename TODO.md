@@ -224,6 +224,12 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       | parçalanma, malloc başlıkları, geçici `PathBuf`'lar | ~19 | ~46 |
       | arena (`Node` 104 B) | 42,9 | 104 |
 
+      **Sonuç (aynı gün):** 298 → **231 B/girdi** (117 → 91 MB), yani **%22,5**.
+      Hız gerilemedi — dönüşümlü A/B ölçümünde 8 thread'te en iyi 0.976s →
+      0.894s, yani hafifçe **hızlandı** (girdi başına bir malloc eksildi).
+      Not: ardışık ölçüm önce %12 gerileme göstermişti; makine ısınmasından
+      kaynaklanan sürüklenmeydi, dönüşümlü koşturma bunu eledi.
+
       **Kritik gözlem:** yürüyüş bittiğinde 77 MB, flatten bittiğinde 119 MB.
       Yani `RawEntry` ağacı ile arena **aynı anda yaşıyor** ve `RawEntry`
       serbest bırakılsa da işletim sistemine geri verilmiyor. 290 B/girdinin
@@ -234,17 +240,24 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
             ikiye katlanarak 524.288'e çıkıyordu. Ölçülen kazanç 298 → 290 B
             (%3) — tahmin ettiğimden çok azdı, çünkü tepe flatten'da değil
             yürüyüşte oluşuyor.
-      - [ ] **Paylaşılan ad arenası.** Adları tek `Vec<u8>`'de tut, düğümde
-            `(offset: u32, len: u8)`. Gerçek ad baytı toplamı yalnızca
-            **8,6 MB** (ortalama 20,9 B, en uzun 81) ama `String` olarak
-            ~13,2 MB + düğüm başına 24 B gövde + malloc başlığı tutuyor.
-            **`Node.name` alanı kalkar → masaüstü deposunda 5 çağrı yeri
-            derleme hatası verir** (sessiz kırılma değil).
-      - [ ] **Alan daraltma:** `nlink`, `files`, `dirs` `u64` → `u32`,
-            `mtime` `i64` → `u32`. `Node` 104 → **72 B**.
-      - [ ] **Çift depolamayı kaldır** — asıl kazanç burada (192 B/girdi) ve en
-            zor iş. Yürüyüş DFS üretiyor, arena BFS istiyor (değişmez #2), o
-            yüzden bir ara yapı kaçınılmaz görünüyor.
+      - [x] **Paylaşılan ad arenası.** Adlar `Tree` içinde tek bir `String`'de;
+            düğüm `(offset: u32, len: u16)` tutuyor. `u8` değil `u16`, çünkü
+            kökün adı tam yol ve 255 baytı aşabiliyor.
+            `Node.name` alanı kalktı, yerine `Tree::name(id)`; düğüm kurmanın
+            tek yolu artık `TreeAssembler` + `StoredNode`, yani **hatalı bir
+            offset yapı gereği kurulamıyor**. Şema değişmedi (SQLite hâlâ
+            satır başına TEXT saklıyor).
+      - [x] **Alan daraltma:** `nlink`, `files`, `dirs` `u64` → `u32`.
+            `Node` 104 → **72 B** (ölçüldü). `mtime` `i64` kaldı — 1970 öncesi
+            dosyalar gerçek ve negatif damga taşıyorlar.
+      - [x] **`RawEntry` 88 → 48 B.** Adlar dizin başına tek tamponda
+            (`Children { names, entries }`), çocuklar `Option<Box<Children>>`.
+            `to_string_lossy()` geçerli UTF-8'de ödünç döndürdüğü için girdi
+            başına `String` tahsisi tamamen kalktı: **412k → 35k tahsis.**
+      - [ ] **Çift depolamayı kaldır** — kalan asıl kazanç. Yürüyüş DFS
+            üretiyor, arena BFS istiyor (değişmez #2), o yüzden bir ara yapı
+            kaçınılmaz görünüyor. Seçenek B (seviye-senkron BFS) bunu kökten
+            çözer ama iş-çalan DFS'in ölçülmüş 5.2× kazancını riske atıyor.
 
       **Hedef düzeltmesi:** RESEARCH.md'deki **~25 B/dosya** hedefi bizim alan
       kümemizle **ulaşılabilir değil** ve karşılaştırma elmayla armut. ncdu 2

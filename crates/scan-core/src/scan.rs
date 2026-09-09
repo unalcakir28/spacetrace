@@ -121,15 +121,55 @@ impl Ctx {
     }
 }
 
+/// One directory's children: every name in a single buffer, and the entries
+/// that point into it.
+///
+/// A name per entry used to be a `String`, which is one heap allocation for
+/// each of the 412k entries on a real disk. Names arrive from
+/// `to_string_lossy`, which borrows when the name is already valid UTF-8 — so
+/// concatenating them per directory turns those allocations into one per
+/// directory instead, roughly a tenth as many.
+#[derive(Default)]
+struct Children {
+    names: String,
+    entries: Vec<RawEntry>,
+}
+
 /// One entry as returned by the recursive phase, before flattening.
 struct RawEntry {
-    name: String,
+    /// Range inside the owning [`Children::names`].
+    name_off: u32,
+    name_len: u16,
     kind: EntryKind,
     size: u64,
     alloc: u64,
     mtime: i64,
-    nlink: u64,
-    children: Option<Vec<RawEntry>>,
+    /// Narrower than the platform's `nlink` on purpose: the arena stores a
+    /// `u32`, and a link count that overflowed one would be a filesystem bug
+    /// rather than something to carry eight bytes for.
+    nlink: u32,
+    /// Boxed so a file — nine entries in ten — carries a pointer rather than a
+    /// `String` and a `Vec` inline. That alone took this struct from 88 bytes
+    /// to 48, and the whole walk holds one of these per entry.
+    children: Option<Box<Children>>,
+}
+
+/// Append `name` and return the range that addresses it, truncating on a
+/// character boundary at the length an offset pair can describe. No filesystem
+/// produces a name that long; losing the scan over one would be the worse
+/// answer.
+fn push_name(buf: &mut String, name: &str) -> (u32, u16) {
+    let mut name = name;
+    if name.len() > u16::MAX as usize {
+        let mut end = u16::MAX as usize;
+        while end > 0 && !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        name = &name[..end];
+    }
+    let off = buf.len() as u32;
+    buf.push_str(name);
+    (off, name.len() as u16)
 }
 
 /// Walk `root` and build a tree. The traversal is a parallel DFS: each
@@ -191,8 +231,9 @@ pub fn scan(
     // `+ 1` is the root, which the counters below do not include for files.
     let expected = progress.files.load(Ordering::Relaxed) + progress.dirs.load(Ordering::Relaxed);
     let mut builder = TreeBuilder::with_capacity(expected as usize + 1);
+    let root_name = display_name(&root_path);
     let root_id = builder.push_root(NewNode {
-        name: display_name(&root_path),
+        name: &root_name,
         kind: root_meta.kind,
         size: if root_meta.kind == EntryKind::Dir {
             0
@@ -241,24 +282,27 @@ fn identity_needed(opts: &ScanOptions, is_dir: bool) -> FileIdentity {
     FileIdentity::Needed
 }
 
-fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Vec<RawEntry> {
+fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
     // Checked before the syscall, so a cancelled scan stops issuing I/O
     // immediately instead of draining whatever rayon had already queued.
     if ctx.progress.is_cancelled() {
-        return Vec::new();
+        return Children::default();
     }
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
             ctx.note_error(dir, &e);
-            return Vec::new();
+            return Children::default();
         }
     };
 
     // Read the whole directory first, then fan out. Doing the syscalls for one
     // directory on a single thread keeps readdir sequential (which is what the
     // kernel is fastest at) while different directories still run in parallel.
-    let mut pending: Vec<(PathBuf, String, RawMeta)> = Vec::new();
+    // Names are collected here, on this one thread, so that the parallel phase
+    // below only has to carry offsets into a buffer nobody else writes to.
+    let mut names = String::new();
+    let mut pending: Vec<(PathBuf, u32, u16, RawMeta)> = Vec::new();
     for entry in rd {
         let entry = match entry {
             Ok(e) => e,
@@ -285,23 +329,49 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Vec<RawEntry> {
         if let Some(e) = failure {
             ctx.note_error(&path, &e);
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        pending.push((path, name, meta));
+        let raw_name = entry.file_name();
+        let (name_off, name_len) = push_name(&mut names, &raw_name.to_string_lossy());
+        pending.push((path, name_off, name_len, meta));
     }
 
-    pending
+    let entries = pending
         .into_par_iter()
-        .map(|(path, name, meta)| build_entry(path, name, meta, depth, ctx))
-        .collect()
+        .map(|(path, name_off, name_len, meta)| {
+            build_entry(path, name_off, name_len, meta, depth, ctx)
+        })
+        .collect();
+    Children { names, entries }
 }
 
-fn build_entry(path: PathBuf, name: String, meta: RawMeta, depth: usize, ctx: &Ctx) -> RawEntry {
+/// Whether this directory's name is on the skip list.
+fn is_excluded(path: &Path, excluded: &[String]) -> bool {
+    if excluded.is_empty() {
+        return false;
+    }
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    let name = name.to_string_lossy();
+    excluded.iter().any(|x| x.as_str() == name)
+}
+
+fn build_entry(
+    path: PathBuf,
+    name_off: u32,
+    name_len: u16,
+    meta: RawMeta,
+    depth: usize,
+    ctx: &Ctx,
+) -> RawEntry {
     let is_dir = meta.kind == EntryKind::Dir;
 
+    // Ordered so the cheap tests run first: `is_excluded` has to recover the
+    // name from the path, and there is no reason to pay for that on a file or
+    // when nothing is excluded at all.
     let descend = is_dir
-        && !ctx.opts.exclude_names.contains(&name)
         && ctx.opts.max_depth.is_none_or(|max| depth < max)
-        && (!ctx.opts.one_filesystem || meta.dev == ctx.root_dev);
+        && (!ctx.opts.one_filesystem || meta.dev == ctx.root_dev)
+        && !is_excluded(&path, &ctx.opts.exclude_names);
 
     if is_dir {
         ctx.progress.dirs.fetch_add(1, Ordering::Relaxed);
@@ -325,41 +395,47 @@ fn build_entry(path: PathBuf, name: String, meta: RawMeta, depth: usize, ctx: &C
     }
 
     let children = if descend {
-        Some(read_dir_parallel(&path, depth + 1, ctx))
+        Some(Box::new(read_dir_parallel(&path, depth + 1, ctx)))
     } else {
         None
     };
 
     RawEntry {
-        name,
+        name_off,
+        name_len,
         kind: meta.kind,
         size,
         alloc,
         mtime: meta.mtime,
-        nlink: meta.nlink,
+        nlink: meta.nlink.min(u32::MAX as u64) as u32,
         children,
     }
 }
 
 /// Flatten the recursive result into the arena in BFS order, so that every
 /// node's children end up in one contiguous index range.
-fn flatten(builder: &mut TreeBuilder, root_id: NodeId, root_children: Vec<RawEntry>) {
-    let mut queue: VecDeque<(NodeId, Vec<RawEntry>)> = VecDeque::new();
+fn flatten(builder: &mut TreeBuilder, root_id: NodeId, root_children: Children) {
+    let mut queue: VecDeque<(NodeId, Children)> = VecDeque::new();
     queue.push_back((root_id, root_children));
 
-    while let Some((parent_id, entries)) = queue.pop_front() {
+    while let Some((parent_id, children)) = queue.pop_front() {
+        let Children { names, entries } = children;
         if entries.is_empty() {
             continue;
         }
         let start = builder.nodes.len() as NodeId;
         let len = entries.len() as u32;
 
-        let mut grandchildren: Vec<(NodeId, Vec<RawEntry>)> = Vec::new();
+        let mut grandchildren: Vec<(NodeId, Children)> = Vec::new();
         for (i, entry) in entries.into_iter().enumerate() {
+            let from = entry.name_off as usize;
+            let name = names
+                .get(from..from + entry.name_len as usize)
+                .unwrap_or_default();
             let id = builder.push(
                 parent_id,
                 NewNode {
-                    name: entry.name,
+                    name,
                     kind: entry.kind,
                     size: entry.size,
                     alloc: entry.alloc,
@@ -369,8 +445,8 @@ fn flatten(builder: &mut TreeBuilder, root_id: NodeId, root_children: Vec<RawEnt
             );
             debug_assert_eq!(id, start + i as NodeId);
             if let Some(kids) = entry.children {
-                if !kids.is_empty() {
-                    grandchildren.push((id, kids));
+                if !kids.entries.is_empty() {
+                    grandchildren.push((id, *kids));
                 }
             }
         }

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use spacetrace_scan_core::{EntryKind, Node, ScanStats, Tree};
+use spacetrace_scan_core::{EntryKind, ScanStats, StoredNode, Tree, TreeAssembler};
 
 pub use ncdu::export_ncdu;
 
@@ -158,7 +158,7 @@ impl Store {
                     scan_id,
                     idx as i64,
                     parent,
-                    node.name,
+                    tree.name(idx as u32),
                     node.kind as u8,
                     node.size as i64,
                     node.alloc as i64,
@@ -187,31 +187,39 @@ impl Store {
                     children_start, children_len
              FROM entries WHERE scan_id = ?1 ORDER BY id",
         )?;
-        let nodes = stmt
-            .query_map([scan_id], |row| {
-                let parent: Option<i64> = row.get(0)?;
-                Ok(Node {
-                    parent: parent.map_or(Tree::NO_PARENT, |p| p as u32),
-                    name: row.get(1)?,
-                    kind: EntryKind::from_u8(row.get::<_, u8>(2)?),
-                    size: row.get::<_, i64>(3)? as u64,
-                    alloc: row.get::<_, i64>(4)? as u64,
-                    own_size: 0,
-                    own_alloc: 0,
-                    mtime: row.get(5)?,
-                    nlink: row.get::<_, i64>(6)? as u64,
-                    files: row.get::<_, i64>(7)? as u64,
-                    dirs: row.get::<_, i64>(8)? as u64,
-                    children_start: row.get::<_, i64>(9)? as u32,
-                    children_len: row.get::<_, i64>(10)? as u32,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<Node>>>()?;
+        // Names are interned into the tree's shared arena as the rows arrive,
+        // so the assembler holds the only offsets and no caller can invent one.
+        let mut rows = stmt.query([scan_id])?;
+        let mut assembler = TreeAssembler::with_capacity(meta.files as usize + meta.dirs as usize);
+        while let Some(row) = rows.next()? {
+            let parent: Option<i64> = row.get(0)?;
+            let name: String = row.get(1)?;
+            assembler.push(StoredNode {
+                parent: parent.map_or(Tree::NO_PARENT, |p| p as u32),
+                name: &name,
+                kind: EntryKind::from_u8(row.get::<_, u8>(2)?),
+                size: row.get::<_, i64>(3)? as u64,
+                alloc: row.get::<_, i64>(4)? as u64,
+                // Not stored: a snapshot keeps subtree totals, and the entry's
+                // own share of them is only used while a live tree is being
+                // edited. Loading one back therefore reports zero here, which
+                // is pre-existing behaviour and not introduced by the arena.
+                own_size: 0,
+                own_alloc: 0,
+                mtime: row.get(5)?,
+                nlink: row.get::<_, i64>(6)? as u32,
+                files: row.get::<_, i64>(7)? as u32,
+                dirs: row.get::<_, i64>(8)? as u32,
+                children_start: row.get::<_, i64>(9)? as u32,
+                children_len: row.get::<_, i64>(10)? as u32,
+            });
+        }
 
         // Checked rather than trusted: this same code path loads snapshots
         // downloaded from an agent, and a malformed arena would panic on an
         // out-of-range index or loop forever on a backwards child pointer.
-        let tree = Tree::from_parts_checked(nodes, PathBuf::from(&meta.root))
+        let tree = assembler
+            .finish(PathBuf::from(&meta.root))
             .map_err(|e| anyhow::anyhow!("scan {scan_id} is not a usable tree: {e}"))?;
         Ok((tree, meta))
     }

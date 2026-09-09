@@ -121,7 +121,7 @@ fn area_is_proportional_to_size() {
         assert!(
             (0.97..1.03).contains(&ratio),
             "{} has area ratio {ratio}",
-            tree.node(tile.node).name
+            tree.name(tile.node)
         );
     }
 }
@@ -136,7 +136,7 @@ fn the_biggest_entry_gets_the_biggest_tile() {
         .iter()
         .max_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
         .unwrap();
-    assert_eq!(tree.node(largest.node).name, "big");
+    assert_eq!(tree.name(largest.node), "big");
 }
 
 #[test]
@@ -419,8 +419,8 @@ fn culling_emits_parents_before_their_children() {
                 assert!(
                     position[&tile.node] < *child_at,
                     "child {} drawn before its parent {}",
-                    tree.node(child.node).name,
-                    tree.node(tile.node).name
+                    tree.name(child.node),
+                    tree.name(tile.node)
                 );
             }
         }
@@ -522,7 +522,7 @@ mod basis {
         let root = map.root().unwrap();
         map.children_of(root)
             .iter()
-            .find(|t| tree.node(t.node).name == name)
+            .find(|t| tree.name(t.node) == name)
             .unwrap_or_else(|| panic!("{name} has no tile"))
             .rect
             .area()

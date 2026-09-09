@@ -187,7 +187,7 @@ fn cmd_ls(a: &LsArgs, db_path: &Path, remote: Option<&Remote>, json: bool) -> Re
     println!(
         "{}  ·  {} files  ·  {}",
         where_,
-        fmt::count(tree.node(node).files),
+        fmt::count(tree.node(node).files as u64),
         fmt::size(tree.node(node).size)
     );
     println!();
@@ -661,7 +661,7 @@ fn print_children_table(tree: &Tree, node: spacetrace_scan_core::NodeId, top: us
             fmt::size(n.size),
             share * 100.0,
             bar(share, 12),
-            fmt::ellipsize(&n.name, 48),
+            fmt::ellipsize(tree.name(c), 48),
             if n.is_dir() { "/" } else { "" },
         );
     }
@@ -711,7 +711,7 @@ fn write_ncdu(tree: &Tree, out: &Path) -> Result<()> {
 fn entry_json(tree: &Tree, id: spacetrace_scan_core::NodeId) -> serde_json::Value {
     let n = tree.node(id);
     serde_json::json!({
-        "name": n.name,
+        "name": tree.name(id),
         "path": tree.rel_path(id),
         "kind": n.kind,
         "size": n.size,

@@ -288,35 +288,35 @@ fn match_children<'a>(
 ) -> Vec<Pair<'a>> {
     let mut a: Vec<NodeId> = old.children(old_id).collect();
     let mut b: Vec<NodeId> = new.children(new_id).collect();
-    a.sort_unstable_by(|&x, &y| old.node(x).name.cmp(&old.node(y).name));
-    b.sort_unstable_by(|&x, &y| new.node(x).name.cmp(&new.node(y).name));
+    a.sort_unstable_by(|&x, &y| old.name(x).cmp(old.name(y)));
+    b.sort_unstable_by(|&x, &y| new.name(x).cmp(new.name(y)));
 
     let mut out = Vec::with_capacity(a.len().max(b.len()));
     let (mut i, mut j) = (0, 0);
     while i < a.len() && j < b.len() {
-        let an = &old.node(a[i]).name;
-        let bn = &new.node(b[j]).name;
-        match an.as_str().cmp(bn.as_str()) {
+        let an = old.name(a[i]);
+        let bn = new.name(b[j]);
+        match an.cmp(bn) {
             Ordering::Equal => {
-                out.push(Pair::Both(a[i], b[j], an.as_str()));
+                out.push(Pair::Both(a[i], b[j], an));
                 i += 1;
                 j += 1;
             }
             Ordering::Less => {
-                out.push(Pair::OnlyOld(a[i], an.as_str()));
+                out.push(Pair::OnlyOld(a[i], an));
                 i += 1;
             }
             Ordering::Greater => {
-                out.push(Pair::OnlyNew(b[j], bn.as_str()));
+                out.push(Pair::OnlyNew(b[j], bn));
                 j += 1;
             }
         }
     }
     for &id in &a[i..] {
-        out.push(Pair::OnlyOld(id, old.node(id).name.as_str()));
+        out.push(Pair::OnlyOld(id, old.name(id)));
     }
     for &id in &b[j..] {
-        out.push(Pair::OnlyNew(id, new.node(id).name.as_str()));
+        out.push(Pair::OnlyNew(id, new.name(id)));
     }
     out
 }
