@@ -217,3 +217,67 @@ bağlantı olarak kalmamasını sağlıyor. Bedeli, yayın başına birkaç sani
 `releases/latest` uç noktası ön-sürüm döndürmediği için `install.sh` kararlı
 sürüm yokken `continuous`'a düşüyor ve bunu ekrana yazıyor. Aksi hâlde ilk
 kararlı etikete kadar belgelenmiş tek satırlık kurulum komutu çalışmazdı.
+
+---
+
+## K10 — Yerelleştirme yalnızca GUI, site ve changelog · 9 Eylül 2026
+
+K1 "i18n çerçevesi eklenmez, dizeler İngilizce ve gömülü kalır" diyordu ve bunu
+kapsam dışı ilan edilmiş bir karar olarak niteliyordu. Bu karar **K1'i iptal
+etmiyor, kapsamını daraltıyor**:
+
+| Yüzey | Dil |
+|-------|-----|
+| Masaüstü uygulama arayüzü | `en tr it fr de` |
+| Site | `en tr it fr de` (zaten öyleydi) |
+| Changelog metinleri | `en tr it fr de` |
+| CLI çıktısı, `--help`, hata mesajları | İngilizce |
+| Ajan ve hub HTTP mesajları, `--help` | İngilizce |
+| `install.sh`, systemd unit, TOML yorumları | İngilizce |
+| Kod, kod yorumları, commit mesajları | değişmedi |
+
+**Neden K1 tamamen açılmadı.** K1'in gerekçesinde çevrilecek yüzey olarak sayılan
+her şey — `--help`, HTTP hata mesajları, TOML yorumları, systemd unit, kurulum
+betiği — terminal ve sunucu yüzeyi. K1 bir GUI'yi hiç düşünmemişti, çünkü karar
+verildiğinde ortada GUI yoktu. Terminal tarafındaki gerekçe hâlâ geçerli:
+**çevrilmiş bir komut yanlış bilgidir**, ve bir kullanıcı `spacetrace diff`
+çıktısını arama motoruna yapıştırdığında İngilizce olması işine yarar.
+
+**Neden GUI tarafında geçerli değil.** Masaüstü ticari ürün ve hedef kitlesi HN
+değil. Site zaten beş dil: kullanıcı ürünü Türkçe okuyup indiriyor, sonra
+uygulamayı İngilizce açıyor. Bu tutarsızlığı K1 öngörmemişti.
+
+**Sonuç.** Diller sitedekiyle aynı kümede tutuluyor — bir okuyucu sitede
+İtalyanca seçip uygulamada İngilizceye düşmemeli. Changelog girdilerinde komut,
+bayrak, dosya adı ve etiket **çevrilmiyor**; yalnızca etrafındaki cümle
+çevriliyor.
+
+---
+
+## K11 — Changelog elle yazılan tek bir veri dosyası · 9 Eylül 2026
+
+`crates/changelog/changelog.json` üç bileşenin de changelog'unun tek kaynağı.
+Her deponun `CHANGELOG.md`'si, GitHub yayın notları, sitenin `/changelog`
+sayfası ve masaüstündeki "Yenilikler" penceresi bundan üretiliyor.
+
+**Neden commit'lerden üretilmiyor.** Commit "koda ne yaptım" der, Türkçe, bir
+sonraki bakımcı için. Changelog "sana ne değişti" der. Farklı metinler, farklı
+okuyucular. Üstelik teknik olarak da mümkün değil: bu depo bilinçli olarak
+düzyazı commit kullanıyor (`APFS clone'larını bir kez say`), ve ölçüldü —
+git-cliff, release-please ve cocogitto geçmişin **%100'ünü** "other" diye
+sınıflar.
+
+**Neden üç bileşen tek dosyada.** Masaüstü ve hub indirmelerini zaten çekirdek
+deponun yayınlarına koyuyor, ve site tek bir public yer okuyor. Üç depoya bölmek
+ya bir senkron işi ya da siteye bir token vermek demekti. Bedeli: masaüstünde
+yapılan bir değişikliğin girdisi burada commit'lenmeli, ve masaüstü etiketlenmeden
+önce çekirdek pin'i ilerletilmeli — yoksa ikilinin gömülü changelog'u kendi yayın
+notlarından eski olur. Sıra [RELEASING.md](RELEASING.md)'de.
+
+**Neden gömülü, indirilen değil.** Masaüstü "ne değişti"yi kendini
+güncelledikten hemen sonra gösteriyor — yani ağının olmayabileceği tam o anda.
+Boş bir "yenilikler" penceresi, hiç olmamasından kötü.
+
+**`published: false`.** Etiketlenmemiş, indirilebilir dosyası olmayan geliştirme
+kilometre taşı. İş yapıldığı için kaydediliyor, kimsenin kuramayacağı bir sürümü
+varmış gibi göstermek yalan olacağı için işaretleniyor.

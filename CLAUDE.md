@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 177 test, hepsi geçmeli
+cargo test --workspace                   # 196 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -113,6 +113,12 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
   `foo.workspace = true` ile alır.
 - Commit mesajları Türkçe, gövde **neden** yapıldığını anlatır. Örnek için
   `git log` bak.
+- **Kullanıcının göreceği bir değişiklik yaptıysan changelog girdisi yaz**:
+  `crates/changelog/changelog.json`, ilgili bileşenin `unreleased` listesine,
+  beş dilde. Commit mesajı yerine geçmez — commit koda ne yaptığını, changelog
+  kullanıcıya ne değiştiğini anlatır (K11). `CHANGELOG.md` üretiliyor, elle
+  düzenleme; bayat kalırsa CI kırılıyor. Kurallar
+  [crates/changelog/README.md](crates/changelog/README.md).
 - `cargo clippy` uyarısı bırakma; CI `-D warnings` ile çalışıyor.
 
 ## Crate'ler
@@ -125,6 +131,7 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 | `cli` | `spacetrace` ikilisi (uzak kaynaklar dâhil) |
 | `agent` | `spacetrace-agent` ikilisi: zamanlayıcı + HTTP servisi |
 | `treemap` | Squarified yerleşim + LOD + hiyerarşik hit-test (masaüstü kullanır) |
+| `changelog` | Üç bileşenin changelog'u, beş dilde; üreteç aynı crate'in ikilisi |
 
 Bağımlılık yönü tek yönlü. Ajan (Faz 2) bu üçünü kullanır, `cli`'ye
 bağlanmaz.

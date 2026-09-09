@@ -187,6 +187,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Release notes come from crates/changelog, so this job needs a compiler
+      # even though it builds nothing else. The crate depends only on serde, so
+      # it is seconds once the cache is warm.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -225,7 +231,10 @@ jobs:
           \`\`\`sh
           curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | SPACETRACE_VERSION=continuous sh
           \`\`\`
+
+          ## Landed since the last release
           EOF
+          cargo run -q -p spacetrace-changelog -- unreleased --component cli >> notes.md
           gh release delete continuous --cleanup-tag --yes || true
           gh release create continuous artifacts/* \
             --target "$GITHUB_SHA" \
@@ -238,10 +247,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.meta.outputs.version }}
+        # The notes come from the changelog, not from `--generate-notes`: the
+        # commit subjects are Turkish and describe the code, which is the wrong
+        # text for a download page. This also refuses to publish a version the
+        # changelog has never heard of — the release cannot get ahead of its
+        # own notes.
         run: |
+          cargo run -q -p spacetrace-changelog -- \
+            notes --component cli --version "$VERSION" > notes.md
+          cat >> notes.md <<EOF
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | SPACETRACE_VERSION=$VERSION sh
+          \`\`\`
+          EOF
           gh release create "$VERSION" artifacts/* \
             --title "spacetrace $VERSION" \
-            --generate-notes
+            --notes-file notes.md
 
       # The agent's container image, which docs/AGENT.md tells people to pull.
       - uses: docker/setup-buildx-action@v3

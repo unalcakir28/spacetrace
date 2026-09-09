@@ -7,6 +7,7 @@ members = [
     "crates/cli",
     "crates/agent",
     "crates/treemap",
+    "crates/changelog",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ spacetrace-scan-core = { path = "crates/scan-core", version = "0.1.0" }
 spacetrace-store = { path = "crates/store", version = "0.1.0" }
 spacetrace-diff = { path = "crates/diff", version = "0.1.0" }
 spacetrace-treemap = { path = "crates/treemap", version = "0.1.0" }
+spacetrace-changelog = { path = "crates/changelog", version = "0.1.0" }
 
 anyhow = "1"
 thiserror = "2"

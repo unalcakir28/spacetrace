@@ -1,0 +1,352 @@
+{
+  "schema": 1,
+  "components": {
+    "cli": {
+      "unreleased": [
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "APFS-Klone werden einmal gezählt. Drei Klone von je 100 MB belegen keinen zusätzlichen Speicher, und spacetrace sagt das jetzt auch, während `du` weiterhin 400 MB meldet. Abschalten mit `--no-clone-dedupe`.",
+            "en": "APFS clones are counted once. Three 100 MB clones take 0 MB of extra room on the disk, and spacetrace now says so where `du` still reports 400 MB. Use `--no-clone-dedupe` to turn it off.",
+            "fr": "Les clones APFS ne sont comptés qu'une fois. Trois clones de 100 Mo n'occupent aucun espace supplémentaire sur le disque, et spacetrace le dit désormais là où `du` annonce encore 400 Mo. Pour le désactiver : `--no-clone-dedupe`.",
+            "it": "I clone APFS vengono contati una sola volta. Tre cloni da 100 MB occupano 0 MB di spazio aggiuntivo sul disco, e ora spacetrace lo dice mentre `du` continua a riportare 400 MB. Per disattivarlo: `--no-clone-dedupe`.",
+            "tr": "APFS clone'ları bir kez sayılıyor. 100 MB'lık üç clone diskte fazladan 0 MB yer tutuyor; `du` hâlâ 400 MB derken spacetrace artık doğrusunu söylüyor. Kapatmak için `--no-clone-dedupe`."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Unter Windows liest spacetrace jetzt den tatsächlich belegten Speicher und zählt hart verlinkte Dateien einmal, statt auf die angegebene Dateilänge zurückzufallen.",
+            "en": "On Windows, spacetrace now reads the space a file really occupies and counts a hard-linked file once, instead of falling back to the length the file claims.",
+            "fr": "Sous Windows, spacetrace lit désormais l'espace réellement occupé par un fichier et ne compte qu'une fois les fichiers en lien physique, au lieu de se rabattre sur la taille annoncée.",
+            "it": "Su Windows spacetrace legge ora lo spazio realmente occupato da un file e conta una sola volta i file con collegamenti fisici, invece di ripiegare sulla lunghezza dichiarata.",
+            "tr": "Windows'ta artık dosyanın diskte gerçekten kapladığı yer okunuyor ve sabit bağlantılı dosya bir kez sayılıyor; eskiden dosyanın iddia ettiği uzunluğa düşülüyordu."
+          }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Das Scannen großer Verzeichnisbäume braucht deutlich weniger Speicher: ein Knoten schrumpfte von 104 auf 72 Byte, und die Namen liegen jetzt in einer gemeinsamen Arena.",
+            "en": "Scanning a large tree uses noticeably less memory: a tree node shrank from 104 to 72 bytes and names moved into one shared arena.",
+            "fr": "L'analyse d'une grande arborescence consomme nettement moins de mémoire : un nœud est passé de 104 à 72 octets et les noms ont été regroupés dans une arène partagée.",
+            "it": "La scansione di un albero grande usa sensibilmente meno memoria: un nodo è passato da 104 a 72 byte e i nomi sono confluiti in un'unica arena condivisa.",
+            "tr": "Büyük bir ağacı taramak belirgin biçimde daha az bellek kullanıyor: ağaç düğümü 104 bayttan 72 bayta indi ve adlar tek bir paylaşılan arenaya taşındı."
+          }
+        },
+        {
+          "kind": "changed",
+          "text": {
+            "de": "Das Versprechen, dass die belegten Größen mit `du` übereinstimmen, solange keine Blöcke geteilt werden, wird jetzt durch einen Test mit echtem `du` abgesichert statt nur in der Dokumentation behauptet.",
+            "en": "The promise that on-disk sizes agree with `du` where no blocks are shared is now enforced by a test that runs real `du`, rather than being a claim in the documentation.",
+            "fr": "La promesse que les tailles sur disque correspondent à `du` en l'absence de blocs partagés est désormais vérifiée par un test qui exécute réellement `du`, au lieu d'être une affirmation dans la documentation.",
+            "it": "La promessa che le dimensioni su disco coincidano con `du` in assenza di blocchi condivisi è ora garantita da un test che esegue davvero `du`, invece di essere un'affermazione nella documentazione.",
+            "tr": "Blok paylaşımı olmadığında disk boyutlarının `du` ile uyuştuğu sözü, artık belgedeki bir iddia değil, gerçek `du` çalıştıran bir testle zorlanıyor."
+          }
+        }
+      ],
+      "releases": [
+        {
+          "version": "0.3.0",
+          "date": "2026-09-08",
+          "published": false,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Ein laufender Scan lässt sich abbrechen, und ein Teilbaum kann aus einem geladenen Baum entfernt werden, ohne die umliegenden Einträge ungültig zu machen.",
+                "en": "A running scan can be cancelled, and a subtree can be dropped from a loaded tree without invalidating the entries around it.",
+                "fr": "Une analyse en cours peut être annulée, et un sous-arbre peut être retiré d'une arborescence chargée sans invalider les entrées voisines.",
+                "it": "Una scansione in corso può essere annullata e un sottoalbero può essere rimosso da un albero caricato senza invalidare le voci circostanti.",
+                "tr": "Süren bir tarama iptal edilebiliyor ve yüklü bir ağaçtan alt ağaç, çevresindeki girdileri geçersizleştirmeden çıkarılabiliyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Sortierung und Darstellung benennen jetzt ausdrücklich ihr Maß, sodass eine Liste mit größten zuerst zu der Zahl daneben passt.",
+                "en": "Sorting and drawing now name their measure explicitly, so a list that says largest first agrees with the number printed beside it.",
+                "fr": "Le tri et le rendu indiquent désormais explicitement la mesure utilisée, si bien qu'une liste annonçant les plus gros d'abord concorde avec le nombre affiché à côté.",
+                "it": "Ordinamento e disegno dichiarano ora esplicitamente la misura usata, così un elenco che dice prima i più grandi concorda con il numero stampato accanto.",
+                "tr": "Sıralama ve çizim artık hangi ölçüyü kullandığını açıkça söylüyor; böylece en büyük önce diyen bir liste, yanındaki sayıyla aynı şeyi söylüyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Jeder Push hinterlässt einen herunterladbaren Build, den `install.sh` unter Linux und macOS installiert.",
+                "en": "Every push leaves a downloadable build behind, and `install.sh` installs it on Linux and macOS.",
+                "fr": "Chaque push laisse une version téléchargeable, et `install.sh` l'installe sur Linux et macOS.",
+                "it": "Ogni push lascia una build scaricabile, e `install.sh` la installa su Linux e macOS.",
+                "tr": "Her push indirilebilir bir derleme bırakıyor ve `install.sh` bunu Linux ile macOS'a kuruyor."
+              }
+            }
+          ]
+        },
+        {
+          "version": "0.2.0",
+          "date": "2026-09-07",
+          "published": false,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "`spacetrace-agent`: ein nur lesender Agent für Server und NAS-Geräte, mit eingebautem Scheduler und HTTP-API. Er löscht niemals etwas.",
+                "en": "`spacetrace-agent`: a read-only agent for servers and NAS boxes, with a built-in scheduler and an HTTP API. It never deletes anything.",
+                "fr": "`spacetrace-agent` : un agent en lecture seule pour serveurs et NAS, avec planificateur intégré et API HTTP. Il ne supprime jamais rien.",
+                "it": "`spacetrace-agent`: un agente in sola lettura per server e NAS, con scheduler integrato e API HTTP. Non cancella mai nulla.",
+                "tr": "`spacetrace-agent`: sunucular ve NAS'lar için salt okunur bir ajan; kendi zamanlayıcısı ve HTTP arayüzü var. Hiçbir şeyi silmiyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Die Kapazität des Dateisystems wird als frei und gesamt angegeben statt als Füllstand in Prozent, weil ein Prozentwert auf APFS und in Thin Pools `df` widerspricht.",
+                "en": "Filesystem capacity, reported as free and total rather than a percentage full, because on APFS and thin pools a percentage disagrees with `df`.",
+                "fr": "La capacité du système de fichiers est indiquée en espace libre et total plutôt qu'en pourcentage de remplissage, car sur APFS et les pools fins un pourcentage contredit `df`.",
+                "it": "La capacità del filesystem è indicata come spazio libero e totale anziché come percentuale di riempimento, perché su APFS e nei thin pool la percentuale contraddice `df`.",
+                "tr": "Dosya sistemi kapasitesi, yüzde dolu olarak değil boş ve toplam olarak bildiriliyor; çünkü APFS'te ve ince havuzlarda yüzde `df` ile çelişiyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Die Treemap-Layout-Engine: squarified Kacheln, Detailstufen und Hit-Testing entlang der Hierarchie.",
+                "en": "The treemap layout engine: squarified tiles, level of detail, and hit-testing that follows the hierarchy.",
+                "fr": "Le moteur de disposition en treemap : pavés squarified, niveau de détail et détection de clic suivant la hiérarchie.",
+                "it": "Il motore di layout treemap: riquadri squarified, livello di dettaglio e hit-testing che segue la gerarchia.",
+                "tr": "Treemap yerleşim motoru: squarified döşeme, detay seviyesi ve hiyerarşiyi izleyen isabet testi."
+              }
+            },
+            {
+              "kind": "fixed",
+              "text": {
+                "de": "Das Öffnen einer Datenbank nimmt keine Schreibsperre mehr, sodass ein Lesevorgang einen noch schreibenden Scan nicht mehr abwürgen kann.",
+                "en": "Opening a database no longer takes a write lock, so a read can no longer knock over a scan that is still writing.",
+                "fr": "L'ouverture d'une base ne prend plus de verrou en écriture : une lecture ne peut donc plus faire échouer une analyse encore en cours d'écriture.",
+                "it": "L'apertura di un database non acquisisce più un lock di scrittura, quindi una lettura non può più far fallire una scansione ancora in corso.",
+                "tr": "Bir veritabanını açmak artık yazma kilidi almıyor; böylece bir okuma, hâlâ yazmakta olan bir taramayı deviremiyor."
+              }
+            }
+          ]
+        },
+        {
+          "version": "0.1.0",
+          "date": "2026-09-06",
+          "published": false,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Scanne ein Verzeichnis und sieh, wohin der Platz gegangen ist - mit beiden Maßen nebeneinander: was die Dateien angeben und was die Festplatte wirklich belegt.",
+                "en": "Scan a directory and see where the space went, with both measures side by side: what the files claim, and what the disk actually holds.",
+                "fr": "Analysez un dossier et voyez où l'espace est passé, avec les deux mesures côte à côte : ce que les fichiers annoncent et ce que le disque occupe réellement.",
+                "it": "Scansiona una directory e scopri dove è finito lo spazio, con entrambe le misure affiancate: quella dichiarata dai file e quella realmente occupata sul disco.",
+                "tr": "Bir dizini tara ve yerin nereye gittiğini gör; iki ölçü yan yana: dosyaların iddia ettiği ve diskin gerçekten tuttuğu."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Snapshots in SQLite, sodass sich ein heutiger Scan mit einem vom nächsten Monat vergleichen lässt.",
+                "en": "Snapshots stored in SQLite, so a scan taken today can be compared with one taken next month.",
+                "fr": "Des instantanés stockés dans SQLite, pour comparer une analyse d'aujourd'hui avec une du mois prochain.",
+                "it": "Snapshot memorizzati in SQLite, così una scansione di oggi può essere confrontata con una del mese prossimo.",
+                "tr": "SQLite'ta saklanan anlık görüntüler; bugün alınan bir tarama gelecek ay alınanla karşılaştırılabiliyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "`spacetrace diff` benennt den Ordner, der für eine Änderung verantwortlich ist, statt jede Datei darin aufzulisten.",
+                "en": "`spacetrace diff` names the folder responsible for a change instead of listing every file underneath it.",
+                "fr": "`spacetrace diff` désigne le dossier responsable d'un changement au lieu d'énumérer tous les fichiers qu'il contient.",
+                "it": "`spacetrace diff` indica la cartella responsabile di una variazione invece di elencare ogni file al suo interno.",
+                "tr": "`spacetrace diff` bir değişimin altındaki her dosyayı listelemek yerine sorumlu klasörü söylüyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Export ins ncdu-Format, damit ein spacetrace-Snapshot mit bereits vorhandenen Werkzeugen geöffnet werden kann.",
+                "en": "Export to the ncdu format, so a spacetrace snapshot can be opened by tools that already exist.",
+                "fr": "Export au format ncdu, pour qu'un instantané spacetrace puisse être ouvert par des outils déjà existants.",
+                "it": "Esportazione nel formato ncdu, così uno snapshot di spacetrace può essere aperto con strumenti già esistenti.",
+                "tr": "ncdu biçimine dışa aktarım; bir spacetrace anlık görüntüsü hâlihazırdaki araçlarla açılabiliyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Symbolischen Links wird nicht gefolgt, harte Links werden einmal gezählt, und eine Sparse-Datei meldet ihren belegten Platz statt der angegebenen Länge.",
+                "en": "Symbolic links are not followed, hard links are counted once, and a sparse file reports what it allocates rather than the length it claims.",
+                "fr": "Les liens symboliques ne sont pas suivis, les liens physiques ne sont comptés qu'une fois, et un fichier creux indique ce qu'il occupe réellement plutôt que la taille annoncée.",
+                "it": "I collegamenti simbolici non vengono seguiti, i collegamenti fisici sono contati una volta sola e un file sparso riporta quanto occupa davvero, non la lunghezza dichiarata.",
+                "tr": "Sembolik bağlantılar izlenmiyor, sabit bağlantılar bir kez sayılıyor ve seyrek bir dosya iddia ettiği uzunluğu değil ayırdığı yeri bildiriyor."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "desktop": {
+      "unreleased": [
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Das Öffnen eines großen Scans braucht weniger Speicher, dank der kompakteren Baumdarstellung im Scan-Kern.",
+            "en": "Opening a large scan uses less memory, following the smaller tree representation in the scanning core.",
+            "fr": "Ouvrir une analyse volumineuse consomme moins de mémoire, grâce à la représentation d'arbre plus compacte du moteur d'analyse.",
+            "it": "Aprire una scansione grande consuma meno memoria, grazie alla rappresentazione dell'albero più compatta nel motore di scansione.",
+            "tr": "Büyük bir taramayı açmak daha az bellek kullanıyor; tarama çekirdeğindeki küçülen ağaç gösterimi sayesinde."
+          }
+        }
+      ],
+      "releases": [
+        {
+          "version": "0.2.0",
+          "date": "2026-09-08",
+          "published": false,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Installierbare Pakete für macOS, Windows und Linux, bei jedem Push gebaut.",
+                "en": "Installable packages for macOS, Windows and Linux, built on every push.",
+                "fr": "Des paquets installables pour macOS, Windows et Linux, construits à chaque push.",
+                "it": "Pacchetti installabili per macOS, Windows e Linux, compilati a ogni push.",
+                "tr": "macOS, Windows ve Linux için kurulabilir paketler; her push'ta derleniyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Ein Schalter dafür, welchem Maß Karte und Listen folgen: der Angabe der Dateien oder dem belegten Speicher.",
+                "en": "A switch for which measure the map and the lists follow: what files claim, or what the disk holds.",
+                "fr": "Un sélecteur pour la mesure suivie par la carte et les listes : ce que les fichiers annoncent, ou ce que le disque occupe.",
+                "it": "Un interruttore per scegliere quale misura seguono la mappa e gli elenchi: quella dichiarata dai file o quella occupata sul disco.",
+                "tr": "Haritanın ve listelerin hangi ölçüyü izleyeceği için bir anahtar: dosyaların iddia ettiği mi, diskin tuttuğu mu."
+              }
+            },
+            {
+              "kind": "changed",
+              "text": {
+                "de": "Das Fenster blockiert nie. Lange Arbeiten laufen außerhalb des Hauptthreads und melden ihren Fortschritt, und ein Scan lässt sich währenddessen abbrechen.",
+                "en": "The window never blocks. Long work runs off the main thread and reports progress, and a scan can be cancelled while it runs.",
+                "fr": "La fenêtre ne se fige jamais. Les traitements longs s'exécutent hors du fil principal en indiquant leur progression, et une analyse peut être annulée en cours de route.",
+                "it": "La finestra non si blocca mai. Le operazioni lunghe girano fuori dal thread principale e riportano l'avanzamento, e una scansione può essere annullata mentre è in corso.",
+                "tr": "Pencere hiçbir zaman kilitlenmiyor. Uzun işler ana thread dışında çalışıp ilerleme bildiriyor ve tarama sürerken iptal edilebiliyor."
+              }
+            }
+          ]
+        },
+        {
+          "version": "0.1.0",
+          "date": "2026-09-07",
+          "published": false,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Die erste Desktop-App: eine Treemap eines Ordners, daneben der Baum und rechts die Details des ausgewählten Eintrags.",
+                "en": "The first desktop app: a treemap of a folder, a tree beside it, and the details of whatever is selected on the right.",
+                "fr": "La première application de bureau : la treemap d'un dossier, l'arborescence à côté, et le détail de l'élément sélectionné à droite.",
+                "it": "La prima app desktop: la treemap di una cartella, l'albero accanto e i dettagli dell'elemento selezionato sulla destra.",
+                "tr": "İlk masaüstü uygulaması: bir klasörün treemap'i, yanında ağaç ve sağda seçili girdinin ayrıntıları."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Öffne einen neuen Scan, einen gespeicherten Snapshot oder einen Snapshot direkt von einem Agenten auf einem Server oder NAS.",
+                "en": "Open a fresh scan, a stored snapshot, or a snapshot read straight off an agent running on a server or NAS.",
+                "fr": "Ouvrez une nouvelle analyse, un instantané enregistré, ou un instantané lu directement depuis un agent tournant sur un serveur ou un NAS.",
+                "it": "Apri una nuova scansione, uno snapshot salvato o uno snapshot letto direttamente da un agente in esecuzione su un server o NAS.",
+                "tr": "Yeni bir tarama, saklanmış bir anlık görüntü ya da bir sunucuda veya NAS'ta çalışan ajandan doğrudan okunan bir görüntü aç."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Verschiebe Einträge aus der App in den Papierkorb, hinter einer Bestätigung, die genau benennt, was verschwindet.",
+                "en": "Move entries to the Trash from inside the app, behind a confirmation that names exactly what leaves.",
+                "fr": "Déplacez des éléments vers la Corbeille depuis l'application, derrière une confirmation qui nomme exactement ce qui part.",
+                "it": "Sposta elementi nel Cestino dall'app, dietro una conferma che indica esattamente cosa verrà rimosso.",
+                "tr": "Girdileri uygulama içinden Çöp Kutusu'na taşı; onay ekranı tam olarak neyin gideceğini söylüyor."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "hub": {
+      "unreleased": [
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Das Laden eines großen Snapshots braucht weniger Speicher, dank der kompakteren Baumdarstellung im Scan-Kern.",
+            "en": "Loading a large snapshot uses less memory, following the smaller tree representation in the scanning core.",
+            "fr": "Le chargement d'un instantané volumineux consomme moins de mémoire, grâce à la représentation d'arbre plus compacte du moteur d'analyse.",
+            "it": "Il caricamento di uno snapshot grande consuma meno memoria, grazie alla rappresentazione dell'albero più compatta nel motore di scansione.",
+            "tr": "Büyük bir anlık görüntüyü yüklemek daha az bellek kullanıyor; tarama çekirdeğindeki küçülen ağaç gösterimi sayesinde."
+          }
+        }
+      ],
+      "releases": [
+        {
+          "version": "0.2.0",
+          "date": "2026-09-08",
+          "published": false,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Herunterladbare Binärdateien für Linux und macOS sowie Container-Images für amd64 und arm64.",
+                "en": "Downloadable binaries for Linux and macOS, and container images for both amd64 and arm64.",
+                "fr": "Des binaires téléchargeables pour Linux et macOS, et des images conteneur pour amd64 comme pour arm64.",
+                "it": "Binari scaricabili per Linux e macOS, e immagini container sia per amd64 sia per arm64.",
+                "tr": "Linux ve macOS için indirilebilir ikililer, ve hem amd64 hem arm64 için konteyner imajları."
+              }
+            }
+          ]
+        },
+        {
+          "version": "0.1.0",
+          "date": "2026-09-07",
+          "published": false,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Ein Flotten-Dashboard: jeder Agent und jedes Wurzelverzeichnis in einer Tabelle, sortiert danach, wem zuerst der Platz ausgeht.",
+                "en": "A fleet dashboard: every agent and every root in one table, ordered by which one runs out of room first.",
+                "fr": "Un tableau de bord de flotte : chaque agent et chaque racine dans un seul tableau, triés selon celui qui manquera de place en premier.",
+                "it": "Un pannello della flotta: ogni agente e ogni radice in un'unica tabella, ordinati per chi esaurirà lo spazio per primo.",
+                "tr": "Filo panosu: her ajan ve her kök tek tabloda, önce hangisinin yeri biteceğine göre sıralı."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Ein Wachstumstrend und eine Prognose, die klar sagt, wenn die Historie für eine Vorhersage nicht ausreicht.",
+                "en": "A growth trend and a forecast, which says plainly when there is not enough history to forecast anything.",
+                "fr": "Une tendance de croissance et une prévision, qui indique franchement quand l'historique est insuffisant pour prévoir quoi que ce soit.",
+                "it": "Un andamento di crescita e una previsione, che dichiara apertamente quando non c'è storico sufficiente per prevedere alcunché.",
+                "tr": "Büyüme eğilimi ve tahmin; tahmin yapmaya yetecek geçmiş yoksa bunu açıkça söylüyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Schwellenwert-Warnungen mit Abklingzeit, per Webhook zugestellt, dazu Agent-Tokens, die im Dashboard ausgestellt und widerrufen werden können.",
+                "en": "Threshold alerts with a cooldown, delivered by webhook, plus agent tokens that can be issued and revoked from the dashboard.",
+                "fr": "Des alertes de seuil avec temporisation, livrées par webhook, ainsi que des jetons d'agent délivrables et révocables depuis le tableau de bord.",
+                "it": "Avvisi di soglia con periodo di attesa, recapitati via webhook, più token per gli agenti emettibili e revocabili dal pannello.",
+                "tr": "Bekleme süreli eşik uyarıları, webhook ile iletiliyor; ayrıca panodan verilip iptal edilebilen ajan token'ları."
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

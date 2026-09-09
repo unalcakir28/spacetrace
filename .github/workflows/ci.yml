@@ -29,3 +29,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # CHANGELOG.md is generated, so it can silently fall behind its source.
+      # `diff` rather than regenerate-and-commit: a bot commit racing a human
+      # push is a worse failure than a red build with an obvious fix.
+      #
+      # Only the cli component; this repo does not hold the other two
+      # CHANGELOG.md files. Desktop and hub check their own, in their own CI.
+      - name: CHANGELOG.md is current
+        run: |
+          cargo run -q -p spacetrace-changelog -- markdown --component cli > /tmp/CHANGELOG.md
+          diff -u CHANGELOG.md /tmp/CHANGELOG.md || {
+            echo "::error::CHANGELOG.md is stale. Run: cargo run -p spacetrace-changelog -- markdown --component cli > CHANGELOG.md"
+            exit 1
+          }

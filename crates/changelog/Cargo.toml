@@ -1,0 +1,19 @@
+[package]
+name = "spacetrace-changelog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The changelog for all three spacetrace components, in five languages."
+
+# The generator is a repo tool, not something a release ships. Keeping it in
+# the workspace is what puts it under fmt, clippy and `cargo test`; the release
+# workflow names its binaries explicitly, so this one never leaves the machine.
+[[bin]]
+name = "spacetrace-changelog"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

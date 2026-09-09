@@ -120,7 +120,20 @@ GitHub alan adını doğrulayamıyor ve Let's Encrypt sertifikasını üretemiyo
 
 ## Kararlı sürüm kesmek
 
-Üç depoda da aynı: sürümü yükselt, etiketle, push et.
+Her sürümde önce changelog, sonra sürüm numarası, sonra etiket.
+
+**1. Changelog'u kapat.** `promote`, o bileşenin `unreleased` girdilerini yeni
+bir sürüme taşır ve `changelog.json`'ı yeniden yazar. Boş bir `unreleased`
+reddedilir: notu hiçbir şey söylemeyen bir sürüm, hiç kesilmemiş bir sürümden
+kötüdür — okuyucu notların mı eksik olduğunu yoksa sürümün mü boş geçtiğini
+ayırt edemez.
+
+```bash
+cargo run -p spacetrace-changelog -- promote --component cli --version 0.2.0
+cargo run -p spacetrace-changelog -- markdown --component cli > CHANGELOG.md
+```
+
+**2. Sürüm numarasını yükselt ve etiketle.**
 
 ```bash
 # CLI + ajan (bu depo): Cargo.toml içindeki workspace.package.version
@@ -132,6 +145,17 @@ git tag v0.2.0 && git push origin v0.2.0
 # hub: Cargo.toml
 git tag v0.2.0 && git push origin v0.2.0
 ```
+
+**Masaüstü ve hub için sıra bozulamaz.** Girdileri bu depoda duruyor (K11), ve
+ikili changelog'u kendi `Cargo.lock`'unun pinlediği çekirdek sürümünden gömüyor:
+
+1. girdiyi burada commit'le ve push et
+2. diğer depoda `Cargo.lock`'taki çekirdek pin'ini ilerlet
+3. orada etiketle
+
+İkinci adım atlanırsa uygulama, kendi yayın notlarından eski bir changelog
+gömerek çıkar — kullanıcı "Yenilikler" penceresini açtığında az önce kurduğu
+sürümü orada bulamaz.
 
 Etiket `v*` olduğu sürece iş akışı kararlı kanala yayınlıyor. Masaüstü ve hub
 etiketleri bu depoda `desktop-v0.2.0` / `hub-v0.2.0` olarak görünür — aynı isim
