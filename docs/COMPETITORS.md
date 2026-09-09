@@ -116,6 +116,26 @@ yaşıyor).
 Ölçülen 276–437 B/girdi, yani hedefin **11–17 katı**. 10M dosyaya ekstrapole:
 **~2,8 GB tepe bellek.**
 
+**Düzeltme (9 Eylül 2026):** o hedef bizim alan kümemizle **ulaşılabilir değil**
+ve karşılaştırma elmayla armut — ncdu 2 düğüm başına `own_size`, `own_alloc`,
+`files`, `dirs` tutmuyor, biz tutuyoruz. Faz faz RSS probuyla alınan dağılım
+`[ölçüm]`:
+
+| Kalem | B/girdi |
+|-------|---------|
+| `RawEntry` ara ağacı (yürüyüş fazı) | 88 |
+| arena `Node` | 104 |
+| ad `String`'leri | ~32 |
+| parçalanma + malloc başlıkları | ~46 |
+| taban | — |
+| **toplam** | **290** |
+
+Yürüyüş bittiğinde RSS 77 MB, flatten bittiğinde 119 MB: **ara ağaç ile arena
+aynı anda yaşıyor** ve serbest bırakılan `RawEntry` belleği işletim sistemine
+geri dönmüyor. Yani 290'ın 192'si çift depolama, asıl iş orada. En agresif alan
+daraltmasıyla bile taban `Node` 72 B + ad ~21 B = **~93 B/girdi**. Gerçekçi
+hedef bu yüzden **dua-cli'nin 64 B'ı** mertebesi, ncdu'nun 25 B'ı değil.
+
 Karşılaştırma noktaları:
 
 | Araç | Düğüm/girdi başına | Kaynak |

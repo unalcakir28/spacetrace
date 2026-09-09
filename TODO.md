@@ -210,11 +210,48 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
 ### B. Hız — ölçülmüş açıklar
 
-- [ ] **B1 Bellek: `Node` 104 B + düğüm başına `String` → paylaşılan ad arenası.**
-      Adları tek `Vec<u8>`'de tut, düğümde `(offset: u32, len: u16)` sakla.
-      Kazanç iki katmanlı: ~72 bayt **ve** düğüm başına bir `malloc`ın tamamen
-      kalkması. Şema sürümü artar → masaüstü ve hub koordinasyonu gerekir.
-      *Ölçüm:* 276–437 B/girdi (hedef ~25 B); 10M dosya → ~2,8 GB.
+- [ ] **B1 Bellek** — *(9 Eylül 2026'da ölçüldü ve parçalarına ayrıldı; kısmi
+      düzeltme yapıldı, asıl iş açık)*
+
+      **Ölçülen dağılım** (`/Applications`, 412.232 girdi, tepe RSS 119 MB =
+      **290 B/girdi**), faz faz RSS probuyla:
+
+      | Kalem | MB | B/girdi |
+      |---|---|---|
+      | taban (ikili + çalışma zamanı) | 8 | — |
+      | `RawEntry` ara ağacı (yürüyüş fazı) | 36,3 | 88 |
+      | ad `String`'leri | ~13,2 | ~32 |
+      | parçalanma, malloc başlıkları, geçici `PathBuf`'lar | ~19 | ~46 |
+      | arena (`Node` 104 B) | 42,9 | 104 |
+
+      **Kritik gözlem:** yürüyüş bittiğinde 77 MB, flatten bittiğinde 119 MB.
+      Yani `RawEntry` ağacı ile arena **aynı anda yaşıyor** ve `RawEntry`
+      serbest bırakılsa da işletim sistemine geri verilmiyor. 290 B/girdinin
+      192'si bu **çift depolama**.
+
+      - [x] **Arena kapasitesini önceden ayır.** Girdi sayısı flatten anında
+            zaten tam biliniyor (`progress.files + dirs`). Öncesinde 1024'ten
+            ikiye katlanarak 524.288'e çıkıyordu. Ölçülen kazanç 298 → 290 B
+            (%3) — tahmin ettiğimden çok azdı, çünkü tepe flatten'da değil
+            yürüyüşte oluşuyor.
+      - [ ] **Paylaşılan ad arenası.** Adları tek `Vec<u8>`'de tut, düğümde
+            `(offset: u32, len: u8)`. Gerçek ad baytı toplamı yalnızca
+            **8,6 MB** (ortalama 20,9 B, en uzun 81) ama `String` olarak
+            ~13,2 MB + düğüm başına 24 B gövde + malloc başlığı tutuyor.
+            **`Node.name` alanı kalkar → masaüstü deposunda 5 çağrı yeri
+            derleme hatası verir** (sessiz kırılma değil).
+      - [ ] **Alan daraltma:** `nlink`, `files`, `dirs` `u64` → `u32`,
+            `mtime` `i64` → `u32`. `Node` 104 → **72 B**.
+      - [ ] **Çift depolamayı kaldır** — asıl kazanç burada (192 B/girdi) ve en
+            zor iş. Yürüyüş DFS üretiyor, arena BFS istiyor (değişmez #2), o
+            yüzden bir ara yapı kaçınılmaz görünüyor.
+
+      **Hedef düzeltmesi:** RESEARCH.md'deki **~25 B/dosya** hedefi bizim alan
+      kümemizle **ulaşılabilir değil** ve karşılaştırma elmayla armut. ncdu 2
+      düğüm başına `own_size`/`own_alloc`/`files`/`dirs` tutmuyor. Bizim
+      taban aritmetiğimiz: en agresif daraltmayla `Node` 72 B + ad ~21 B =
+      **~93 B/girdi**, artı çift depolama. Gerçekçi hedef **dua-cli'nin 64 B
+      arena düğümü** mertebesi, 25 değil.
       *Rakip:* dua-cli 64 B arena düğümü + paylaşılan ad deposu, RSS %49 aşağı;
       ncdu 2 dosyada 25 B, dizinde 56 B.
 - [ ] **B2 Thread sayısı ayarı** — 16 thread'te 8'e göre **gerileme ölçüldü**

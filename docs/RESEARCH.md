@@ -114,6 +114,9 @@ mertebesi: **~25 B/dosya** (3.8M dosya = 162 MB).
 
 **Ölçüm (9 Eylül 2026), iki taraf da hedefin dışında:** bellekte gerçek tepe
 **276–437 B/girdi**, yani hedefin 11–17 katı (10M dosyaya ekstrapole ~2,8 GB).
+**Ama ~25 B hedefi de yanlış konmuş:** ncdu 2 düğüm başına `own_size`,
+`own_alloc`, `files`, `dirs` tutmuyor, biz tutuyoruz — en agresif daraltmayla
+taban ~93 B/girdi. Gerçekçi hedef dua-cli'nin **64 B**'ı.
 Paralellik tarafı tutuyor — 1 → 8 thread arası **5.2×** — ama **16 thread'te
 gerileme var**, yani "HDD/ağda 1–2 thread" kuralının yanına "SSD'de de çekirdek
 sayısı kadar değil" yazmak gerekiyor. Ayrıntı ve yöntem
