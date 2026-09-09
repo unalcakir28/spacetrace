@@ -16,9 +16,8 @@
 //!   the better oracle here anyway, because it shares no code with the parallel
 //!   walk or the reverse-pass aggregation.
 //!
-//! Windows ships no `du`. Its counterpart is a construction-based test that
-//! arrives with the native metadata backend, since there is nothing correct to
-//! compare against until `alloc` stops being the logical size there.
+//! Windows ships no `du`, so its counterpart is construction-based instead:
+//! see `windows_metadata.rs`.
 
 #![cfg(unix)]
 
@@ -191,13 +190,36 @@ fn dedupe_charges_a_hardlinked_inode_once() {
 
     assert_eq!(stats.hardlinks_deduped, 1, "linked.dat has two names");
 
-    // The second name stays in the tree — it is a real directory entry — but it
-    // contributes nothing, which is what keeps parent totals honest.
-    let second = tree
+    // *Which* of the two names carries the bytes is deliberately unspecified.
+    // The walk is parallel, so whichever thread claims the inode first wins,
+    // and that genuinely differs by platform: macOS charged the copy at the
+    // root, Linux the one under `nested/`. The invariant is "once", not "the
+    // first path", so the assertion is on the pair.
+    //
+    // Both names stay listed either way — they are real directory entries —
+    // and exactly one of them contributes, which is what keeps every parent
+    // total honest no matter which side won.
+    let one = tree.find("linked.dat").expect("the first name is listed");
+    let other = tree
         .find("nested/linked-again.dat")
-        .expect("the second name is still listed");
-    assert_eq!(tree.node(second).size, 0);
-    assert_eq!(tree.node(second).alloc, 0);
+        .expect("the second name is listed");
+
+    let sizes = [tree.node(one).size, tree.node(other).size];
+    let allocs = [tree.node(one).alloc, tree.node(other).alloc];
+
+    assert!(
+        sizes.contains(&0),
+        "one of the two names must contribute nothing: {sizes:?}"
+    );
+    assert_eq!(
+        sizes[0] + sizes[1],
+        3000,
+        "and together they must add up to exactly one copy"
+    );
+    assert!(
+        allocs.contains(&0),
+        "the same must hold for alloc: {allocs:?}"
+    );
 }
 
 #[test]

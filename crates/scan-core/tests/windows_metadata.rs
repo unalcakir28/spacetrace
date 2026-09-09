@@ -105,13 +105,25 @@ fn hardlinked_files_are_counted_once() {
         "the second name must be recognised as the same file"
     );
 
-    // The second name stays listed — it is a real directory entry — but charges
-    // nothing, which is what keeps a parent's total honest (invariant #3).
-    let second = tree
+    // *Which* name carries the bytes is unspecified: the walk is parallel, so
+    // whichever thread claims the inode first wins. Both names stay listed —
+    // they are real directory entries — and exactly one contributes, which is
+    // what keeps a parent's total honest (invariant #3).
+    let one = tree.find("original.dat").expect("the first name is listed");
+    let other = tree
         .find("sub/second-name.dat")
-        .expect("the second name is still listed");
-    assert_eq!(tree.node(second).size, 0);
-    assert_eq!(tree.node(second).alloc, 0);
+        .expect("the second name is listed");
+
+    let sizes = [tree.node(one).size, tree.node(other).size];
+    assert!(
+        sizes.contains(&0),
+        "one of the two names must contribute nothing: {sizes:?}"
+    );
+    assert_eq!(
+        sizes[0] + sizes[1],
+        4096,
+        "and together they must add up to exactly one copy"
+    );
 }
 
 /// The same tree with deduplication off must charge the file twice. Without
@@ -126,10 +138,18 @@ fn without_dedupe_a_hardlink_is_charged_twice() {
 
     let deduped_tree = run(dir.path(), ScanOptions::default()).0;
     let deduped = deduped_tree.total_alloc();
-    let one_copy = deduped_tree
-        .find("original.dat")
-        .map(|id| deduped_tree.node(id).alloc)
-        .expect("original.dat was scanned");
+    // Summed rather than read off one name, because which of the two the
+    // parallel walk charges is unspecified — the other one is zero, so the sum
+    // is exactly one copy either way.
+    let one_copy: u64 = ["original.dat", "second-name.dat"]
+        .iter()
+        .map(|name| {
+            deduped_tree
+                .find(name)
+                .map(|id| deduped_tree.node(id).alloc)
+                .expect("both names are listed")
+        })
+        .sum();
 
     let opts = ScanOptions {
         dedupe_hardlinks: false,

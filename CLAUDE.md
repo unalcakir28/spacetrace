@@ -52,8 +52,12 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
    düzeni olduğu gibi saklıyor — sıra bozulursa ikisi de sessizce yanlış sonuç
    verir.
 3. **Sembolik bağlantılar izlenmez** (kendi boyutlarıyla sayılır), **sabit
-   bağlantılar bir kez sayılır** (`(dev, ino)`; ikinci kopya ağaçta görünür ama
-   0 bayt katkı yapar).
+   bağlantılar bir kez sayılır** (`(dev, ino)`; her iki ad da ağaçta görünür,
+   biri 0 bayt katkı yapar). **Hangi adın baytları taşıdığı belirsizdir** —
+   yürüyüş paralel, inode'u önce talep eden thread kazanıyor ve bu platformdan
+   platforma değişiyor (macOS'ta kökteki kopya, Linux'ta içteki kopya sayıldı;
+   CI'da yakalandı). Garanti "bir kez", "ilk yol" değil — test yazarken
+   çifte iddia et, tek ada değil.
 4. **`Tree::remove_subtree` düğümü sıfırlar, listeden çıkarmaz.** Arena
    düzeninin anlamı budur: ortadan bir girdi kesmek sonrasındaki her düğümü
    yeniden numaralandırır ve elinde kimlik tutan her istemciyi (masaüstü) her

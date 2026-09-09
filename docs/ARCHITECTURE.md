@@ -71,9 +71,12 @@ Decisions:
   link; the link is counted at its own size. This both eliminates cycle risk
   and prevents a tree from being counted twice.
 - **Hardlinks are counted once.** For files with `nlink > 1`, the
-  `(dev, ino)` pair is kept in a shared set; a copy seen a second time stays
-  visible in the tree but contributes 0 bytes. This can be disabled with
-  `--no-dedupe`.
+  `(dev, ino)` pair is kept in a shared set; a copy seen again stays visible in
+  the tree but contributes 0 bytes. This can be disabled with `--no-dedupe`.
+  *Which* name keeps the bytes is unspecified: the walk is parallel, so the
+  thread that claims the inode first wins, and that differs between platforms.
+  The guarantee is "once", not "the first path" — a test that asserts on one
+  of the two names will pass on one OS and fail on another.
 - **Errors are not swallowed.** Every unreadable path is counted, and the
   first 64 are stored with their path and error message. A permission error
   does not stop the scan.
