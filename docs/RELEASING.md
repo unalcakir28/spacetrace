@@ -168,6 +168,28 @@ yayınlama adımı atlanır — `publish` kutusunu işaretlemezsen.
 push'unu atladığı durumun çıkış yolu (aşağıya bak). Etiket hedef depoda
 default branch'in ucunda oluşturulur.
 
+### "Latest" CLI'nındır, sırayla belirlenmez
+
+GitHub'ın `releases/latest` uç noktası **en son yayınlanan** sürümü döndürüyor,
+bileşen ayırmadan. Üç bileşenin indirmeleri bu depoda olduğu için bu, bir
+masaüstü ya da hub sürümü kesmenin CLI'ın yerini alması demek.
+
+Zararı somut: `spacetrace update` ve ajan, **v0.4.0'a kadarki sürümlerde** o uç
+noktayı okuyor, ve `desktop-v0.4.0` gibi bir etiket onların ayrıştırıcısında
+hiçbir sürüme karşılık gelmiyor — güncelleme kontrolü sessizce kapanıyor ve
+öyle kalıyor. 9 Eylül 2026'da `hub-v0.3.0` bu yeri alınca ölçüldü.
+
+O yüzden masaüstü ve hub iş akışları kararlı sürümü **`gh release create
+--latest=false`** ile yayınlıyor. Yeni bir bileşen deposu eklenirse aynısını
+yapması gerekiyor. Bir şekilde yer kaptırılırsa geri alma tek komut:
+
+```bash
+gh release edit <cli etiketi> --repo unalcakir28/spacetrace --latest
+```
+
+v0.4.1 ve sonrası etiket önekine bakıyor (`is_ours`), yani bu tuzaktan
+etkilenmiyor — kural, hâlâ eski ikiliyi çalıştıranlar için duruyor.
+
 ## Hangi commit neyi tetikliyor
 
 Beş hedefli bir derleme bedava değil, bu yüzden yalnızca kodu ilgilendiren
