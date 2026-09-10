@@ -262,8 +262,15 @@ kimliği sabitliyor. Ölçüldü: içerikleri farklı iki paket (cdhash `53007fd
 `de0072e5…`) tek bir requirement paylaşıyor:
 
 ```text
-identifier "com.spacetrace.desktop" and certificate leaf = H"940f909c…"
+identifier "com.spacetrace.desktop" and certificate root = H"940f909c…"
 ```
+
+`root`, `leaf` değil: codesign zinciri nasıl görüyorsa onu yazıyor ve sertifika
+derleme makinesinde güvenilir kök olduğu için `root` çıkıyor. Aynı sertifika
+güvenilmezken `leaf` yazıyordu — ikisi de derlemeler arası sabit, ama **farklı
+dizeler**, ve TCC requirement'ı yazıldığı gibi karşılaştırıyor. Yani güven
+adımını kaldıran bir derleme geçerli bir imza üretir ve yine de herkesin iznini
+düşürür. Sürüm iş akışı bu yüzden tam olarak `root` biçimini doğruluyor.
 
 Kurulumdaki üç tuzak, üçü de yaşandı:
 
