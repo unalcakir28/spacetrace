@@ -22,6 +22,26 @@
             "it": "`--threads N` sceglie con quanta ampiezza gira una scansione, e l'agente accetta la stessa impostazione per ogni radice. Non esiste un numero migliore: l'ottimo si sposta con la dimensione dell'albero, e chi conosce il proprio disco sceglierà meglio di qualsiasi valore predefinito.",
             "tr": "`--threads N` bir taramanın kaç thread'le koşacağını seçiyor, ajanda da kök başına aynı ayar var. En iyi bir sayı yok: optimum ağacın büyüklüğüyle kayıyor, ve diskini bilen biri gömülü hiçbir varsayılandan daha iyi seçer."
           }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Wenn ein Scan nicht mehr vorankommt, sagt die Fortschrittszeile das jetzt und nennt das Verzeichnis, auf das gewartet wird — statt weiter „scanning…“ zu behaupten. Eine Netzfreigabe, die aufgehört hat zu antworten, blockiert im Kernel und kein Zeitlimit in diesem Programm kann das aufheben; wer aber weiß, worauf gewartet wird, kann entscheiden, ob er wartet oder abbricht.",
+            "en": "When a scan stops making progress, the progress line now says so and names the directory it is waiting on, instead of going on claiming to be scanning. A network share that has stopped answering blocks in the kernel and no timeout in this program can lift that — but knowing what it is waiting on is what lets you decide whether to wait or quit.",
+            "fr": "Quand une analyse n'avance plus, la ligne de progression le dit et nomme le répertoire attendu, au lieu de continuer à prétendre analyser. Un partage réseau qui ne répond plus bloque dans le noyau et aucun délai d'attente dans ce programme ne peut y remédier — mais savoir ce qui est attendu permet de choisir entre patienter et abandonner.",
+            "it": "Quando una scansione non avanza più, la riga di avanzamento lo dice e indica la directory su cui è in attesa, invece di continuare a sostenere di stare scansionando. Una condivisione di rete che ha smesso di rispondere si blocca nel kernel e nessun timeout in questo programma può sbloccarla — ma sapere su cosa è in attesa è ciò che permette di decidere se aspettare o interrompere.",
+            "tr": "Bir tarama ilerlemeyi bıraktığında ilerleme satırı artık bunu söylüyor ve beklediği dizini adıyla veriyor; \"scanning…\" demeye devam etmiyor. Cevap vermeyi bırakmış bir ağ paylaşımı çekirdekte bloke oluyor ve bu programdaki hiçbir zaman aşımı onu kaldıramaz — ama neyi beklediğini bilmek, beklemekle vazgeçmek arasında seçim yapmanızı sağlayan şey."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Die Fortschrittsanzeige stand am Ende jedes Scans scheinbar still. Nach dem Durchlauf sucht ein weiterer Schritt nach Copy-on-Write-Klonen, und der bewegte keinen einzigen Zähler — auf `~/github` waren das 1193 von 1989 Millisekunden. Diese Phase heißt jetzt so und zählt, was sie prüft.",
+            "en": "The progress display appeared to freeze near the end of every scan. After the walk there is a second pass looking for copy-on-write clones, and it moved no counter at all — on `~/github` that was 1193 of 1989 milliseconds. That phase now says what it is and counts what it checks.",
+            "fr": "L'affichage de progression semblait se figer vers la fin de chaque analyse. Après le parcours vient une seconde passe qui recherche les clones en copie sur écriture, et elle ne faisait bouger aucun compteur — sur `~/github`, 1193 des 1989 millisecondes. Cette phase s'annonce désormais et compte ce qu'elle vérifie.",
+            "it": "L'indicatore di avanzamento sembrava bloccarsi verso la fine di ogni scansione. Dopo la scansione c'è un secondo passaggio che cerca i cloni copy-on-write, e non muoveva alcun contatore: su `~/github` erano 1193 dei 1989 millisecondi. Ora quella fase si dichiara e conta ciò che controlla.",
+            "tr": "İlerleme göstergesi her taramanın sonuna doğru donmuş görünüyordu. Yürüyüşten sonra kopyala-yazarken klonlarını arayan ikinci bir geçiş var ve hiçbir sayacı kımıldatmıyordu — `~/github`'da 1989 milisaniyenin 1193'ü. O aşama artık adını söylüyor ve denetlediğini sayıyor."
+          }
         }
       ],
       "releases": [

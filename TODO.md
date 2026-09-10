@@ -398,10 +398,42 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
 ### D. Sağlamlık
 
-- [ ] **D1 Yavaş/yanıt vermeyen mount'ta timeout ve devam** — 1 TB USB HDD veya
-      kopmuş NFS'te tarama takılırsa ne oluyor? Denenmedi.
+- [ ] **D1 Yavaş/yanıt vermeyen mount'ta timeout ve devam** — *yarısı yapıldı
+      (10 Eylül 2026): takılma artık görünür, atlanmıyor.*
       *Rakip:* DiskRaptor bu hatayı canlı yaşadı (issue #46: "1TB USB HDD'de
       30 saniye ilerleme yok") ve timeout/retry ekledi.
+
+      **Nerede takılıyor — kod okunarak bulundu.** `read_dir_parallel` her girdi
+      için `entry.metadata()` çağırıyor, yani bir `lstat`, ve bu `dev`
+      karşılaştırmasından **önce**. Üç sonucu var:
+
+      1. **`--one-file-system` bu durumda korumuyor.** `meta.dev == root_dev`
+         kontrolü, hang'e sebep olan `lstat`'ın verisini kullanıyor; ölü bir
+         mount'a girmemek için önce ona dokunmak gerekiyor.
+      2. **Bir girdi, bulunduğu dizinin tamamını kilitliyor.** Dizin okuma
+         bilinçli olarak tek thread'te, yani ölü mount'tan sonraki kardeşler
+         hiç listelenmiyor.
+      3. **İptal takılmayı çözmüyor.** `is_cancelled()` yalnızca `read_dir`'den
+         önce okunuyor (bilinçli: girdi başına atomik okuma en sıcak döngüye
+         konmayacak), yani `entry.metadata()`'da asılı bir tarama durdurulamıyor.
+
+      **Yapılan:** `ScanProgress::reading_now()` o an listelenen dizinleri
+      veriyor (işçi başına bir tane, ata dizinler değil), `Phase` yürüyüş ile
+      sonrasını ayırıyor, ve clone sondasının kendi sayacı var. CLI sayaçlar 10
+      saniye kımıldamazsa "no progress for Ns — waiting on <yol>" yazıyor.
+      Ölçülebilir maliyeti yok (412k girdide −24 ms, gürültü içinde).
+
+      **Yapılamayan ve nedeni:** zaman aşımıyla atlamak. Değişmez 5 kısmi ağaç
+      döndürmeyi yasaklıyor, yani tek geçerli çözüm asılan mount'u *okunamayan
+      yol* saymak (değişmez 7) — o da mount sınırını **dokunmadan önce**
+      bilmeyi, yani mount tablosunu okumayı gerektiriyor: macOS'ta
+      `getmntinfo`, yani `scan-core`'a `libc`. Doğrulaması da gerçek bir asılı
+      mount istiyor; bu makinede yok (macFUSE macOS 26 için fazla eski,
+      autofs `/net` kapalı). Gerçek bir NAS ya da HDD elde olunca açılacak.
+
+      **Ajanda ve masaüstünde henüz yok.** Ajanın `/status`'u ve masaüstünün
+      ilerleme yükü `reading_now()`/`Phase` taşımıyor; sunucuda asılan bir
+      tarama hâlâ sessiz.
 - [ ] **D2 Ajanda yerleşik TLS** — şu an ters vekil öneriliyor (Faz 2'de de var).
 - [ ] **D3 Ajanda hız sınırlama** (Faz 2'de de var).
 - [ ] **D4 10M+ dosyada bellek profili** — kısmen ölçüldü (412k girdide 122 MB,

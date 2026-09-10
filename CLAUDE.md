@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 242 test, hepsi geçmeli
+cargo test --workspace                   # 256 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -93,7 +93,13 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
    sayıyla aynı şeyi söylemek durumunda. Masaüstü varsayılanı `OnDisk`, CLI
    `Logical` (çağrı yerlerinde açıkça yazılı).
 7. **Hatalar yutulmaz.** Okunamayan yol sayılır ve örneklenir; tarama durmaz.
-8. **Ajan hiçbir şeyi silmez.** Sunucuya kurulacak yazılımın güven kazanması için
+8. **Uzun süren her aşamanın kımıldayan bir sayacı olmalı.** İzleyen taraf
+   "takıldı mı" sorusunu yalnızca sayaçlara bakarak cevaplıyor (CLI 10 saniye
+   hareketsizlikte uyarıyor), yani sayacı olmayan bir aşama sağlıklı çalışırken
+   asılmış görünür. Clone sondası tam bunu yapıyordu: `~/github`'da 1989 ms'lik
+   taramanın 1193 ms'i, tek bir sayaç kımıldamadan (ölçüldü, 10 Eylül 2026).
+   `clones_probed` bu yüzden var; yeni bir aşama eklerken aynısını yap.
+9. **Ajan hiçbir şeyi silmez.** Sunucuya kurulacak yazılımın güven kazanması için
    verilmiş bilinçli bir karar, eksik özellik değil.
 
 ## Kod ve depo alışkanlıkları

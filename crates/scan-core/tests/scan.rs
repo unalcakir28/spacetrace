@@ -1,7 +1,7 @@
 use std::fs;
 use std::sync::Arc;
 
-use spacetrace_scan_core::{scan, EntryKind, ScanOptions, ScanProgress, SizeBasis};
+use spacetrace_scan_core::{scan, EntryKind, Phase, ScanOptions, ScanProgress, SizeBasis};
 
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -773,4 +773,101 @@ fn a_hardlink_is_counted_once_at_every_width() {
             .collect();
         assert_eq!(charged.iter().filter(|s| **s == 0).count(), 1);
     }
+}
+
+/// Every path that goes into the in-flight list has to come out, on every way
+/// the listing can end — otherwise a finished scan reports itself as stuck on
+/// a directory it read minutes ago.
+#[test]
+fn nothing_is_left_in_flight_after_a_scan() {
+    let dir = fixture();
+    let progress = Arc::new(ScanProgress::default());
+    let (tree, _) = scan(dir.path(), ScanOptions::default(), Arc::clone(&progress)).unwrap();
+    assert!(tree.len() > 1);
+    assert!(
+        progress.reading_now().is_empty(),
+        "still listed as reading: {:?}",
+        progress.reading_now()
+    );
+}
+
+/// The unreadable-directory path returns early, and an early return is exactly
+/// where a hand-written "remove it afterwards" would have been forgotten.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_directory_is_not_left_in_flight() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("hidden"), b"x").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let progress = Arc::new(ScanProgress::default());
+    let (_, stats) = scan(dir.path(), ScanOptions::default(), Arc::clone(&progress)).unwrap();
+
+    // Restore before the assertions so a failure still leaves a deletable dir.
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(stats.errors > 0, "the locked directory should have counted");
+    assert!(
+        progress.reading_now().is_empty(),
+        "an unreadable directory stayed in the in-flight list: {:?}",
+        progress.reading_now()
+    );
+}
+
+/// A cancelled scan is the other early return.
+#[test]
+fn a_cancelled_scan_leaves_nothing_in_flight() {
+    let dir = fixture();
+    let progress = Arc::new(ScanProgress::default());
+    progress.cancel();
+    let refused = scan(dir.path(), ScanOptions::default(), Arc::clone(&progress));
+    assert!(refused.is_err());
+    assert!(progress.reading_now().is_empty());
+}
+
+/// The clone probe is the one phase that moves no other counter, so its own
+/// counter is what tells a watcher "still working" from "stuck". If it stops
+/// being incremented, a healthy scan starts looking hung — which is why this
+/// asserts the counter moved rather than only that the dedupe worked.
+#[test]
+fn the_clone_probe_reports_what_it_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    // Same size and over the 64 KiB floor, so both are candidates. Whether
+    // they turn out to be clones is beside the point here.
+    for name in ["one.bin", "two.bin"] {
+        fs::write(dir.path().join(name), vec![b'z'; 128 * 1024]).unwrap();
+    }
+
+    let progress = Arc::new(ScanProgress::default());
+    let opts = ScanOptions {
+        dedupe_clones: true,
+        ..ScanOptions::default()
+    };
+    scan(dir.path(), opts, Arc::clone(&progress)).unwrap();
+
+    assert!(
+        progress
+            .clones_probed
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 2,
+        "both candidates should have been counted, got {}",
+        progress
+            .clones_probed
+            .load(std::sync::atomic::Ordering::Relaxed)
+    );
+}
+
+/// A progress line that still says "scanning…" after the walk is finished is
+/// telling the reader something untrue, so the phase has to be marked.
+#[test]
+fn the_phase_moves_on_when_the_walk_is_done() {
+    let dir = fixture();
+    let progress = Arc::new(ScanProgress::default());
+    assert_eq!(progress.phase(), Phase::Walking, "before anything happens");
+    scan(dir.path(), ScanOptions::default(), Arc::clone(&progress)).unwrap();
+    assert_eq!(progress.phase(), Phase::Finishing);
 }

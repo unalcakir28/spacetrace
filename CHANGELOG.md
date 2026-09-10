@@ -15,10 +15,15 @@ because anyone can install them.
 ### Added
 
 - `--threads N` chooses how wide a scan runs, and the agent takes the same setting per root. There is no best number: the optimum moves with the size of the tree, and someone who knows their disk will choose better than any built-in default.
+- When a scan stops making progress, the progress line now says so and names the directory it is waiting on, instead of going on claiming to be scanning. A network share that has stopped answering blocks in the kernel and no timeout in this program can lift that — but knowing what it is waiting on is what lets you decide whether to wait or quit.
 
 ### Performance
 
 - Scans now use at most eight threads instead of one per core, which was faster on every directory tree measured — 39% on a small one, 11% on a large one. A walk is syscall-bound: past a point the threads queue in the kernel rather than work. `--threads N` overrides it.
+
+### Fixed
+
+- The progress display appeared to freeze near the end of every scan. After the walk there is a second pass looking for copy-on-write clones, and it moved no counter at all — on `~/github` that was 1193 of 1989 milliseconds. That phase now says what it is and counts what it checks.
 
 ## 0.5.0 — 2026-09-10
 

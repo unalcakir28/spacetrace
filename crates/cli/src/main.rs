@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use spacetrace_diff::{diff, ChangeKind, DiffOptions, DiffReport};
 use spacetrace_scan_core::{
-    scan, EntryKind, ScanOptions, ScanProgress, ScanStats, SizeBasis, Tree,
+    scan, EntryKind, Phase, ScanOptions, ScanProgress, ScanStats, SizeBasis, Tree,
 };
 use spacetrace_store::{export_ncdu, Integrity, ScanMeta, Store};
 
@@ -685,6 +685,86 @@ fn tree_source(path: &Path) -> String {
 }
 
 /// Run a scan, showing a live counter on stderr when it is a terminal.
+/// How long the counters may stand still before the progress line stops
+/// claiming to be scanning. Long enough not to nag a slow network share on its
+/// first directory, short enough to answer "is this thing stuck" before the
+/// reader gives up and kills it.
+const STALL_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Decides when the counters have stood still long enough to say so.
+///
+/// Split out of the ticker thread so the decision can be tested with a clock
+/// that is handed to it: a test that slept for the real interval would be
+/// betting on the scheduler, and this one runs in microseconds.
+struct StallWatch {
+    counters: (u64, u64, u64, u64),
+    /// When these counter values were **first** seen.
+    ///
+    /// First, not second: the counters stopped moving somewhere between the
+    /// two sightings, and the first one is the earliest moment we can show
+    /// they were already still. Recording the second instead loses a whole
+    /// polling interval and gets the reported wait wrong by that much — which
+    /// is how this was written the first time, and what the tests caught.
+    since: std::time::Instant,
+}
+
+impl StallWatch {
+    /// Starts counting from `now`, so a scan that produces nothing at all —
+    /// blocked on the root's own listing — is still reported.
+    fn new(now: std::time::Instant) -> Self {
+        StallWatch {
+            counters: (0, 0, 0, 0),
+            since: now,
+        }
+    }
+
+    /// How long the scan has been stalled, or `None` while it is moving or has
+    /// not yet been still for long enough.
+    fn observe(
+        &mut self,
+        counters: (u64, u64, u64, u64),
+        now: std::time::Instant,
+    ) -> Option<std::time::Duration> {
+        if counters != self.counters {
+            self.counters = counters;
+            self.since = now;
+            return None;
+        }
+        // `checked_duration_since`, not `-`: the caller passes the clock, and
+        // one handed an earlier instant should get "not stalled" rather than a
+        // panic.
+        let waited = now.checked_duration_since(self.since)?;
+        (waited >= STALL_AFTER).then_some(waited)
+    }
+}
+
+/// The paths a stalled scan is blocked on, as one short phrase.
+///
+/// Truncated from the left: the tail of a path says which share and which
+/// folder, and a line that wraps breaks the carriage-return redraw.
+fn waiting_on(paths: &[PathBuf]) -> String {
+    const ROOM: usize = 60;
+    let Some((first, rest)) = paths.split_first() else {
+        // The list is empty when the walk is blocked outside a listing —
+        // opening the root, for instance. Saying so is better than an empty
+        // sentence.
+        return "the filesystem".to_string();
+    };
+    let shown = first.display().to_string();
+    let shown = match shown
+        .char_indices()
+        .nth(shown.chars().count().saturating_sub(ROOM))
+    {
+        Some((cut, _)) if cut > 0 => format!("…{}", &shown[cut..]),
+        _ => shown,
+    };
+    if rest.is_empty() {
+        shown
+    } else {
+        format!("{shown} (+{} more)", rest.len())
+    }
+}
+
 fn scan_with_progress(
     path: &Path,
     opts: ScanOptions,
@@ -698,21 +778,59 @@ fn scan_with_progress(
         let done = Arc::clone(&done);
         Some(std::thread::spawn(move || {
             let mut stderr = std::io::stderr();
+            let mut stall = StallWatch::new(std::time::Instant::now());
+            let mut widest = 0;
             while !done.load(Ordering::Relaxed) {
                 std::thread::sleep(std::time::Duration::from_millis(120));
                 if done.load(Ordering::Relaxed) {
                     break;
                 }
-                let _ = write!(
-                    stderr,
-                    "\r  scanning… {} files, {} dirs, {}   ",
-                    fmt::count(progress.files.load(Ordering::Relaxed)),
-                    fmt::count(progress.dirs.load(Ordering::Relaxed)),
-                    fmt::size(progress.bytes.load(Ordering::Relaxed)),
+                // Every counter, including the one the phase after the walk
+                // moves. One rule — "nothing has moved" — only works if every
+                // long phase has something to move.
+                let now = (
+                    progress.files.load(Ordering::Relaxed),
+                    progress.dirs.load(Ordering::Relaxed),
+                    progress.bytes.load(Ordering::Relaxed),
+                    progress.clones_probed.load(Ordering::Relaxed),
                 );
+                // Detected here rather than timestamped in the scanner: this
+                // thread is already polling the counters, and a clock read per
+                // entry in the walk would cost something for a case that
+                // almost never happens.
+                let line = match stall.observe(now, std::time::Instant::now()) {
+                    // Not "scanning…" any more, because it is not. A mount
+                    // that stopped answering blocks the thread in the kernel
+                    // and no timeout in this process can lift it — so the one
+                    // useful thing is to say which path it is, and let the
+                    // reader decide whether to wait or to quit.
+                    Some(waited) => format!(
+                        "  no progress for {}s — waiting on {}",
+                        waited.as_secs(),
+                        waiting_on(&progress.reading_now())
+                    ),
+                    // The label follows the phase, because after the walk
+                    // "scanning…" is simply not true any more and the file
+                    // count has stopped for good.
+                    None => match progress.phase() {
+                        Phase::Walking => format!(
+                            "  scanning… {} files, {} dirs, {}",
+                            fmt::count(now.0),
+                            fmt::count(now.1),
+                            fmt::size(now.2),
+                        ),
+                        Phase::Finishing => format!(
+                            "  finishing… {} files, {} clone candidates checked",
+                            fmt::count(now.0),
+                            fmt::count(now.3),
+                        ),
+                    },
+                };
+                widest = widest.max(line.chars().count());
+                let _ = write!(stderr, "\r{line}   ");
                 let _ = stderr.flush();
             }
-            let _ = write!(stderr, "\r{:60}\r", "");
+            let _ = write!(stderr, "\r{:width$}\r", "", width = widest + 3);
             let _ = stderr.flush();
         }))
     } else {
@@ -853,4 +971,109 @@ fn largest_json(tree: &Tree, top: usize) -> Vec<serde_json::Value> {
         .into_iter()
         .map(|id| entry_json(tree, id))
         .collect()
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_moving_scan_is_never_stalled() {
+        let start = Instant::now();
+        let mut watch = StallWatch::new(start);
+        for step in 1..50u64 {
+            let later = start + Duration::from_secs(step * 60);
+            assert_eq!(
+                watch.observe((step, step, step, 0), later),
+                None,
+                "counters moved, so an hour of wall clock still is not a stall"
+            );
+        }
+    }
+
+    #[test]
+    fn standing_still_becomes_a_stall_only_after_the_grace_period() {
+        let start = Instant::now();
+        let mut watch = StallWatch::new(start);
+        assert_eq!(watch.observe((7, 3, 99, 0), start), None, "first sighting");
+        assert_eq!(
+            watch.observe(
+                (7, 3, 99, 0),
+                start + STALL_AFTER - Duration::from_millis(1)
+            ),
+            None,
+            "one millisecond short is not a stall"
+        );
+        assert_eq!(
+            watch.observe((7, 3, 99, 0), start + STALL_AFTER),
+            Some(STALL_AFTER),
+            "the boundary itself counts, or the message never appears"
+        );
+    }
+
+    /// The clock the stall was measured from has to be the moment the counters
+    /// stopped, not the moment anyone last looked.
+    #[test]
+    fn the_wait_is_measured_from_when_movement_stopped() {
+        let start = Instant::now();
+        let mut watch = StallWatch::new(start);
+        watch.observe((1, 1, 1, 0), start);
+        let waited = watch
+            .observe((1, 1, 1, 0), start + Duration::from_secs(90))
+            .expect("ninety seconds of nothing is a stall");
+        assert_eq!(waited, Duration::from_secs(90));
+    }
+
+    #[test]
+    fn movement_after_a_stall_clears_it() {
+        let start = Instant::now();
+        let mut watch = StallWatch::new(start);
+        watch.observe((1, 1, 1, 0), start);
+        assert!(watch.observe((1, 1, 1, 0), start + STALL_AFTER).is_some());
+        assert_eq!(
+            watch.observe((2, 1, 1, 0), start + STALL_AFTER + Duration::from_secs(1)),
+            None,
+            "one entry read is enough to say the scan is alive again"
+        );
+    }
+
+    #[test]
+    fn an_empty_in_flight_list_still_says_something() {
+        assert_eq!(waiting_on(&[]), "the filesystem");
+    }
+
+    #[test]
+    fn one_path_is_shown_whole_when_it_fits() {
+        let paths = [PathBuf::from("/Volumes/nas/photos")];
+        assert_eq!(waiting_on(&paths), "/Volumes/nas/photos");
+    }
+
+    /// The tail is the informative half — which share, which folder — so a long
+    /// path loses its head, not its name.
+    #[test]
+    fn a_long_path_keeps_its_tail() {
+        let deep = format!(
+            "/Volumes/nas/{}/target",
+            "very-long-directory-name/".repeat(6)
+        );
+        let shown = waiting_on(&[PathBuf::from(&deep)]);
+        assert!(shown.starts_with('…'), "{shown}");
+        assert!(shown.ends_with("/target"), "{shown}");
+        assert!(
+            shown.chars().count() <= 61,
+            "the line must not wrap: {} chars",
+            shown.chars().count()
+        );
+    }
+
+    #[test]
+    fn several_paths_are_counted_rather_than_listed() {
+        let paths = [
+            PathBuf::from("/Volumes/a"),
+            PathBuf::from("/Volumes/b"),
+            PathBuf::from("/Volumes/c"),
+        ];
+        assert_eq!(waiting_on(&paths), "/Volumes/a (+2 more)");
+    }
 }

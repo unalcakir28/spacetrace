@@ -1,6 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
@@ -50,6 +50,29 @@ impl Default for ScanOptions {
     }
 }
 
+/// The stages of a scan, in order.
+///
+/// Only two do enough work to be worth naming, and the reason to name them is
+/// honesty in a progress line: after the walk finishes, "scanning…" is no
+/// longer true and the file counter has stopped for good.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Reading directories.
+    Walking,
+    /// Walk done; deduplicating copy-on-write clones and building the tree.
+    Finishing,
+}
+
+impl Phase {
+    fn from_u8(value: u8) -> Phase {
+        match value {
+            1 => Phase::Finishing,
+            // Anything else is the initial zero, which is where a scan starts.
+            _ => Phase::Walking,
+        }
+    }
+}
+
 /// Live counters a UI can poll while a scan runs, and the switch that stops it.
 #[derive(Debug, Default)]
 pub struct ScanProgress {
@@ -57,8 +80,31 @@ pub struct ScanProgress {
     pub dirs: AtomicU64,
     pub bytes: AtomicU64,
     pub errors: AtomicU64,
+    /// Clone candidates probed, during the phase after the walk.
+    ///
+    /// Its own counter because that phase moves none of the others, and a
+    /// caller watching for a stall has to be able to tell "still working" from
+    /// "stuck". Measured on `~/github`: probing was 1193 ms of a 1989 ms scan,
+    /// so a phase with no counter would look frozen for most of the run — and
+    /// on a disk ten times the size it would trip any stall warning.
+    pub clones_probed: AtomicU64,
+    /// Which phase the scan is in, for a caller that wants to say so. Written
+    /// once per phase; read as [`ScanProgress::phase`].
+    phase: AtomicU8,
     /// Set by [`ScanProgress::cancel`] and read once per directory.
     cancelled: AtomicBool,
+    /// Directories whose listing has started and not finished.
+    ///
+    /// This exists for one failure: a mount that stops answering. The walk
+    /// then blocks inside `read_dir` or inside the `metadata` of one entry,
+    /// every counter freezes, and without this there is nothing to tell the
+    /// difference between "stuck" and "slow" — let alone *where*. A caller
+    /// that sees the counters stand still can read this and name the path.
+    ///
+    /// Scoped to the listing loop, not to the recursion, so it holds one path
+    /// per worker rather than every ancestor: the blocked directory is the
+    /// leaf, and a list with its ancestors in it buries the answer.
+    reading: Mutex<HashSet<PathBuf>>,
 }
 
 impl ScanProgress {
@@ -79,6 +125,64 @@ impl ScanProgress {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
+    }
+
+    /// What the scan is doing now.
+    pub fn phase(&self) -> Phase {
+        Phase::from_u8(self.phase.load(Ordering::Relaxed))
+    }
+
+    fn enter_phase(&self, phase: Phase) {
+        self.phase.store(phase as u8, Ordering::Relaxed);
+    }
+
+    /// Directories being listed right now, in no particular order.
+    ///
+    /// Read this when the counters have stopped moving. A hung mount leaves
+    /// its directory here for as long as the kernel keeps the thread, so what
+    /// comes back is the answer to "what is it waiting on".
+    pub fn reading_now(&self) -> Vec<PathBuf> {
+        let guard = self
+            .reading
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut paths: Vec<PathBuf> = guard.iter().cloned().collect();
+        paths.sort();
+        paths
+    }
+
+    /// Mark `dir` as being listed until the returned guard is dropped.
+    ///
+    /// A guard rather than a pair of calls because the listing loop returns
+    /// early on cancellation and on an unreadable directory, and a path left
+    /// behind on one of those paths would be reported forever as the thing
+    /// the scan is stuck on.
+    fn listing(&self, dir: &Path) -> Listing<'_> {
+        self.reading
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(dir.to_path_buf());
+        Listing {
+            progress: self,
+            dir: dir.to_path_buf(),
+        }
+    }
+}
+
+/// Removes a directory from [`ScanProgress::reading_now`] however the listing
+/// ends.
+struct Listing<'a> {
+    progress: &'a ScanProgress,
+    dir: PathBuf,
+}
+
+impl Drop for Listing<'_> {
+    fn drop(&mut self) {
+        self.progress
+            .reading
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.dir);
     }
 }
 
@@ -316,10 +420,11 @@ pub fn scan(
     if let Some(children) = children {
         flatten(&mut builder, root_id, children);
     }
+    progress.enter_phase(Phase::Finishing);
     let clones_deduped = if ctx.opts.dedupe_clones {
         // On the same pool: this probes one file at a time over `fcntl`, so it
         // is the same kind of work as the walk and wants the same width.
-        pool.install(|| dedupe_clones(&mut builder, &root_path))
+        pool.install(|| dedupe_clones(&mut builder, &root_path, &progress))
     } else {
         0
     };
@@ -352,7 +457,7 @@ pub fn scan(
 /// the lowest node id, which is the entry nearest the top of the tree in BFS
 /// order. It costs a sort and it means the answer does not depend on which
 /// thread finished first.
-fn dedupe_clones(builder: &mut TreeBuilder, root: &Path) -> u64 {
+fn dedupe_clones(builder: &mut TreeBuilder, root: &Path, progress: &ScanProgress) -> u64 {
     let mut by_size: std::collections::HashMap<u64, Vec<NodeId>> = std::collections::HashMap::new();
     for (index, node) in builder.nodes.iter().enumerate() {
         if node.kind == EntryKind::File && node.own_size >= CLONE_MIN_BYTES {
@@ -379,7 +484,14 @@ fn dedupe_clones(builder: &mut TreeBuilder, root: &Path) -> u64 {
         .collect();
     let mut probed: Vec<(NodeId, u64)> = paths
         .into_par_iter()
-        .filter_map(|(id, path)| crate::meta::clone_key(&path).map(|key| (id, key)))
+        .filter_map(|(id, path)| {
+            let key = crate::meta::clone_key(&path);
+            // Counted whether or not the file turned out to be a clone: the
+            // point is to show the phase is moving, and a filesystem with no
+            // clones at all would otherwise look stuck for the whole probe.
+            progress.clones_probed.fetch_add(1, Ordering::Relaxed);
+            key.map(|key| (id, key))
+        })
         .collect();
     probed.sort_unstable();
 
@@ -420,6 +532,12 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
     if ctx.progress.is_cancelled() {
         return Children::default();
     }
+    // Guarded from here to the end of the listing loop, and no further: this
+    // is the stretch that blocks on a mount that has stopped answering, and
+    // the recursion below runs on the pool where it would only add ancestors
+    // to the list. See `ScanProgress::reading_now`.
+    let listing = ctx.progress.listing(dir);
+
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -465,6 +583,9 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
         let (name_off, name_len) = push_name(&mut names, &raw_name.to_string_lossy());
         pending.push((path, name_off, name_len, meta));
     }
+
+    // Listing done; the recursion that follows is not what hangs.
+    drop(listing);
 
     let entries = pending
         .into_par_iter()
@@ -613,6 +734,31 @@ mod thread_tests {
     /// compare the constant with itself, so raising the cap — or deleting it —
     /// would still pass. Changing the cap should have to change this line, and
     /// changing this line should mean re-reading the measurements behind it.
+    /// The guard mechanics, deterministically. What this cannot reach is
+    /// whether the *walk* still calls `listing` at all: observing that needs a
+    /// look inside a running scan, and the only way to time one is to bet on
+    /// the scheduler. That half was checked by hand instead — a real scan with
+    /// 8 threads printed "(+7 more)", which is one directory per worker and no
+    /// ancestors.
+    #[test]
+    fn a_listing_appears_while_it_runs_and_is_gone_after() {
+        let progress = ScanProgress::default();
+        assert!(progress.reading_now().is_empty());
+        {
+            let _outer = progress.listing(Path::new("/one"));
+            let _inner = progress.listing(Path::new("/two"));
+            assert_eq!(
+                progress.reading_now(),
+                vec![PathBuf::from("/one"), PathBuf::from("/two")],
+                "both are being listed, and the answer is sorted"
+            );
+        }
+        assert!(
+            progress.reading_now().is_empty(),
+            "the guards went out of scope, so nothing is being listed"
+        );
+    }
+
     #[test]
     fn the_default_is_capped_and_never_zero() {
         let n = default_threads();
