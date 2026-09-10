@@ -527,7 +527,28 @@
       ]
     },
     "hub": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "added",
+          "text": {
+            "de": "Ein gepushter Snapshot wird gegen die Prüfsumme geprüft, die er mitbringt, und bei Abweichung mit 400 abgelehnt statt in die Flotte aufgenommen. Ein unterwegs gekipptes Bit hinterlässt einen gültigen Baum mit einer falschen Zahl — auf einem Dashboard, das nach Dringlichkeit sortiert, wäre das die falsche Maschine ganz oben.",
+            "en": "A pushed snapshot is checked against the checksum it carries and refused with a 400 if it disagrees, instead of joining the fleet. A bit flipped in transit leaves a valid tree holding a wrong number — on a dashboard that sorts by urgency, that is the wrong machine at the top.",
+            "fr": "Un instantané poussé est vérifié contre la somme de contrôle qu'il transporte et refusé avec un 400 en cas de désaccord, au lieu de rejoindre la flotte. Un bit inversé en chemin laisse un arbre valide portant un chiffre faux — sur un tableau de bord trié par urgence, c'est la mauvaise machine en tête.",
+            "it": "Uno snapshot inviato viene confrontato con il checksum che porta con sé e, se non corrisponde, rifiutato con un 400 anziché entrare nella flotta. Un bit invertito durante il trasferimento lascia un albero valido con un numero sbagliato: su un cruscotto ordinato per urgenza, sarebbe la macchina sbagliata in cima.",
+            "tr": "Pushlanan bir snapshot, taşıdığı sağlamaya karşı denetleniyor ve tutmuyorsa filoya katılmak yerine 400 ile reddediliyor. Yolda dönen bir bit, geçerli bir ağacın içinde yanlış bir rakam bırakıyor — aciliyete göre sıralayan bir panoda bu, en üstte yanlış makine demek."
+          }
+        },
+        {
+          "kind": "changed",
+          "text": {
+            "de": "Die Snapshot-Datenbank des Hubs wechselt auf ein neues Schema, damit die Prüfsumme Platz hat. Ein Downgrade auf eine ältere Version öffnet die Datei nicht mehr — sie sagt das klar, statt sie falsch zu lesen. Vor dem Upgrade eine Kopie beiseitelegen kostet nichts.",
+            "en": "The hub's snapshot database moves to a new schema so the checksum has somewhere to live. Downgrading to an older build will no longer open the file — it says so plainly rather than misreading it. Putting a copy aside before upgrading costs nothing.",
+            "fr": "La base d'instantanés du hub passe à un nouveau schéma pour loger la somme de contrôle. Revenir à une version antérieure n'ouvrira plus le fichier : elle le dit clairement au lieu de le mal lire. Mettre une copie de côté avant la mise à niveau ne coûte rien.",
+            "it": "Il database degli snapshot dell'hub passa a un nuovo schema per fare posto al checksum. Tornare a una versione precedente non aprirà più il file: lo dice chiaramente invece di leggerlo male. Mettere da parte una copia prima dell'aggiornamento non costa nulla.",
+            "tr": "Hub'ın snapshot veritabanı, sağlamaya yer açmak için yeni bir şemaya geçiyor. Eski bir sürüme dönmek dosyayı artık açmıyor — yanlış okumak yerine bunu açıkça söylüyor. Yükseltmeden önce bir kopya kenara koymanın maliyeti yok."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.3.1",
