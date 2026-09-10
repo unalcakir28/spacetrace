@@ -10,6 +10,16 @@ Versions marked *development milestone* were never tagged and have no
 downloadable files. They are recorded because the work happened, not
 because anyone can install them.
 
+## Unreleased
+
+### Added
+
+- Snapshots now carry a checksum of their content, and `spacetrace verify` checks it. A snapshot that changed on the way here is refused on import rather than believed: a flipped bit leaves a perfectly valid tree that reports a wrong number, which is precisely the failure nothing could see before.
+
+### Changed
+
+- The snapshot database moves to a new schema so the checksum has somewhere to live. Older builds will no longer open a database this one has written — they say so plainly rather than misreading it. If you use the desktop app on the same history, update it too.
+
 ## 0.4.1 — 2026-09-09
 
 ### Fixed

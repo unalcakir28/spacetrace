@@ -168,6 +168,37 @@ yayınlama adımı atlanır — `publish` kutusunu işaretlemezsen.
 push'unu atladığı durumun çıkış yolu (aşağıya bak). Etiket hedef depoda
 default branch'in ucunda oluşturulur.
 
+### Şema sürümü artıyorsa: önce masaüstü ve hub, sonra CLI
+
+Masaüstü ile CLI **aynı veritabanı dosyasını** kullanıyor — masaüstündeki
+`default_database()` yorumu bunu açıkça söylüyor: "so the app opens the same
+history". Ve `store::schema::migrate` kendinden yeni bir dosyayı açmıyor,
+bilinçli olarak: yanlış okumaktansa reddediyor.
+
+İkisi birleşince şu oluyor. Yeni CLI ortak veritabanını açar açmaz şemayı
+yükseltiyor; o andan itibaren eski masaüstü **hiçbir şey** yapamıyor. 10 Eylül
+2026'da v3 veritabanına 0.4.1 ikilisiyle bakıldı:
+
+```text
+error: this database was written by a newer spacetrace (schema v3, this
+build understands v2)
+```
+
+Tarama listelenemiyor, geçmiş açılamıyor. Kullanıcı yalnızca CLI'ı
+güncellediyse masaüstü uygulaması bozulmuş görünüyor, ve sebebi ekranda
+yazmıyor.
+
+Bu yüzden `SCHEMA_VERSION` artıran bir sürümde sıra şu:
+
+1. Masaüstü ve hub'ın core pinini ilerlet, ikisini de yayınla.
+2. **Sonra** CLI'ı yayınla.
+3. Changelog'da söyle: "eski sürümler bu veritabanını açmayacak, masaüstünü
+   de güncelleyin". Kullanıcı sırayı bilmiyor, sen biliyorsun.
+
+Tersi de doğru: yeni masaüstü eski veritabanını sorunsuz taşıyor, çünkü
+`migrate_from` yalnızca ileri gidiyor. Yani önce masaüstünü yayınlamanın
+maliyeti yok, sonra yayınlamanın maliyeti var.
+
 ### "Latest" CLI'nındır, sırayla belirlenmez
 
 GitHub'ın `releases/latest` uç noktası **en son yayınlanan** sürümü döndürüyor,
