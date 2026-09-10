@@ -111,7 +111,8 @@ Yerleşim motoru burada kaldı (`crates/treemap`), çünkü çekirdek ve test ed
 - [x] Diff görünümü (iki snapshot karşılaştırma tablosu)
 - [x] Düğüm kimlikleri generation'a bağlı — eski ağaca ait id reddediliyor
 - [ ] **Windows MFT hızlı yolu** (`usn-journal-rs`) — yönetici arkasında
-- [ ] macOS Full Disk Access onboarding ekranı
+- [x] macOS Full Disk Access onboarding ekranı — karşılama ekranında bant,
+      ayar paneline düğme, `Info.plist`'te altı kullanım açıklaması
 - [ ] Zaman çizelgesi görünümü (bir hedefin tüm geçmişi)
 - [ ] Üç WebView'da treemap performans testi (WebKitGTK dâhil) — yalnızca
       macOS'ta doğrulandı

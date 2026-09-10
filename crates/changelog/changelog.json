@@ -292,6 +292,16 @@
             "it": "Script di installazione temporanei per macOS e Windows che scaricano il pacchetto con curl o Invoke-WebRequest, lo verificano con SHA256SUMS e lo installano. Un download fatto così non porta i contrassegni scritti da un browser, quindi Gatekeeper e SmartScreen non scattano. Spariranno quando l'app sarà firmata.",
             "tr": "macOS ve Windows için geçici kurulum betikleri: paketi curl ya da Invoke-WebRequest ile indirir, SHA256SUMS ile doğrular ve kurar. Bu şekilde inen bir dosya tarayıcının yazdığı işaretleri taşımadığı için Gatekeeper ve SmartScreen hiç devreye girmiyor. Uygulama imzalandığında kaldırılacaklar."
           }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Ohne Vollen Festplattenzugriff fragt macOS für jeden geschützten Ordner einzeln nach — mitten im Scan, in unvorhersehbarer Reihenfolge. Der Startbildschirm sagt das jetzt vor dem ersten Scan und führt mit einem Knopf direkt zur richtigen Stelle in den Systemeinstellungen. Der Systemdialog erklärt endlich auch, wofür ein Speicheranalyse-Werkzeug Ihre Dateien liest.",
+            "en": "Without Full Disk Access, macOS asks about each protected folder separately — mid-scan, in an order nobody can predict. The welcome screen now says so before the first scan and has a button straight to the right settings pane. The system's own dialog finally explains why a disk analyser wants to read your files, too.",
+            "fr": "Sans l'Accès complet au disque, macOS demande l'autorisation pour chaque dossier protégé séparément — en pleine analyse, dans un ordre imprévisible. L'écran d'accueil le dit désormais avant la première analyse et propose un bouton vers le bon panneau des Réglages Système. La boîte de dialogue du système explique enfin, elle aussi, pourquoi un analyseur de disque lit vos fichiers.",
+            "it": "Senza Accesso completo al disco, macOS chiede il permesso per ogni cartella protetta separatamente — durante la scansione, in un ordine imprevedibile. La schermata iniziale ora lo dice prima della prima scansione e offre un pulsante che porta direttamente al pannello giusto delle Impostazioni di Sistema. Anche la finestra di sistema spiega finalmente perché un analizzatore di disco legge i tuoi file.",
+            "tr": "Full Disk Access olmadan macOS korumalı her klasör için ayrı ayrı izin soruyor — tarama ortasında, kimsenin öngöremeyeceği bir sırayla. Karşılama ekranı artık bunu ilk taramadan önce söylüyor ve doğrudan ilgili ayar paneline giden bir düğme sunuyor. Sistemin kendi penceresi de artık bir disk çözümleyicinin dosyalarınızı neden okuduğunu açıklıyor."
+          }
         }
       ],
       "releases": [
