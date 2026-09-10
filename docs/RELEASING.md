@@ -245,6 +245,46 @@ Maliyet, karar verilirse:
 Azure Artifact Signing ($9.99/ay) **Türkiye'ye kapalı** — ABD, Kanada, AB ve
 İngiltere ile sınırlı, yani Windows için ucuz yol yok.
 
+### İmzasız ≠ kimliksiz: TCC ayrı bir sorun ve o çözüldü
+
+Gatekeeper ile TCC (izinler) aynı şey değil, ve ikincisi **para istemiyordu**.
+
+macOS, Tam Disk Erişimi'ni ve klasör izinlerini uygulamanın *designated
+requirement*'ına bağlıyor. Ad-hoc imzanın böyle bir şeyi yok, o yüzden sistem
+ikilinin cdhash'ine düşüyor — ve cdhash her derlemede değişiyor. Sonuç: her
+sürüm macOS için başka bir uygulama, kullanıcının verdiği izin Sistem
+Ayarları'nda **açık görünüyor ama uygulanmıyor**, ve her güncellemeden sonra
+tarama klasör klasör yeniden soruyor. 10 Eylül 2026'da kullanıcı bildirdi,
+anahtar açıkken.
+
+Çözüm kendinden imzalı bir sertifika. Gatekeeper'a hiçbir faydası yok, ama
+kimliği sabitliyor. Ölçüldü: içerikleri farklı iki paket (cdhash `53007fdd…` /
+`de0072e5…`) tek bir requirement paylaşıyor:
+
+```text
+identifier "com.spacetrace.desktop" and certificate leaf = H"940f909c…"
+```
+
+Kurulumdaki üç tuzak, üçü de yaşandı:
+
+- **OpenSSL 3 varsayılan p12'yi macOS okuyamıyor.** SHA-256 MAC yazıyor;
+  `security import` "MAC verification failed (wrong password?)" diyor ve sizi
+  şifreye baktırıyor. `openssl pkcs12 -export -legacy` gerekiyor.
+- **Sertifika derleme makinesinde güvenilir olmalı.** Tauri kimliği
+  `security find-identity -v` ile arıyor, o da yalnızca geçerli kimlikleri
+  listeliyor; kendinden imzalı bir sertifika trustRoot yapılmadan geçerli
+  sayılmıyor. Runner'lar tek kullanımlık, yani orada güvenmek başka hiçbir
+  makineye ulaşmıyor.
+- **Sertifikayı değiştirmek herkesin iznini sıfırlar.** Requirement leaf
+  parmak iziyle yazılı. Süresi 2036'da doluyor; yenilemek yeni bir sertifika
+  demek, yani kullanıcılar izni bir kez daha verecek.
+
+Sır: `APPLE_CERTIFICATE` (p12'nin base64'ü) ve `APPLE_CERTIFICATE_PASSWORD`,
+masaüstü deposunda. Özel anahtar `~/.spacetrace/macos-signing.p12`, hiçbir
+deponun içinde değil. Sır yoksa derleme ad-hoc'a düşüyor ve uyarı basıyor;
+sürüm iş akışı ayrıca paketin requirement'ını doğruluyor, yani sessizce geri
+düşmüyor.
+
 **İmzalama geldiğinde yapılacaklar** (bu bölümün varlık sebebi bu liste):
 
 1. `install-desktop.sh` ve `install-desktop.ps1` **silinir** — bakımı yapılacak

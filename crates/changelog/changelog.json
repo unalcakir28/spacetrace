@@ -272,7 +272,18 @@
       ]
     },
     "desktop": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "macOS vergaß bei jedem Update alle erteilten Berechtigungen: ohne stabile Signaturidentität hält das System jede Version für eine andere App. Der Volle Festplattenzugriff stand auf „ein“ und wurde trotzdem ignoriert, und jeder Scan fragte wieder Ordner für Ordner nach. Die App trägt jetzt über Versionen hinweg eine einzige Identität, also bleibt einmal Erteiltes erteilt.",
+            "en": "macOS forgot every permission you had granted whenever the app updated: without a stable signing identity the system treats each release as a different app, so Full Disk Access read as on while being ignored, and every scan asked again folder by folder. The app now carries one identity across releases, so a permission granted once stays granted.",
+            "fr": "macOS oubliait toutes les autorisations accordées à chaque mise à jour : sans identité de signature stable, le système considère chaque version comme une application différente. L'Accès complet au disque s'affichait comme activé tout en étant ignoré, et chaque analyse redemandait dossier par dossier. L'application porte désormais une seule identité d'une version à l'autre, donc une autorisation accordée une fois le reste.",
+            "it": "macOS dimenticava tutti i permessi concessi a ogni aggiornamento: senza un'identità di firma stabile il sistema considera ogni versione un'app diversa. L'Accesso completo al disco risultava attivo pur essendo ignorato, e ogni scansione chiedeva di nuovo cartella per cartella. Ora l'app mantiene una sola identità fra le versioni, quindi un permesso concesso una volta resta concesso.",
+            "tr": "macOS, uygulama her güncellendiğinde verdiğiniz bütün izinleri unutuyordu: kararlı bir imza kimliği olmadan sistem her sürümü ayrı bir uygulama sayıyor. Tam Disk Erişimi açık görünüyor ama dikkate alınmıyordu, ve her tarama klasör klasör yeniden soruyordu. Uygulama artık sürümler boyunca tek bir kimlik taşıyor; bir kez verilen izin veriliyor kalıyor."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.4.0",
