@@ -133,6 +133,10 @@ pub struct WalkArgs {
     /// Do not deduplicate copy-on-write clones; count every copy (macOS)
     #[arg(long)]
     pub no_clone_dedupe: bool,
+
+    /// Walk with this many threads (default: measured, not one per core)
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..))]
+    pub threads: Option<u16>,
 }
 
 #[derive(Args, Debug)]
@@ -243,6 +247,7 @@ impl WalkArgs {
             max_depth: self.depth,
             dedupe_hardlinks: !self.no_dedupe,
             dedupe_clones: !self.no_clone_dedupe,
+            threads: self.threads.map(usize::from),
         }
     }
 }

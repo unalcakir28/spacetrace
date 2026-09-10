@@ -2,7 +2,28 @@
   "schema": 1,
   "components": {
     "cli": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Scans laufen jetzt mit höchstens acht Threads statt mit einem pro Kern, was auf jedem gemessenen Verzeichnisbaum schneller war — 39% auf einem kleinen, 11% auf einem großen. Ein Durchlauf ist syscall-gebunden: jenseits eines Punkts warten die Threads im Kernel, statt zu arbeiten. Mit `--threads N` lässt sich das überstimmen.",
+            "en": "Scans now use at most eight threads instead of one per core, which was faster on every directory tree measured — 39% on a small one, 11% on a large one. A walk is syscall-bound: past a point the threads queue in the kernel rather than work. `--threads N` overrides it.",
+            "fr": "Les analyses utilisent désormais au plus huit threads au lieu d'un par cœur, ce qui s'est révélé plus rapide sur chaque arborescence mesurée — 39% sur une petite, 11% sur une grande. Un parcours est limité par les appels système : passé un certain point, les threads attendent dans le noyau au lieu de travailler. `--threads N` permet de forcer une valeur.",
+            "it": "Le scansioni usano ora al massimo otto thread invece di uno per core, risultando più veloci su ogni albero di directory misurato: 39% su uno piccolo, 11% su uno grande. Una scansione è limitata dalle chiamate di sistema: oltre un certo punto i thread aspettano nel kernel invece di lavorare. `--threads N` consente di forzare il valore.",
+            "tr": "Taramalar artık çekirdek başına bir yerine en fazla sekiz thread kullanıyor; ölçülen her dizin ağacında daha hızlı çıktı — küçüğünde %39, büyüğünde %11. Yürüyüş syscall'a bağlı: belli bir noktadan sonra thread'ler çalışmak yerine çekirdekte sıraya giriyor. `--threads N` ile değiştirilebilir."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "`--threads N` wählt die Breite eines Scans, und der Agent kennt dieselbe Einstellung pro Wurzel. Es gibt keine beste Zahl: das Optimum verschiebt sich mit der Größe des Baums, und wer seine Platte kennt, trifft eine bessere Wahl als jede eingebaute Vorgabe.",
+            "en": "`--threads N` chooses how wide a scan runs, and the agent takes the same setting per root. There is no best number: the optimum moves with the size of the tree, and someone who knows their disk will choose better than any built-in default.",
+            "fr": "`--threads N` choisit la largeur d'une analyse, et l'agent accepte le même réglage par racine. Il n'existe pas de meilleur nombre : l'optimum varie avec la taille de l'arborescence, et qui connaît son disque choisira mieux que n'importe quelle valeur par défaut.",
+            "it": "`--threads N` sceglie con quanta ampiezza gira una scansione, e l'agente accetta la stessa impostazione per ogni radice. Non esiste un numero migliore: l'ottimo si sposta con la dimensione dell'albero, e chi conosce il proprio disco sceglierà meglio di qualsiasi valore predefinito.",
+            "tr": "`--threads N` bir taramanın kaç thread'le koşacağını seçiyor, ajanda da kök başına aynı ayar var. En iyi bir sayı yok: optimum ağacın büyüklüğüyle kayıyor, ve diskini bilen biri gömülü hiçbir varsayılandan daha iyi seçer."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.5.0",

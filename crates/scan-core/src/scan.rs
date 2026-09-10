@@ -32,6 +32,9 @@ pub struct ScanOptions {
     pub dedupe_hardlinks: bool,
     /// Count copy-on-write clones only once, the same way (macOS/APFS).
     pub dedupe_clones: bool,
+    /// How many threads to walk with. `None` (and `Some(0)`) take the default
+    /// below, which is measured rather than inherited from the core count.
+    pub threads: Option<usize>,
 }
 
 impl Default for ScanOptions {
@@ -42,6 +45,7 @@ impl Default for ScanOptions {
             max_depth: None,
             dedupe_hardlinks: true,
             dedupe_clones: true,
+            threads: None,
         }
     }
 }
@@ -185,6 +189,55 @@ fn push_name(buf: &mut String, name: &str) -> (u32, u16) {
     (off, name.len() as u16)
 }
 
+/// The most threads the default will use.
+///
+/// Not optimal anywhere — it is the setting that is never bad. See
+/// `default_threads`.
+const THREAD_CAP: usize = 8;
+
+/// How many threads to walk with when the caller does not choose.
+///
+/// One per logical core — rayon's default, and what this used to do — is the
+/// worst measured setting on every corpus tried. Walking is syscall-bound, so
+/// past a point the threads are queueing in the kernel rather than working,
+/// and the coordination is pure loss.
+///
+/// There is no best fixed number: the optimum moves with the shape of the
+/// tree. Measured on an M3 Max (12 performance + 4 efficiency cores),
+/// interleaved runs, median of 9 `[ölçüm]`:
+///
+/// ```text
+///                        best        8        16 (the old default)
+///   /usr, 50k entries      6 →  71    92 ms    151 ms
+///   /Applications, 412k   12 → 1233  1407 ms   1581 ms
+/// ```
+///
+/// So 8 is a compromise and not an optimum: it loses 30% to the best setting
+/// on the small tree and 14% on the large one. It is chosen because it beats
+/// the old default on both — by 39% and 11% — and because a caller who knows
+/// their disk can say `--threads`. Picking the winner for one corpus would
+/// have made the other markedly worse.
+fn default_threads() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(THREAD_CAP)
+}
+
+/// The pool the walk runs on.
+///
+/// A pool of its own rather than rayon's global one. The global pool is
+/// process-wide and can only be configured once, so a library that reached for
+/// it would be deciding on behalf of whatever application linked it — and the
+/// desktop app runs a scan next to its own work.
+fn walk_pool(threads: Option<usize>) -> std::io::Result<rayon::ThreadPool> {
+    let count = threads.filter(|n| *n > 0).unwrap_or_else(default_threads);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(count)
+        .thread_name(|i| format!("spacetrace-walk-{i}"))
+        .build()
+        .map_err(std::io::Error::other)
+}
+
 /// Walk `root` and build a tree. The traversal is a parallel DFS: each
 /// directory's subdirectories are recursed into on the rayon pool, which keeps
 /// SSDs busy without the memory blow-up of a breadth-first queue.
@@ -196,6 +249,9 @@ pub fn scan(
     let started = std::time::Instant::now();
     let root = root.as_ref();
     let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+
+    // Built before `opts` moves into the context below.
+    let pool = walk_pool(opts.threads)?;
 
     let root_md = std::fs::symlink_metadata(&root_path)?;
     let (root_meta, root_failure) = RawMeta::for_path(
@@ -218,7 +274,7 @@ pub fn scan(
 
     let children = if root_meta.kind == EntryKind::Dir {
         progress.dirs.fetch_add(1, Ordering::Relaxed);
-        Some(read_dir_parallel(&root_path, 1, &ctx))
+        Some(pool.install(|| read_dir_parallel(&root_path, 1, &ctx)))
     } else {
         progress.files.fetch_add(1, Ordering::Relaxed);
         progress.bytes.fetch_add(root_meta.alloc, Ordering::Relaxed);
@@ -261,7 +317,9 @@ pub fn scan(
         flatten(&mut builder, root_id, children);
     }
     let clones_deduped = if ctx.opts.dedupe_clones {
-        dedupe_clones(&mut builder, &root_path)
+        // On the same pool: this probes one file at a time over `fcntl`, so it
+        // is the same kind of work as the walk and wants the same width.
+        pool.install(|| dedupe_clones(&mut builder, &root_path))
     } else {
         0
     };
@@ -530,5 +588,39 @@ fn flatten(builder: &mut TreeBuilder, root_id: NodeId, root_children: Children) 
         parent.children_len = len;
 
         queue.extend(grandchildren);
+    }
+}
+
+#[cfg(test)]
+mod thread_tests {
+    use super::*;
+
+    #[test]
+    fn an_explicit_count_is_honoured() {
+        let pool = walk_pool(Some(3)).unwrap();
+        assert_eq!(pool.current_num_threads(), 3);
+    }
+
+    /// `Some(0)` reaches rayon as "pick for me", which would quietly restore
+    /// the one-per-core default this exists to avoid.
+    #[test]
+    fn zero_is_treated_as_no_answer() {
+        let pool = walk_pool(Some(0)).unwrap();
+        assert_eq!(pool.current_num_threads(), default_threads());
+    }
+
+    /// The literal 8 is deliberate. Asserting against `THREAD_CAP` would
+    /// compare the constant with itself, so raising the cap — or deleting it —
+    /// would still pass. Changing the cap should have to change this line, and
+    /// changing this line should mean re-reading the measurements behind it.
+    #[test]
+    fn the_default_is_capped_and_never_zero() {
+        let n = default_threads();
+        assert!(n >= 1, "a pool of no threads does no work");
+        assert!(
+            n <= 8,
+            "the default grew past the measured cap: {n}. \
+             docs/COMPETITORS.md §1.2 has the numbers this was chosen from"
+        );
     }
 }

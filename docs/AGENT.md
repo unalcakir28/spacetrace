@@ -43,8 +43,14 @@ schedule = "0 3 * * *"       # 03:00 daily
 label = "nightly"
 exclude = ["node_modules", ".git"]
 one_file_system = true
+threads = 4                  # fewer than the default, to leave the box alone
 keep = 14                    # snapshots of this root to retain
 ```
+
+`threads` is per root rather than per agent because it is really a property of
+the disk: an NVMe root and a spinning-disk root on the same machine want
+different numbers. The default is `min(cores, 8)` — not one per core, which
+measured slower on every corpus tried (docs/COMPETITORS.md §1.2).
 
 Then check what it will do before starting it:
 
@@ -84,6 +90,7 @@ failing silently.
 | `roots[].one_file_system` | `false` | Do not cross mount points (`du -x`) |
 | `roots[].depth` | — | Stop descending below this depth |
 | `roots[].dedupe_hardlinks` | `true` | Count hardlinked files once |
+| `roots[].threads` | `min(cores, 8)` | Threads to walk this root with |
 | `roots[].keep` | — | Snapshots of this root to retain; unset keeps all |
 
 The token is resolved in this order: `server.token`, `server.token_file`, then

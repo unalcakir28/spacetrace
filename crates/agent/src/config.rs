@@ -114,6 +114,16 @@ pub struct RootConfig {
     #[serde(default = "default_dedupe")]
     pub dedupe_clones: bool,
 
+    /// Threads to walk this root with. `None` takes the scanner's own
+    /// default, which is measured rather than one per core.
+    ///
+    /// Per root, not per agent, because it is really a property of the disk:
+    /// an NVMe root and a spinning-disk root on the same box want different
+    /// numbers, and an operator who wants the whole agent quieter can say the
+    /// same number on each of them.
+    #[serde(default)]
+    pub threads: Option<usize>,
+
     /// Snapshots of this root to keep. `None` keeps everything.
     #[serde(default)]
     pub keep: Option<usize>,
@@ -167,6 +177,7 @@ impl RootConfig {
             depth: None,
             dedupe_hardlinks: default_dedupe(),
             dedupe_clones: default_dedupe(),
+            threads: None,
             keep: None,
         }
     }
@@ -178,6 +189,7 @@ impl RootConfig {
             max_depth: self.depth,
             dedupe_hardlinks: self.dedupe_hardlinks,
             dedupe_clones: self.dedupe_clones,
+            threads: self.threads,
         }
     }
 }

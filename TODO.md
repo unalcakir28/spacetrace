@@ -342,10 +342,16 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       dönüşümlü koşturunca tersi çıktı. Bellek **ve** hız birlikte, dönüşümlü
       ve medyanlı ölçülmeden hiçbir tasarım kabul edilmeyecek.
 
-- [ ] **B2 Thread sayısı ayarı** — 16 thread'te 8'e göre **gerileme ölçüldü**
-      (1.27 s vs 1.11 s, 412k girdi). Şu an hiç ayar yok, rayon varsayılanı
-      (çekirdek sayısı) kullanılıyor — yani varsayılan en iyisi değil.
+- [x] **B2 Thread sayısı ayarı** — yapıldı *(10 Eylül 2026)*. `--threads N`,
+      ajanda kök başına `threads`, ve yürüyüş artık rayon'un global havuzunda
+      değil kendi havuzunda (kütüphane süreç geneli bir ayarı sahiplenemez).
+      Varsayılan `min(çekirdek, 8)`. **En iyi thread sayısı diye bir şey yok:**
+      optimum ağacın büyüklüğüyle kayıyor — 50k girdide 6, 412k'da 12. Seçilen
+      sayı hiçbirinde en iyi değil ama ikisinde de eski varsayılanı yeniyor
+      (%39 ve %11). Tablo ve yöntem docs/COMPETITORS.md §1.2.
       *Rakip:* erdtree ampirik 3 thread; TreeSize CPU yüküne göre ayarlıyor.
+      **Açık kalan:** 412k üstü ölçülmedi. Sentetik 1.2M denemesi şekli
+      bozuk çıktığı için atıldı; gerçek büyük bir korpus gerekiyor.
 - [ ] **B3 HDD / ağ sürücüsü modu** — dönen diskte ve NFS'te paralel yürüyüş tek
       thread'den kötü olabilir (seek thrash); bu durum için hiçbir şeyimiz yok.
       *Rakip:* gdu `--sequential`; QDirStat girdileri stat etmeden önce inode'a
@@ -447,7 +453,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Doğruluk iddiamız Windows'ta karşılanmıyordu. A4 (Unix) önce yapıldı çünkü test hiç yoktu. **Bitti (9 Eylül 2026), Windows CI yeşil** |
 | ~~3~~ ✅ | ~~B1~~ | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar. **Dördü bitti (9 Eylül 2026); kalan tek madde B1-K, en altta** |
 | ~~4~~ ✅ | ~~A3, A5~~ | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma artık sessiz değil. **Bitti (10 Eylül 2026)** |
-| 5 | **B2 ← sıradaki**, B3 | Ucuz ve ölçülmüş — B2 eldeki veriyle hemen yapılabilir |
+| 5 | ~~B2~~ ✅, **B3 ← sıradaki** | Ucuz ve ölçülmüş — B2 bitti (10 Eylül 2026); B3 gerçek bir HDD ya da ağ sürücüsü istiyor |
 | 6 | C3, D1 | Geçmiş iddiamızın masaüstü karşılığı + hiç denenmemiş hata senaryosu |
 | 7 | B4, B5, B6 | Platforma özel hızlı yollar — doğruluk düzeldikten **sonra** |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |

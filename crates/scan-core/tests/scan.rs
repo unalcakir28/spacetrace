@@ -675,3 +675,102 @@ mod basis {
         );
     }
 }
+
+/// Thread count is a performance knob, not a semantic one.
+///
+/// With no hardlinks in the tree there is nothing left to race over, so the
+/// result must be identical down to each node's own size — a width that
+/// changed the interleaving must not change the arena, the order of children
+/// or any total.
+#[test]
+fn the_thread_count_does_not_change_the_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    // Wide and deep enough that eight threads genuinely interleave.
+    for d in 0..24 {
+        let sub = root.join(format!("d{d}"));
+        fs::create_dir(&sub).unwrap();
+        for f in 0..12 {
+            fs::write(sub.join(format!("f{f}")), vec![b'x'; 100 + f * 7]).unwrap();
+        }
+        fs::create_dir(sub.join("deep")).unwrap();
+        fs::write(sub.join("deep/leaf"), vec![b'y'; 512]).unwrap();
+    }
+
+    let shape = |threads: usize| {
+        let opts = ScanOptions {
+            threads: Some(threads),
+            ..ScanOptions::default()
+        };
+        let (tree, stats) = run(root, opts);
+        let nodes: Vec<(String, u64, u64)> = (0..tree.len() as u32)
+            .map(|id| {
+                let n = tree.node(id);
+                (tree.name(id).to_string(), n.size, n.files as u64)
+            })
+            .collect();
+        (
+            tree.total_size(),
+            tree.total_alloc(),
+            tree.len(),
+            stats.files,
+            stats.dirs,
+            stats.errors,
+            nodes,
+        )
+    };
+
+    let one = shape(1);
+    for threads in [2, 8, 16] {
+        assert_eq!(
+            shape(threads),
+            one,
+            "walking with {threads} threads gave a different tree than with 1"
+        );
+    }
+}
+
+/// A hardlink is the one thing the width genuinely changes, and the guarantee
+/// is narrower than it looks.
+///
+/// Invariant 3: the bytes are counted **once**, not "at the first path". The
+/// thread that claims the inode wins, so which of the two names carries the
+/// bytes varies with the width — and so does the subtree total of whichever
+/// directory that name sits in. What may not vary is the root total and the
+/// fact that exactly one copy was charged.
+#[test]
+fn a_hardlink_is_counted_once_at_every_width() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for d in 0..24 {
+        let sub = root.join(format!("d{d}"));
+        fs::create_dir(&sub).unwrap();
+        for f in 0..12 {
+            fs::write(sub.join(format!("f{f}")), vec![b'x'; 100]).unwrap();
+        }
+    }
+    fs::hard_link(root.join("d0/f0"), root.join("d1/linked")).unwrap();
+
+    for threads in [1, 2, 8, 16] {
+        let opts = ScanOptions {
+            threads: Some(threads),
+            ..ScanOptions::default()
+        };
+        let (tree, stats) = run(root, opts);
+        assert_eq!(
+            stats.hardlinks_deduped, 1,
+            "one link, one dedupe, whatever the width ({threads} threads)"
+        );
+        assert_eq!(
+            tree.total_size(),
+            24 * 12 * 100,
+            "the linked copy must add nothing at {threads} threads"
+        );
+        // Both names are present; one of them carries nothing.
+        let charged: Vec<u64> = (0..tree.len() as u32)
+            .filter(|id| matches!(tree.name(*id), "f0" | "linked"))
+            .map(|id| tree.node(id).size)
+            .collect();
+        assert_eq!(charged.iter().filter(|s| **s == 0).count(), 1);
+    }
+}

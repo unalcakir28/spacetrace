@@ -71,9 +71,36 @@ sayısından** geliyor. "Rust olduğu için hızlı" savunulabilir bir iddia de�
 | 16 | 1.27 s | 4.6× ← **gerileme** |
 
 16 thread'te gerileme gerçek: 412k girdide iş parçası başına maliyet küçüldüğü
-için rayon'un iş-çalma koordinasyonu baskın gelmeye başlıyor. Şu an hiçbir thread
-ayarı yapmıyoruz, rayon'un varsayılanını (çekirdek sayısı) kullanıyoruz — yani
-bu makinede **varsayılan konfigürasyon en iyisi değil**.
+için rayon'un iş-çalma koordinasyonu baskın gelmeye başlıyor.
+
+**10 Eylül 2026, ikinci ölçüm — ve en iyi thread sayısı diye bir şey yok.**
+Yukarıdaki tablo tek bir korpusta (412k girdi) alınmıştı. İki korpusta
+tekrarlandığında optimumun ağacın büyüklüğüyle *kaydığı* görüldü. M3 Max
+(12 performans + 4 verimlilik çekirdeği), serpiştirilmiş koşu, 9 örneğin
+medyanı `[ölçüm]`:
+
+| Korpus | 6 | 8 | 10 | 12 | 16 |
+|--------|---|---|----|----|----|
+| `/usr`, 50k girdi | **71 ms** | 92 | 106 | 139 | 151 |
+| `/Applications`, 412k girdi | 1541 | 1407 | 1426 | **1233 ms** | 1581 |
+
+Küçük ağaçta 6, büyük ağaçta 12 kazanıyor; 16 ikisinde de sonuncu.
+**Varsayılan artık `min(çekirdek, 8)`** — hiçbir korpusta en iyi değil (küçükte
+%30, büyükte %14 geride) ama ikisinde de eski varsayılanı yeniyor (%39 ve %11).
+Sabit bir sayının en iyi olması zaten mümkün değildi; `--threads` bilen
+kullanıcı için duruyor.
+
+**Yöntem notu.** İlk denemede ayarlar sırayla ölçüldü ve arka planda kalan bir
+tarama yüzünden aynı ayar iki koşuda 89 ms ve 170 ms verdi — o veri atıldı.
+Makine sessizleşmediği için ölçüm sessizliğe değil, serpiştirmeye dayandırıldı:
+her turda bütün ayarlar rastgele sırayla koşuyor, böylece sürüklenme hepsine
+eşit dağılıyor. Tur toplamları ±%5 içinde kaldı.
+
+**Bir de işe yaramayan deney.** Aralığı 1.2M girdiye taşımak için sentetik bir
+ağaç üretildi ve sonucu kullanılmadı: üreteç dizinleri birbirinin altına
+zincirlediği için derin ve dar bir ağaç çıktı, o da paralelleşmiyor. Dizin
+başına dosya sayısı tutturulmuştu ama paralellik için asıl önemli olan
+**dallanma** kaçırılmıştı. 412k üstü hâlâ ölçülmedi.
 
 ### 1.3 Doğruluk
 
