@@ -2,29 +2,35 @@
   "schema": 1,
   "components": {
     "cli": {
-      "unreleased": [
-        {
-          "kind": "added",
-          "text": {
-            "de": "Snapshots tragen jetzt eine Prüfsumme ihres Inhalts, und `spacetrace verify` prüft sie. Ein übertragener Snapshot, der unterwegs verändert wurde, wird beim Import abgelehnt statt geglaubt: ein gekipptes Bit hinterlässt einen völlig gültigen Baum, der eine falsche Zahl meldet, und genau das war bisher nicht zu sehen.",
-            "en": "Snapshots now carry a checksum of their content, and `spacetrace verify` checks it. A snapshot that changed on the way here is refused on import rather than believed: a flipped bit leaves a perfectly valid tree that reports a wrong number, which is precisely the failure nothing could see before.",
-            "fr": "Les instantanés portent désormais une somme de contrôle de leur contenu, et `spacetrace verify` la vérifie. Un instantané modifié en chemin est refusé à l'import plutôt que cru : un bit inversé laisse un arbre parfaitement valide qui annonce un chiffre faux, et c'est exactement la panne que rien ne voyait jusqu'ici.",
-            "it": "Gli snapshot ora portano un checksum del proprio contenuto e `spacetrace verify` lo controlla. Uno snapshot alterato durante il trasferimento viene rifiutato all'importazione invece di essere creduto: un bit invertito lascia un albero perfettamente valido che riporta un numero sbagliato, ed è proprio il guasto che finora nessuno poteva vedere.",
-            "tr": "Snapshot'lar artık içeriklerinin sağlamasını taşıyor ve `spacetrace verify` bunu denetliyor. Yolda değişmiş bir snapshot inanılmak yerine içe aktarılırken reddediliyor: dönen tek bir bit kusursuz geçerlilikte bir ağaç bırakıyor ve yanlış rakam bildiriyor — bugüne kadar hiçbir şeyin göremediği arıza tam olarak buydu."
-          }
-        },
-        {
-          "kind": "changed",
-          "text": {
-            "de": "Die Snapshot-Datenbank wechselt auf ein neues Schema, damit die Prüfsumme Platz hat. Ältere Builds öffnen eine Datenbank nicht mehr, die diese Version geschrieben hat — sie sagen das klar, statt sie falsch zu lesen. Wer die Desktop-App auf derselben Historie benutzt, aktualisiert sie am besten mit.",
-            "en": "The snapshot database moves to a new schema so the checksum has somewhere to live. Older builds will no longer open a database this one has written — they say so plainly rather than misreading it. If you use the desktop app on the same history, update it too.",
-            "fr": "La base d'instantanés passe à un nouveau schéma pour loger la somme de contrôle. Les versions plus anciennes n'ouvriront plus une base écrite par celle-ci : elles le disent clairement au lieu de la mal lire. Si vous utilisez l'application de bureau sur le même historique, mettez-la à jour également.",
-            "it": "Il database degli snapshot passa a un nuovo schema per fare posto al checksum. Le versioni precedenti non apriranno più un database scritto da questa: lo dicono chiaramente invece di leggerlo male. Se usi l'app desktop sulla stessa cronologia, aggiorna anche quella.",
-            "tr": "Snapshot veritabanı, sağlamaya yer açmak için yeni bir şemaya geçiyor. Eski sürümler bu sürümün yazdığı bir veritabanını artık açmıyor — yanlış okumak yerine bunu açıkça söylüyorlar. Aynı geçmişi masaüstü uygulamasıyla da kullanıyorsanız onu da güncelleyin."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.5.0",
+          "date": "2026-09-10",
+          "published": true,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Snapshots tragen jetzt eine Prüfsumme ihres Inhalts, und `spacetrace verify` prüft sie. Ein übertragener Snapshot, der unterwegs verändert wurde, wird beim Import abgelehnt statt geglaubt: ein gekipptes Bit hinterlässt einen völlig gültigen Baum, der eine falsche Zahl meldet, und genau das war bisher nicht zu sehen.",
+                "en": "Snapshots now carry a checksum of their content, and `spacetrace verify` checks it. A snapshot that changed on the way here is refused on import rather than believed: a flipped bit leaves a perfectly valid tree that reports a wrong number, which is precisely the failure nothing could see before.",
+                "fr": "Les instantanés portent désormais une somme de contrôle de leur contenu, et `spacetrace verify` la vérifie. Un instantané modifié en chemin est refusé à l'import plutôt que cru : un bit inversé laisse un arbre parfaitement valide qui annonce un chiffre faux, et c'est exactement la panne que rien ne voyait jusqu'ici.",
+                "it": "Gli snapshot ora portano un checksum del proprio contenuto e `spacetrace verify` lo controlla. Uno snapshot alterato durante il trasferimento viene rifiutato all'importazione invece di essere creduto: un bit invertito lascia un albero perfettamente valido che riporta un numero sbagliato, ed è proprio il guasto che finora nessuno poteva vedere.",
+                "tr": "Snapshot'lar artık içeriklerinin sağlamasını taşıyor ve `spacetrace verify` bunu denetliyor. Yolda değişmiş bir snapshot inanılmak yerine içe aktarılırken reddediliyor: dönen tek bir bit kusursuz geçerlilikte bir ağaç bırakıyor ve yanlış rakam bildiriyor — bugüne kadar hiçbir şeyin göremediği arıza tam olarak buydu."
+              }
+            },
+            {
+              "kind": "changed",
+              "text": {
+                "de": "Die Snapshot-Datenbank wechselt auf ein neues Schema, damit die Prüfsumme Platz hat. Ältere Builds öffnen eine Datenbank nicht mehr, die diese Version geschrieben hat — sie sagen das klar, statt sie falsch zu lesen. Wer die Desktop-App auf derselben Historie benutzt, aktualisiert sie am besten mit.",
+                "en": "The snapshot database moves to a new schema so the checksum has somewhere to live. Older builds will no longer open a database this one has written — they say so plainly rather than misreading it. If you use the desktop app on the same history, update it too.",
+                "fr": "La base d'instantanés passe à un nouveau schéma pour loger la somme de contrôle. Les versions plus anciennes n'ouvriront plus une base écrite par celle-ci : elles le disent clairement au lieu de la mal lire. Si vous utilisez l'application de bureau sur le même historique, mettez-la à jour également.",
+                "it": "Il database degli snapshot passa a un nuovo schema per fare posto al checksum. Le versioni precedenti non apriranno più un database scritto da questa: lo dicono chiaramente invece di leggerlo male. Se usi l'app desktop sulla stessa cronologia, aggiorna anche quella.",
+                "tr": "Snapshot veritabanı, sağlamaya yer açmak için yeni bir şemaya geçiyor. Eski sürümler bu sürümün yazdığı bir veritabanını artık açmıyor — yanlış okumak yerine bunu açıkça söylüyorlar. Aynı geçmişi masaüstü uygulamasıyla da kullanıyorsanız onu da güncelleyin."
+              }
+            }
+          ]
+        },
         {
           "version": "0.4.1",
           "date": "2026-09-09",
