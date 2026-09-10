@@ -293,7 +293,28 @@
       ]
     },
     "desktop": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "added",
+          "text": {
+            "de": "Snapshots tragen jetzt eine Prüfsumme ihres Inhalts. Ein von einem Agenten geholter Snapshot, der unterwegs verändert wurde, wird abgelehnt statt gezeichnet: ein gekipptes Bit hinterlässt einen völlig gültigen Baum, und eine Treemap zeichnet die falsche Zahl genauso überzeugend wie die richtige.",
+            "en": "Snapshots now carry a checksum of their content. One pulled from an agent that changed on the way is refused rather than drawn: a flipped bit leaves a perfectly valid tree, and a treemap renders a wrong number every bit as convincingly as a right one.",
+            "fr": "Les instantanés portent désormais une somme de contrôle de leur contenu. Un instantané récupéré depuis un agent et modifié en chemin est refusé plutôt que dessiné : un bit inversé laisse un arbre parfaitement valide, et une treemap affiche un chiffre faux avec autant d'aplomb qu'un vrai.",
+            "it": "Gli snapshot ora portano un checksum del proprio contenuto. Uno snapshot scaricato da un agente e alterato durante il trasferimento viene rifiutato invece che disegnato: un bit invertito lascia un albero perfettamente valido, e una treemap rappresenta un numero sbagliato con la stessa sicurezza di uno giusto.",
+            "tr": "Snapshot'lar artık içeriklerinin sağlamasını taşıyor. Bir ajandan çekilen ve yolda değişmiş snapshot çizilmek yerine reddediliyor: dönen bir bit kusursuz geçerlilikte bir ağaç bırakıyor, ve treemap yanlış rakamı doğrusu kadar inandırıcı çiziyor."
+          }
+        },
+        {
+          "kind": "changed",
+          "text": {
+            "de": "Die Snapshot-Datenbank, die sich die App mit dem Kommandozeilenwerkzeug teilt, wechselt auf ein neues Schema. Diese Version liest die alte ohne Weiteres; umgekehrt gilt das nicht, also aktualisiere beide zusammen, wenn du beide benutzt.",
+            "en": "The snapshot database this app shares with the command-line tool moves to a new schema. This version reads the old one without ceremony; the reverse does not hold, so update both together if you use both.",
+            "fr": "La base d'instantanés que cette application partage avec l'outil en ligne de commande passe à un nouveau schéma. Cette version lit l'ancienne sans difficulté ; l'inverse n'est pas vrai, donc mettez les deux à jour ensemble si vous utilisez les deux.",
+            "it": "Il database degli snapshot che questa app condivide con lo strumento da riga di comando passa a un nuovo schema. Questa versione legge senza problemi quello vecchio; il contrario non vale, quindi aggiorna entrambi insieme se usi entrambi.",
+            "tr": "Uygulamanın komut satırı aracıyla paylaştığı snapshot veritabanı yeni bir şemaya geçiyor. Bu sürüm eskisini sorunsuz okuyor; tersi geçerli değil, yani ikisini de kullanıyorsanız birlikte güncelleyin."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.4.2",
