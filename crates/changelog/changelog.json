@@ -293,29 +293,35 @@
       ]
     },
     "desktop": {
-      "unreleased": [
-        {
-          "kind": "added",
-          "text": {
-            "de": "Snapshots tragen jetzt eine Prüfsumme ihres Inhalts. Ein von einem Agenten geholter Snapshot, der unterwegs verändert wurde, wird abgelehnt statt gezeichnet: ein gekipptes Bit hinterlässt einen völlig gültigen Baum, und eine Treemap zeichnet die falsche Zahl genauso überzeugend wie die richtige.",
-            "en": "Snapshots now carry a checksum of their content. One pulled from an agent that changed on the way is refused rather than drawn: a flipped bit leaves a perfectly valid tree, and a treemap renders a wrong number every bit as convincingly as a right one.",
-            "fr": "Les instantanés portent désormais une somme de contrôle de leur contenu. Un instantané récupéré depuis un agent et modifié en chemin est refusé plutôt que dessiné : un bit inversé laisse un arbre parfaitement valide, et une treemap affiche un chiffre faux avec autant d'aplomb qu'un vrai.",
-            "it": "Gli snapshot ora portano un checksum del proprio contenuto. Uno snapshot scaricato da un agente e alterato durante il trasferimento viene rifiutato invece che disegnato: un bit invertito lascia un albero perfettamente valido, e una treemap rappresenta un numero sbagliato con la stessa sicurezza di uno giusto.",
-            "tr": "Snapshot'lar artık içeriklerinin sağlamasını taşıyor. Bir ajandan çekilen ve yolda değişmiş snapshot çizilmek yerine reddediliyor: dönen bir bit kusursuz geçerlilikte bir ağaç bırakıyor, ve treemap yanlış rakamı doğrusu kadar inandırıcı çiziyor."
-          }
-        },
-        {
-          "kind": "changed",
-          "text": {
-            "de": "Die Snapshot-Datenbank, die sich die App mit dem Kommandozeilenwerkzeug teilt, wechselt auf ein neues Schema. Diese Version liest die alte ohne Weiteres; umgekehrt gilt das nicht, also aktualisiere beide zusammen, wenn du beide benutzt.",
-            "en": "The snapshot database this app shares with the command-line tool moves to a new schema. This version reads the old one without ceremony; the reverse does not hold, so update both together if you use both.",
-            "fr": "La base d'instantanés que cette application partage avec l'outil en ligne de commande passe à un nouveau schéma. Cette version lit l'ancienne sans difficulté ; l'inverse n'est pas vrai, donc mettez les deux à jour ensemble si vous utilisez les deux.",
-            "it": "Il database degli snapshot che questa app condivide con lo strumento da riga di comando passa a un nuovo schema. Questa versione legge senza problemi quello vecchio; il contrario non vale, quindi aggiorna entrambi insieme se usi entrambi.",
-            "tr": "Uygulamanın komut satırı aracıyla paylaştığı snapshot veritabanı yeni bir şemaya geçiyor. Bu sürüm eskisini sorunsuz okuyor; tersi geçerli değil, yani ikisini de kullanıyorsanız birlikte güncelleyin."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.5.0",
+          "date": "2026-09-10",
+          "published": true,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Snapshots tragen jetzt eine Prüfsumme ihres Inhalts. Ein von einem Agenten geholter Snapshot, der unterwegs verändert wurde, wird abgelehnt statt gezeichnet: ein gekipptes Bit hinterlässt einen völlig gültigen Baum, und eine Treemap zeichnet die falsche Zahl genauso überzeugend wie die richtige.",
+                "en": "Snapshots now carry a checksum of their content. One pulled from an agent that changed on the way is refused rather than drawn: a flipped bit leaves a perfectly valid tree, and a treemap renders a wrong number every bit as convincingly as a right one.",
+                "fr": "Les instantanés portent désormais une somme de contrôle de leur contenu. Un instantané récupéré depuis un agent et modifié en chemin est refusé plutôt que dessiné : un bit inversé laisse un arbre parfaitement valide, et une treemap affiche un chiffre faux avec autant d'aplomb qu'un vrai.",
+                "it": "Gli snapshot ora portano un checksum del proprio contenuto. Uno snapshot scaricato da un agente e alterato durante il trasferimento viene rifiutato invece che disegnato: un bit invertito lascia un albero perfettamente valido, e una treemap rappresenta un numero sbagliato con la stessa sicurezza di uno giusto.",
+                "tr": "Snapshot'lar artık içeriklerinin sağlamasını taşıyor. Bir ajandan çekilen ve yolda değişmiş snapshot çizilmek yerine reddediliyor: dönen bir bit kusursuz geçerlilikte bir ağaç bırakıyor, ve treemap yanlış rakamı doğrusu kadar inandırıcı çiziyor."
+              }
+            },
+            {
+              "kind": "changed",
+              "text": {
+                "de": "Die Snapshot-Datenbank, die sich die App mit dem Kommandozeilenwerkzeug teilt, wechselt auf ein neues Schema. Diese Version liest die alte ohne Weiteres; umgekehrt gilt das nicht, also aktualisiere beide zusammen, wenn du beide benutzt.",
+                "en": "The snapshot database this app shares with the command-line tool moves to a new schema. This version reads the old one without ceremony; the reverse does not hold, so update both together if you use both.",
+                "fr": "La base d'instantanés que cette application partage avec l'outil en ligne de commande passe à un nouveau schéma. Cette version lit l'ancienne sans difficulté ; l'inverse n'est pas vrai, donc mettez les deux à jour ensemble si vous utilisez les deux.",
+                "it": "Il database degli snapshot che questa app condivide con lo strumento da riga di comando passa a un nuovo schema. Questa versione legge senza problemi quello vecchio; il contrario non vale, quindi aggiorna entrambi insieme se usi entrambi.",
+                "tr": "Uygulamanın komut satırı aracıyla paylaştığı snapshot veritabanı yeni bir şemaya geçiyor. Bu sürüm eskisini sorunsuz okuyor; tersi geçerli değil, yani ikisini de kullanıyorsanız birlikte güncelleyin."
+              }
+            }
+          ]
+        },
         {
           "version": "0.4.2",
           "date": "2026-09-10",
@@ -548,29 +554,35 @@
       ]
     },
     "hub": {
-      "unreleased": [
-        {
-          "kind": "added",
-          "text": {
-            "de": "Ein gepushter Snapshot wird gegen die Prüfsumme geprüft, die er mitbringt, und bei Abweichung mit 400 abgelehnt statt in die Flotte aufgenommen. Ein unterwegs gekipptes Bit hinterlässt einen gültigen Baum mit einer falschen Zahl — auf einem Dashboard, das nach Dringlichkeit sortiert, wäre das die falsche Maschine ganz oben.",
-            "en": "A pushed snapshot is checked against the checksum it carries and refused with a 400 if it disagrees, instead of joining the fleet. A bit flipped in transit leaves a valid tree holding a wrong number — on a dashboard that sorts by urgency, that is the wrong machine at the top.",
-            "fr": "Un instantané poussé est vérifié contre la somme de contrôle qu'il transporte et refusé avec un 400 en cas de désaccord, au lieu de rejoindre la flotte. Un bit inversé en chemin laisse un arbre valide portant un chiffre faux — sur un tableau de bord trié par urgence, c'est la mauvaise machine en tête.",
-            "it": "Uno snapshot inviato viene confrontato con il checksum che porta con sé e, se non corrisponde, rifiutato con un 400 anziché entrare nella flotta. Un bit invertito durante il trasferimento lascia un albero valido con un numero sbagliato: su un cruscotto ordinato per urgenza, sarebbe la macchina sbagliata in cima.",
-            "tr": "Pushlanan bir snapshot, taşıdığı sağlamaya karşı denetleniyor ve tutmuyorsa filoya katılmak yerine 400 ile reddediliyor. Yolda dönen bir bit, geçerli bir ağacın içinde yanlış bir rakam bırakıyor — aciliyete göre sıralayan bir panoda bu, en üstte yanlış makine demek."
-          }
-        },
-        {
-          "kind": "changed",
-          "text": {
-            "de": "Die Snapshot-Datenbank des Hubs wechselt auf ein neues Schema, damit die Prüfsumme Platz hat. Ein Downgrade auf eine ältere Version öffnet die Datei nicht mehr — sie sagt das klar, statt sie falsch zu lesen. Vor dem Upgrade eine Kopie beiseitelegen kostet nichts.",
-            "en": "The hub's snapshot database moves to a new schema so the checksum has somewhere to live. Downgrading to an older build will no longer open the file — it says so plainly rather than misreading it. Putting a copy aside before upgrading costs nothing.",
-            "fr": "La base d'instantanés du hub passe à un nouveau schéma pour loger la somme de contrôle. Revenir à une version antérieure n'ouvrira plus le fichier : elle le dit clairement au lieu de le mal lire. Mettre une copie de côté avant la mise à niveau ne coûte rien.",
-            "it": "Il database degli snapshot dell'hub passa a un nuovo schema per fare posto al checksum. Tornare a una versione precedente non aprirà più il file: lo dice chiaramente invece di leggerlo male. Mettere da parte una copia prima dell'aggiornamento non costa nulla.",
-            "tr": "Hub'ın snapshot veritabanı, sağlamaya yer açmak için yeni bir şemaya geçiyor. Eski bir sürüme dönmek dosyayı artık açmıyor — yanlış okumak yerine bunu açıkça söylüyor. Yükseltmeden önce bir kopya kenara koymanın maliyeti yok."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.4.0",
+          "date": "2026-09-10",
+          "published": true,
+          "entries": [
+            {
+              "kind": "added",
+              "text": {
+                "de": "Ein gepushter Snapshot wird gegen die Prüfsumme geprüft, die er mitbringt, und bei Abweichung mit 400 abgelehnt statt in die Flotte aufgenommen. Ein unterwegs gekipptes Bit hinterlässt einen gültigen Baum mit einer falschen Zahl — auf einem Dashboard, das nach Dringlichkeit sortiert, wäre das die falsche Maschine ganz oben.",
+                "en": "A pushed snapshot is checked against the checksum it carries and refused with a 400 if it disagrees, instead of joining the fleet. A bit flipped in transit leaves a valid tree holding a wrong number — on a dashboard that sorts by urgency, that is the wrong machine at the top.",
+                "fr": "Un instantané poussé est vérifié contre la somme de contrôle qu'il transporte et refusé avec un 400 en cas de désaccord, au lieu de rejoindre la flotte. Un bit inversé en chemin laisse un arbre valide portant un chiffre faux — sur un tableau de bord trié par urgence, c'est la mauvaise machine en tête.",
+                "it": "Uno snapshot inviato viene confrontato con il checksum che porta con sé e, se non corrisponde, rifiutato con un 400 anziché entrare nella flotta. Un bit invertito durante il trasferimento lascia un albero valido con un numero sbagliato: su un cruscotto ordinato per urgenza, sarebbe la macchina sbagliata in cima.",
+                "tr": "Pushlanan bir snapshot, taşıdığı sağlamaya karşı denetleniyor ve tutmuyorsa filoya katılmak yerine 400 ile reddediliyor. Yolda dönen bir bit, geçerli bir ağacın içinde yanlış bir rakam bırakıyor — aciliyete göre sıralayan bir panoda bu, en üstte yanlış makine demek."
+              }
+            },
+            {
+              "kind": "changed",
+              "text": {
+                "de": "Die Snapshot-Datenbank des Hubs wechselt auf ein neues Schema, damit die Prüfsumme Platz hat. Ein Downgrade auf eine ältere Version öffnet die Datei nicht mehr — sie sagt das klar, statt sie falsch zu lesen. Vor dem Upgrade eine Kopie beiseitelegen kostet nichts.",
+                "en": "The hub's snapshot database moves to a new schema so the checksum has somewhere to live. Downgrading to an older build will no longer open the file — it says so plainly rather than misreading it. Putting a copy aside before upgrading costs nothing.",
+                "fr": "La base d'instantanés du hub passe à un nouveau schéma pour loger la somme de contrôle. Revenir à une version antérieure n'ouvrira plus le fichier : elle le dit clairement au lieu de le mal lire. Mettre une copie de côté avant la mise à niveau ne coûte rien.",
+                "it": "Il database degli snapshot dell'hub passa a un nuovo schema per fare posto al checksum. Tornare a una versione precedente non aprirà più il file: lo dice chiaramente invece di leggerlo male. Mettere da parte una copia prima dell'aggiornamento non costa nulla.",
+                "tr": "Hub'ın snapshot veritabanı, sağlamaya yer açmak için yeni bir şemaya geçiyor. Eski bir sürüme dönmek dosyayı artık açmıyor — yanlış okumak yerine bunu açıkça söylüyor. Yükseltmeden önce bir kopya kenara koymanın maliyeti yok."
+              }
+            }
+          ]
+        },
         {
           "version": "0.3.1",
           "date": "2026-09-10",
