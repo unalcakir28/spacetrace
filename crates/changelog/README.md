@@ -12,6 +12,17 @@ JSON has no comments, so the rules live in this file instead.
 Add it to the component's `unreleased` list. Cutting a release moves the whole
 list into `releases`.
 
+**`unreleased` is never shown to a user.** The website's changelog page, the
+desktop app's What's new panel and the hub's About card all render `releases`
+only, and each has a test that fails if that changes. Those entries describe
+code that exists on `main` and in nobody's download, so listing them tells a
+reader about a change they cannot get. They become visible the moment the
+release containing them is cut.
+
+The exceptions are tooling, and deliberate: `CHANGELOG.md` carries an
+**Unreleased** section, and the release workflow slices it for the notes on a
+continuous build — which is the one artifact that really does contain the work.
+
 ```json
 {
   "kind": "fixed",
