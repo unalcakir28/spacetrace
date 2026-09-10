@@ -4,9 +4,12 @@ Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
 rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 9 Eylül 2026 (**Sıra 1–3 kapandı** — E1, E2, A4, A1, A2, A4w,
-B1. Üç platformda CI yeşil. B1'in kalan maddesi **B1-K** ayrı bir oturumda
-Fable modeliyle derin araştırmaya ertelendi. Sıradaki iş → Sıra 4: A3, A5)
+Son güncelleme: 10 Eylül 2026 (**Sıra 1–3 kapandı, 4'ün A3'ü de bitti** —
+E1, E2, A4, A1, A2, A4w, B1, A3. Üç platformda CI yeşil. B1'in kalan maddesi
+**B1-K** ayrı bir oturumda Fable modeliyle derin araştırmaya ertelendi. 10
+Eylül ayrıca yayın işiydi: masaüstü 0.4.0 → 0.4.2 ve hub 0.3.1 çıktı, macOS
+FDA onboarding ve **kararlı imza kimliği** girdi — E3'ün ücretsiz yarısı,
+ayrıntısı aşağıda. Sıradaki iş → **A5**, sonra Sıra 5: B2, B3)
 
 ---
 
@@ -416,6 +419,13 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       Windows OV ($150–300/yıl). *Rakip:* FreeSize, Diskaroo, TreeSize, WizTree
       — hepsi imzalı. Diskin her yerini okuyan imzasız bir program =
       SmartScreen/Gatekeeper uyarısı = düşük kurulum oranı.
+      **Yarısı 10 Eylül 2026'da ücretsiz kapandı:** Gatekeeper ile TCC ayrı
+      sistemler ve ikincisi yalnızca *kararlı bir kimlik* istiyordu. Kendinden
+      imzalı sertifika girdi, izinler artık güncellemeden sağ çıkıyor. Açık
+      kalan yalnızca Gatekeeper/SmartScreen uyarısı, ve onun bedeli para.
+      Geçici yama olarak `install-desktop.sh` / `.ps1` var — curl karantina
+      damgası yazmadığı için uyarı hiç tetiklenmiyor. Ödeme yapıldığında
+      silinecekler docs/RELEASING.md'de madde madde yazılı.
 - [ ] **E4 Homebrew / AUR / Microsoft Store.**
 - [ ] **E5 Geçiş rehberleri** — "ncdu'dan geçiş", "TreeSize'dan geçiş"
       (ROADMAP'te 1.0 zorunlusu).
@@ -425,9 +435,9 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | Sıra | Ne | Neden burada |
 |------|-----|--------------|
 | ~~1~~ ✅ | ~~E1, E2~~ | Yarım saat, ve diğer her kararın girdisi — yanlış rekabet haritası üstüne plan yapılmasın. **Bitti (9 Eylül 2026)**, README düzeltmesi de dâhil |
-| ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Doğruluk iddiamız Windows'ta karşılanmıyordu. A4 (Unix) önce yapıldı çünkü test hiç yoktu. **Kod bitti (9 Eylül 2026), Windows CI onayı bekliyor** |
-| 3 | B1 | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar |
-| 4 | ~~A3~~ ✅, A5 | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma hâlâ sessiz |
+| ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Doğruluk iddiamız Windows'ta karşılanmıyordu. A4 (Unix) önce yapıldı çünkü test hiç yoktu. **Bitti (9 Eylül 2026), Windows CI yeşil** |
+| ~~3~~ ✅ | ~~B1~~ | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar. **Dördü bitti (9 Eylül 2026); kalan tek madde B1-K, en altta** |
+| 4 | ~~A3~~ ✅, **A5 ← sıradaki** | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma hâlâ sessiz |
 | 5 | B2, B3 | Ucuz ve ölçülmüş — B2 eldeki veriyle hemen yapılabilir |
 | 6 | C3, D1 | Geçmiş iddiamızın masaüstü karşılığı + hiç denenmemiş hata senaryosu |
 | 7 | B4, B5, B6 | Platforma özel hızlı yollar — doğruluk düzeldikten **sonra** |
