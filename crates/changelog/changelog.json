@@ -320,7 +320,18 @@
       ]
     },
     "desktop": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Scans laufen mit höchstens acht Threads statt mit einem pro Kern und wurden dadurch auf jedem gemessenen Verzeichnisbaum schneller — 39% auf einem kleinen, 11% auf einem großen. Ein Durchlauf ist syscall-gebunden: jenseits eines Punkts warten die Threads im Kernel, statt zu arbeiten.",
+            "en": "Scans use at most eight threads instead of one per core, which made them faster on every directory tree measured — 39% on a small one, 11% on a large one. A walk is syscall-bound: past a point the threads queue in the kernel rather than work.",
+            "fr": "Les analyses utilisent au plus huit threads au lieu d'un par cœur, ce qui les a accélérées sur chaque arborescence mesurée — 39% sur une petite, 11% sur une grande. Un parcours est limité par les appels système : passé un certain point, les threads attendent dans le noyau au lieu de travailler.",
+            "it": "Le scansioni usano al massimo otto thread invece di uno per core, risultando più veloci su ogni albero di directory misurato: 39% su uno piccolo, 11% su uno grande. Una scansione è limitata dalle chiamate di sistema: oltre un certo punto i thread aspettano nel kernel invece di lavorare.",
+            "tr": "Taramalar çekirdek başına bir yerine en fazla sekiz thread kullanıyor; ölçülen her dizin ağacında hızlandı — küçüğünde %39, büyüğünde %11. Yürüyüş syscall'a bağlı: belli bir noktadan sonra thread'ler çalışmak yerine çekirdekte sıraya giriyor."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.5.0",
