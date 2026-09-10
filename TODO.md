@@ -4,11 +4,13 @@ Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
 rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 10 Eylül 2026 (**Sıra 1–4 kapandı** — E1, E2, A4,
-A1, A2, A4w, B1, A3, A5. Üç platformda CI yeşil. B1'in kalan maddesi
-**B1-K** ayrı bir oturumda Fable modeliyle derin araştırmaya ertelendi. 10
-Eylül ayrıca yayın işiydi: masaüstü 0.4.0 → 0.4.2 ve hub 0.3.1 çıktı, macOS
-FDA onboarding ve **kararlı imza kimliği** girdi — E3'ün ücretsiz yarısı,
+Son güncelleme: 10 Eylül 2026 (**Sıra 1–4 kapandı** — E1, E2, A4, A1, A2,
+A4w, B1, A3, A5. Üç platformda CI yeşil. B1'in kalan maddesi **B1-K** ayrı
+bir oturumda Fable modeliyle derin araştırmaya ertelendi. 10 Eylül ayrıca
+yayın günüydü: masaüstü 0.4.0 → 0.4.2, sonra A5 ile birlikte masaüstü 0.5.0,
+hub 0.4.0 ve CLI 0.5.0. Şema atlaması olduğu için sıra zorunluydu: önce
+masaüstü ve hub, sonra CLI (gerekçe docs/RELEASING.md). Ayrıca macOS FDA
+onboarding ve **kararlı imza kimliği** girdi — E3'ün ücretsiz yarısı,
 ayrıntısı aşağıda. Sıradaki iş → Sıra 5: **B2**, sonra B3)
 
 ---
