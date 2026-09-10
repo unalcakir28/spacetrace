@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::Arc;
 
 use spacetrace_scan_core::{scan, ScanOptions, ScanProgress, Tree};
-use spacetrace_store::{export_ncdu, Store};
+use spacetrace_store::{export_ncdu, Integrity, Store};
 
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -513,7 +513,7 @@ fn a_snapshot_whose_child_points_backwards_is_rejected() {
 /// A database written by a v1 build must keep working, and its old rows must
 /// read back as "capacity unknown" rather than as a full disk.
 #[test]
-fn a_v1_database_migrates_to_v2_without_losing_anything() {
+fn a_v1_database_migrates_to_the_current_schema_without_losing_anything() {
     let work = tempfile::tempdir().unwrap();
     let path = work.path().join("v1.sqlite");
 
@@ -588,12 +588,20 @@ fn a_v1_database_migrates_to_v2_without_losing_anything() {
     let (tree, _) = store.load(meta.id).unwrap();
     assert_eq!(tree.len(), 2);
 
-    // And the file is now v2, so a second open is a no-op.
+    // A snapshot written before digests existed has none, and that reads as
+    // "nothing to check" rather than as a failed check.
+    assert_eq!(
+        store.verify(meta.id).unwrap(),
+        Integrity::Unknown,
+        "a v1 row cannot be verified and must not pretend otherwise"
+    );
+
+    // And the file is now current, so a second open is a no-op.
     let version: i64 = rusqlite::Connection::open(&path)
         .unwrap()
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     assert_eq!(Store::open(&path).unwrap().list().unwrap().len(), 1);
 }
 

@@ -2,7 +2,18 @@
   "schema": 1,
   "components": {
     "cli": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "added",
+          "text": {
+            "de": "Snapshots tragen jetzt eine Prüfsumme ihres Inhalts, und `spacetrace verify` prüft sie. Ein übertragener Snapshot, der unterwegs verändert wurde, wird beim Import abgelehnt statt geglaubt: ein gekipptes Bit hinterlässt einen völlig gültigen Baum, der eine falsche Zahl meldet, und genau das war bisher nicht zu sehen.",
+            "en": "Snapshots now carry a checksum of their content, and `spacetrace verify` checks it. A snapshot that changed on the way here is refused on import rather than believed: a flipped bit leaves a perfectly valid tree that reports a wrong number, which is precisely the failure nothing could see before.",
+            "fr": "Les instantanés portent désormais une somme de contrôle de leur contenu, et `spacetrace verify` la vérifie. Un instantané modifié en chemin est refusé à l'import plutôt que cru : un bit inversé laisse un arbre parfaitement valide qui annonce un chiffre faux, et c'est exactement la panne que rien ne voyait jusqu'ici.",
+            "it": "Gli snapshot ora portano un checksum del proprio contenuto e `spacetrace verify` lo controlla. Uno snapshot alterato durante il trasferimento viene rifiutato all'importazione invece di essere creduto: un bit invertito lascia un albero perfettamente valido che riporta un numero sbagliato, ed è proprio il guasto che finora nessuno poteva vedere.",
+            "tr": "Snapshot'lar artık içeriklerinin sağlamasını taşıyor ve `spacetrace verify` bunu denetliyor. Yolda değişmiş bir snapshot inanılmak yerine içe aktarılırken reddediliyor: dönen tek bir bit kusursuz geçerlilikte bir ağaç bırakıyor ve yanlış rakam bildiriyor — bugüne kadar hiçbir şeyin göremediği arıza tam olarak buydu."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.4.1",

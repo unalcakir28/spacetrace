@@ -4,12 +4,12 @@ Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
 rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 10 Eylül 2026 (**Sıra 1–3 kapandı, 4'ün A3'ü de bitti** —
-E1, E2, A4, A1, A2, A4w, B1, A3. Üç platformda CI yeşil. B1'in kalan maddesi
+Son güncelleme: 10 Eylül 2026 (**Sıra 1–4 kapandı** — E1, E2, A4,
+A1, A2, A4w, B1, A3, A5. Üç platformda CI yeşil. B1'in kalan maddesi
 **B1-K** ayrı bir oturumda Fable modeliyle derin araştırmaya ertelendi. 10
 Eylül ayrıca yayın işiydi: masaüstü 0.4.0 → 0.4.2 ve hub 0.3.1 çıktı, macOS
 FDA onboarding ve **kararlı imza kimliği** girdi — E3'ün ücretsiz yarısı,
-ayrıntısı aşağıda. Sıradaki iş → **A5**, sonra Sıra 5: B2, B3)
+ayrıntısı aşağıda. Sıradaki iş → Sıra 5: **B2**, sonra B3)
 
 ---
 
@@ -230,11 +230,18 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       birimde testi haksız yere düşürürdü).
       `stats.errors == 0` iddiası da kanarya: sistematik bir API hatası
       olsaydı `alloc` sessizce mantıksal boyuta düşerdi, test bunu yakalar.
-- [ ] **A5 Snapshot bütünlük kontrolü** — `export_snapshot` / `import_snapshot`
-      ve `push` yolunda checksum yok. Ağ üzerinden bozulan bir bayt doğruluk
-      iddiamızı sessizce çürütür. `Tree::from_parts_checked` arena *yapısını*
-      doğruluyor (panic ve sonsuz döngü koruması), bit bozulmasını değil.
-      *Rakip:* dua-cli v2.44.0 snapshot'ları SHA-256 ile doğruluyor.
+- [x] **A5 Snapshot bütünlük kontrolü** — yapıldı *(10 Eylül 2026)*. Şema v3'te
+      `scans.content_hash`: taramanın *mantıksal içeriğinin* SHA-256'sı
+      (metadata satırı + her `entries` satırı, alanlar etiketli, dizeler
+      uzunluk önekli). Dosyanın baytlarının değil — `export_snapshot` her
+      seferinde yeni bir SQLite dosyası kuruyor ve `VACUUM` içeriği
+      değiştirmeden dosyayı değiştiriyor; kendi kendine oynayan bir özet,
+      olmayandan kötü. `import_snapshot` tutmazsa hiçbir şeyi almıyor,
+      `export_snapshot` bozuk bildiğini göndermiyor, `spacetrace verify`
+      istendiğinde bakıyor. `NULL` = "özet yok" (v3 öncesi), "bozuk" değil.
+      **Kimlik doğrulaması değil** — gövdeyi değiştirebilen özeti de
+      hesaplar; tehdit modeli bozulma, saldırgan değil.
+      Yeni bağımlılık yok (`sha2` zaten workspace'te).
 - [ ] **A6 btrfs/ZFS farkındalığı** — reflink ve sıkıştırma yüzünden ağaç
       yürüyüşü yanlış. Uzun vade; doğrusu örnekleme gerektiriyor.
       *Rakip:* btdu (Monte Carlo, ~100 örnekte %1 çözünürlük).
@@ -437,8 +444,8 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~1~~ ✅ | ~~E1, E2~~ | Yarım saat, ve diğer her kararın girdisi — yanlış rekabet haritası üstüne plan yapılmasın. **Bitti (9 Eylül 2026)**, README düzeltmesi de dâhil |
 | ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Doğruluk iddiamız Windows'ta karşılanmıyordu. A4 (Unix) önce yapıldı çünkü test hiç yoktu. **Bitti (9 Eylül 2026), Windows CI yeşil** |
 | ~~3~~ ✅ | ~~B1~~ | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar. **Dördü bitti (9 Eylül 2026); kalan tek madde B1-K, en altta** |
-| 4 | ~~A3~~ ✅, **A5 ← sıradaki** | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma hâlâ sessiz |
-| 5 | B2, B3 | Ucuz ve ölçülmüş — B2 eldeki veriyle hemen yapılabilir |
+| ~~4~~ ✅ | ~~A3, A5~~ | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma artık sessiz değil. **Bitti (10 Eylül 2026)** |
+| 5 | **B2 ← sıradaki**, B3 | Ucuz ve ölçülmüş — B2 eldeki veriyle hemen yapılabilir |
 | 6 | C3, D1 | Geçmiş iddiamızın masaüstü karşılığı + hiç denenmemiş hata senaryosu |
 | 7 | B4, B5, B6 | Platforma özel hızlı yollar — doğruluk düzeldikten **sonra** |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |

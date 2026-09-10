@@ -105,6 +105,9 @@ spacetrace ls --scan 3 --subpath docker/overlay2
 
 # Open in ncdu (inspect a snapshot pulled off a server)
 spacetrace export --scan 3 --out scan.json && ncdu -f scan.json
+
+# Check stored snapshots against the digest saved with them
+spacetrace verify
 ```
 
 ### Another machine
@@ -122,6 +125,12 @@ spacetrace --remote https://nas.example.com pull --root /var   # keep a local co
 A remote snapshot is downloaded as the same standalone SQLite file the agent
 stores, so listing, browsing and diffing it run the identical code as a local
 one. See [docs/AGENT.md](docs/AGENT.md) to set the agent up.
+
+Every snapshot carries a checksum of its contents, and one that changed on the
+way here is refused rather than believed — a flipped bit leaves a structurally
+valid tree that reports a wrong number, which is the one kind of damage
+nothing else would catch. It is a corruption check, not a signature: whoever
+can change the body can recompute the checksum.
 
 Example output:
 

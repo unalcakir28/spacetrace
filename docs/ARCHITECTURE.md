@@ -179,7 +179,8 @@ is never rebuilt.
 
 ```sql
 scans(id, host, root, started_at, duration_ms, total_size, total_alloc,
-      files, dirs, errors, hardlinks_deduped, scanner_version, label)
+      files, dirs, errors, hardlinks_deduped, scanner_version, label,
+      fs_total, fs_available, content_hash)
 
 entries(scan_id, id, parent_id, name, kind, size, alloc, mtime, nlink,
         files, dirs, children_start, children_len)   -- WITHOUT ROWID
@@ -188,6 +189,25 @@ entries(scan_id, id, parent_id, name, kind, size, alloc, mtime, nlink,
 `host` + `root` defines a **target**; comparison and `prune` operate on this
 pair. `PRAGMA user_version` holds the schema version; a database written by
 a newer version is not opened — it is never silently misread.
+
+### The digest, and what it is not
+
+`content_hash` is a SHA-256 over the scan's **logical content** — its
+metadata row and every entry row, each field tagged and every string
+length-prefixed. Not the bytes of the file: `export_snapshot` builds a new
+SQLite file every time, and page layout or a `VACUUM` can change a file
+without changing a value in it. A digest that moves on its own is worse than
+none, because the first false alarm teaches everyone to ignore it.
+
+It is checked where a snapshot crosses a boundary — `import_snapshot` refuses
+a body that does not match, `export_snapshot` refuses to send one — and on
+demand with `spacetrace verify`. A flipped bit leaves a *structurally
+perfect* tree, so `Tree::from_parts_checked` cannot see it; that check is
+about arena invariants, this one is about values.
+
+**It is not authentication.** Whoever can change the body can recompute the
+digest. The threat here is a bad cable, not an adversary; tampering needs a
+signature and a way to distribute keys, and that decision has not been taken.
 
 There is also an ncdu-compatible JSON export. The reason is practical: being
 able to inspect a recording pulled from a server with `ncdu -f scan.json`

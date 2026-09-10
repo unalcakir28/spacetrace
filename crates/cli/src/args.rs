@@ -53,10 +53,19 @@ pub enum Command {
     Prune(PruneArgs),
     /// Delete a snapshot
     Rm(RmArgs),
+    /// Check stored snapshots against the digest saved with them
+    Verify(VerifyArgs),
     /// Copy a snapshot from a remote agent into the local database
     Pull(PullArgs),
     /// Install the newest release over this one
     Update(UpdateArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct VerifyArgs {
+    /// Snapshot id (defaults to every snapshot in the database)
+    #[arg(value_name = "ID")]
+    pub id: Option<i64>,
 }
 
 #[derive(Args, Debug)]

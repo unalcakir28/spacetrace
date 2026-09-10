@@ -7,7 +7,12 @@ use rusqlite::Connection;
 /// v2 added `fs_total` / `fs_available`: the capacity of the filesystem the
 /// root sits on, without which "when does this fill up" cannot be answered.
 /// Both are nullable, because a v1 snapshot genuinely does not know.
-pub const SCHEMA_VERSION: i64 = 2;
+///
+/// v3 added `content_hash`: a digest of the scan's logical content, so a bit
+/// flipped on the way here is refused instead of reported as a number.
+/// Nullable for the same reason — an older snapshot has no digest, which is
+/// "unknown", not "corrupt".
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Prepare a connection, migrating the file only if it actually needs it.
 ///
@@ -138,13 +143,27 @@ fn migrate_from(conn: &Connection, found: i64) -> Result<()> {
     if found >= SCHEMA_VERSION {
         return Ok(());
     }
+    // Order matters, and not only for tidiness. `Store::export_snapshot`
+    // copies with `INSERT INTO snap.scans SELECT * FROM main.scans`, where
+    // `snap` was just built by `create_tables` and `main` may have reached the
+    // same shape through these ALTERs. `ALTER TABLE ADD COLUMN` can only
+    // append, so the declaration below must list the added columns in the same
+    // order they appear at the end of `create_tables` — otherwise the copy
+    // writes each value into the wrong column and says nothing.
+    //
     // v1 -> v2: filesystem capacity. Existing rows keep NULL, which reads back
     // as "unknown" rather than as zero — a scan taken before this existed did
     // not measure a full disk.
-    for column in ["fs_total", "fs_available"] {
+    // v2 -> v3: the content digest. NULL means the snapshot predates it, so
+    // there is nothing to check rather than something that failed a check.
+    for (column, kind) in [
+        ("fs_total", "INTEGER"),
+        ("fs_available", "INTEGER"),
+        ("content_hash", "TEXT"),
+    ] {
         if !has_column(conn, "scans", column)? {
             conn.execute_batch(&format!(
-                "ALTER TABLE main.scans ADD COLUMN {column} INTEGER"
+                "ALTER TABLE main.scans ADD COLUMN {column} {kind}"
             ))?;
         }
     }
@@ -190,7 +209,15 @@ pub fn create_tables(conn: &Connection, schema: &str) -> Result<()> {
             -- Capacity of the filesystem the root sits on. NULL when the
             -- platform could not say, or when the snapshot predates v2.
             fs_total          INTEGER,
-            fs_available      INTEGER
+            fs_available      INTEGER,
+            -- SHA-256 over this scan's logical content (see digest.rs), so a
+            -- snapshot that changed on the way here is refused rather than
+            -- believed. NULL when the snapshot predates v3.
+            --
+            -- Any column added after this one must also be appended in
+            -- `migrate_from`, in the same order: the two shapes meet in
+            -- `export_snapshot`'s `SELECT *`.
+            content_hash      TEXT
         );
 
         CREATE INDEX IF NOT EXISTS {schema}.scans_target

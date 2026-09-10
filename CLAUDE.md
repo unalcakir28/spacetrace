@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 222 test, hepsi geçmeli
+cargo test --workspace                   # 237 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -199,6 +199,22 @@ Kodda dikkat edilecekler:
   geçiyor, bu yüzden `Tree::from_parts_checked` arena değişmezlerini doğruluyor.
   Doğrulamayı atlayan bir yol ekleme: bozuk `children_start` indeks panic'i,
   geriye dönük bir çocuk işaretçisi sonsuz döngü demek.
+- **Yapı doğrulaması değer doğrulaması değil, ve ikincisi `content_hash`.**
+  Bir `size` alanındaki bit dönmesi kusursuz bir ağaç bırakır ve yanlış rakam
+  raporlar — `from_parts_checked` bunu göremez. Şema v3'ten beri her tarama
+  kendi mantıksal içeriğinin SHA-256'sını taşıyor
+  (`crates/store/src/digest.rs`); `import_snapshot` gelen satırlardan yeniden
+  hesaplayıp tutmazsa **hiçbir şeyi** içe aktarmıyor, `export_snapshot`
+  bozuk olduğunu bildiği veriyi göndermiyor, `spacetrace verify` istendiğinde
+  bakıyor. `NULL` = "özet yok" (v3 öncesi snapshot), "bozuk" değil.
+  **Kimlik doğrulaması değil:** gövdeyi değiştirebilen özeti de yeniden
+  hesaplar. Tehdit modeli bozulma, saldırgan değil.
+- **`scans` tablosuna eklenen her sütun hem `create_tables`'ın hem
+  `migrate_from`'un sonuna, aynı sırayla.** `export_snapshot`
+  `INSERT INTO snap.scans SELECT * FROM main.scans` yapıyor ve `ALTER TABLE`
+  yalnızca sona ekleyebiliyor; sıralar ayrışırsa kopya her değeri yanlış
+  sütuna yazar ve hiçbir şey söylemez. Testi
+  `crates/store/tests/integrity.rs` içinde.
 - Bir kök aynı anda yalnızca bir kez taranır (`Runner::try_claim`, HTTP'de 409).
 - Zamanlayıcı UTC + sabit offset ile çalışır; saat dilimi veritabanı yok.
 - Kapasite **boş/toplam** olarak raporlanır, "% dolu" olarak değil (K6).

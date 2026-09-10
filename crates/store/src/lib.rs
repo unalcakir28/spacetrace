@@ -5,6 +5,7 @@
 //! written verbatim, which makes loading a snapshot a single ordered query with
 //! no tree rebuilding.
 
+mod digest;
 mod ncdu;
 mod schema;
 
@@ -67,6 +68,20 @@ impl ScanMeta {
     pub fn target(&self) -> String {
         format!("{}:{}", self.host, self.root)
     }
+}
+
+/// What checking a snapshot's digest concluded.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum Integrity {
+    /// The content matches the digest stored with it.
+    Intact,
+    /// No digest was stored. Snapshots written before schema v3 have none,
+    /// and that is different from failing a check — there is nothing to check.
+    Unknown,
+    /// The content does not match. Reported rather than repaired: which of the
+    /// two is wrong cannot be known from here.
+    Mismatch { stored: String, computed: String },
 }
 
 pub struct Store {
@@ -172,6 +187,18 @@ impl Store {
             }
         }
 
+        // Computed by reading the rows back rather than from the tree in
+        // hand, so that the one function every reader uses is also the one
+        // that produced the stored value. A second encoder over the in-memory
+        // tree would save a pass and would eventually disagree with this one
+        // about some field, which surfaces as "your snapshot is corrupt" on a
+        // snapshot that is fine.
+        let hash = digest::of(&tx, "main", scan_id)?;
+        tx.execute(
+            "UPDATE scans SET content_hash = ?1 WHERE id = ?2",
+            params![hash, scan_id],
+        )?;
+
         tx.commit()?;
         Ok(scan_id)
     }
@@ -222,6 +249,21 @@ impl Store {
             .finish(PathBuf::from(&meta.root))
             .map_err(|e| anyhow::anyhow!("scan {scan_id} is not a usable tree: {e}"))?;
         Ok((tree, meta))
+    }
+
+    /// Recompute a stored scan's digest and compare it with the one written
+    /// beside it.
+    ///
+    /// This is the on-demand check for a snapshot that has been sitting on a
+    /// disk. The transfer path does not need it: `export_snapshot` and
+    /// `import_snapshot` check by themselves, because a body arriving over the
+    /// network is the case nobody would think to check by hand.
+    pub fn verify(&self, scan_id: ScanId) -> Result<Integrity> {
+        anyhow::ensure!(
+            self.scan(scan_id)?.is_some(),
+            "no scan with id {scan_id} to verify"
+        );
+        integrity_of(&self.conn, "main", scan_id)
     }
 
     pub fn scan(&self, scan_id: ScanId) -> Result<Option<ScanMeta>> {
@@ -312,6 +354,15 @@ impl Store {
             self.scan(scan_id)?.is_some(),
             "no scan with id {scan_id} to export"
         );
+        // Checked before anything is written: shipping data already known to
+        // be wrong is worse than refusing, because the receiver's own check
+        // will blame the network for damage that was here all along.
+        if let Integrity::Mismatch { stored, computed } = self.verify(scan_id)? {
+            anyhow::bail!(
+                "scan {scan_id} does not match its own digest and was not exported \
+                 (stored {stored}, computed {computed}); the local database is damaged"
+            );
+        }
         // SQLite will happily open an existing file and merge into it, which
         // would silently produce a snapshot containing someone else's scan.
         if out.exists() {
@@ -388,13 +439,36 @@ impl Store {
                 continue;
             }
 
+            // The one place a body that crossed a network is opened. A flipped
+            // bit leaves a perfectly valid tree — `from_parts_checked` is
+            // about structure, not values — so without this the scan imports
+            // and reports a wrong number with full confidence.
+            //
+            // The whole import fails rather than this one scan being skipped:
+            // the transaction is already all-or-nothing, and a push carries
+            // exactly one scan, so "skip the bad one" would only ever mean
+            // "import nothing" while sounding like partial success.
+            if let Integrity::Mismatch { stored, computed } =
+                integrity_of(&tx, "incoming", source_id)?
+            {
+                anyhow::bail!(
+                    "the snapshot of {root} from {host} does not match its digest \
+                     (stored {stored}, computed {computed}); nothing was imported"
+                );
+            }
+
+            // `content_hash` travels with the row it describes. Leaving it
+            // out would drop the digest at exactly the moment it stops being
+            // recomputable: the receiver would hold a snapshot it can never
+            // check again, and would say "unknown" for the rest of its life.
             tx.execute(
                 "INSERT INTO main.scans (host, root, started_at, duration_ms, total_size,
                                          total_alloc, files, dirs, errors, hardlinks_deduped,
-                                         scanner_version, label, fs_total, fs_available)
+                                         scanner_version, label, fs_total, fs_available,
+                                         content_hash)
                  SELECT host, root, started_at, duration_ms, total_size, total_alloc, files,
                         dirs, errors, hardlinks_deduped, scanner_version, label,
-                        fs_total, fs_available
+                        fs_total, fs_available, content_hash
                  FROM incoming.scans WHERE id = ?1",
                 [source_id],
             )?;
@@ -451,6 +525,26 @@ impl Store {
         tx.commit()?;
         Ok(removed)
     }
+}
+
+/// Compare the stored digest of one scan against the content beside it.
+///
+/// `schema` is `main`, or the alias of an ATTACHed snapshot — the same check
+/// serves a local database and one that just came off the wire.
+fn integrity_of(conn: &Connection, schema: &str, scan_id: ScanId) -> Result<Integrity> {
+    let stored: Option<String> = conn.query_row(
+        &format!("SELECT content_hash FROM {schema}.scans WHERE id = ?1"),
+        [scan_id],
+        |row| row.get(0),
+    )?;
+    let Some(stored) = stored else {
+        return Ok(Integrity::Unknown);
+    };
+    let computed = digest::of(conn, schema, scan_id)?;
+    if computed == stored {
+        return Ok(Integrity::Intact);
+    }
+    Ok(Integrity::Mismatch { stored, computed })
 }
 
 const SELECT_SCAN: &str = "SELECT id, host, root, started_at, duration_ms, total_size,

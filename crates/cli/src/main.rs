@@ -14,10 +14,11 @@ use spacetrace_diff::{diff, ChangeKind, DiffOptions, DiffReport};
 use spacetrace_scan_core::{
     scan, EntryKind, ScanOptions, ScanProgress, ScanStats, SizeBasis, Tree,
 };
-use spacetrace_store::{export_ncdu, ScanMeta, Store};
+use spacetrace_store::{export_ncdu, Integrity, ScanMeta, Store};
 
 use crate::args::{
     parse_size, Cli, Command, DiffArgs, ExportArgs, LsArgs, PruneArgs, PullArgs, RmArgs, ScanArgs,
+    VerifyArgs,
 };
 use crate::remote::Remote;
 
@@ -64,6 +65,7 @@ fn run(cli: &Cli) -> Result<()> {
             Command::Scan(_) => Some("scan"),
             Command::Prune(_) => Some("prune"),
             Command::Rm(_) => Some("rm"),
+            Command::Verify(_) => Some("verify"),
             _ => None,
         };
         if let Some(name) = local_only {
@@ -83,6 +85,7 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Export(a) => cmd_export(a, &db_path, remote.as_ref()),
         Command::Prune(a) => cmd_prune(a, &db_path, cli.json),
         Command::Rm(a) => cmd_rm(a, &db_path),
+        Command::Verify(a) => cmd_verify(a, &db_path, cli.json),
         Command::Pull(a) => cmd_pull(a, &db_path, remote.as_ref(), cli.json),
         Command::Update(a) => {
             if a.check {
@@ -541,6 +544,85 @@ fn cmd_rm(a: &RmArgs, db_path: &Path) -> Result<()> {
     let store = open_store(db_path)?;
     anyhow::ensure!(store.delete(a.id)?, "snapshot #{} not found", a.id);
     println!("Snapshot #{} deleted.", a.id);
+    Ok(())
+}
+
+// ------------------------------------------------------------- verify
+
+/// Check snapshots against the digest stored beside them.
+///
+/// The transfer path checks itself, so this is for the other case: a database
+/// that has been sitting on a disk long enough for the disk to have opinions.
+fn cmd_verify(a: &VerifyArgs, db_path: &Path, json: bool) -> Result<()> {
+    let store = open_store(db_path)?;
+    let scans: Vec<ScanMeta> = match a.id {
+        Some(id) => vec![store
+            .scan(id)?
+            .with_context(|| format!("no snapshot with id {id}"))?],
+        None => store.list()?,
+    };
+    anyhow::ensure!(!scans.is_empty(), "no snapshots to verify");
+
+    let mut checked = Vec::new();
+    let mut damaged = 0;
+    let mut unknown = 0;
+    for meta in &scans {
+        let result = store.verify(meta.id)?;
+        match &result {
+            Integrity::Mismatch { .. } => damaged += 1,
+            Integrity::Unknown => unknown += 1,
+            Integrity::Intact => {}
+        }
+        checked.push((meta, result));
+    }
+
+    if json {
+        let rows: Vec<_> = checked
+            .iter()
+            .map(|(meta, result)| {
+                serde_json::json!({
+                    "id": meta.id,
+                    "host": meta.host,
+                    "root": meta.root,
+                    "integrity": result,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({
+                "checked": rows.len(),
+                "damaged": damaged,
+                "unknown": unknown,
+                "scans": rows,
+            })
+        );
+    } else {
+        for (meta, result) in &checked {
+            let verdict = match result {
+                Integrity::Intact => "ok".to_string(),
+                // No digest at all: written before snapshots carried one.
+                // Saying "ok" here would be a claim nobody checked.
+                Integrity::Unknown => "no digest (older snapshot)".to_string(),
+                Integrity::Mismatch { stored, computed } => {
+                    format!("DAMAGED: stored {stored}, computed {computed}")
+                }
+            };
+            println!("#{:<5} {}:{}  {}", meta.id, meta.host, meta.root, verdict);
+        }
+        println!();
+        println!(
+            "{} checked, {damaged} damaged, {unknown} without a digest.",
+            checked.len()
+        );
+    }
+
+    // A non-zero exit, because this is the kind of thing a cron job runs and
+    // nobody reads the output of a command that succeeded.
+    anyhow::ensure!(
+        damaged == 0,
+        "{damaged} snapshot(s) do not match their digest"
+    );
     Ok(())
 }
 
