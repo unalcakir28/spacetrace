@@ -350,6 +350,26 @@
             "it": "Le scansioni usano al massimo otto thread invece di uno per core, risultando più veloci su ogni albero di directory misurato: 39% su uno piccolo, 11% su uno grande. Una scansione è limitata dalle chiamate di sistema: oltre un certo punto i thread aspettano nel kernel invece di lavorare.",
             "tr": "Taramalar çekirdek başına bir yerine en fazla sekiz thread kullanıyor; ölçülen her dizin ağacında hızlandı — küçüğünde %39, büyüğünde %11. Yürüyüş syscall'a bağlı: belli bir noktadan sonra thread'ler çalışmak yerine çekirdekte sıraya giriyor."
           }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Wenn ein Scan nicht mehr vorankommt, sagt der Fortschrittsstreifen das jetzt und nennt den Ordner, auf den gewartet wird — statt einen Balken weiterlaufen zu lassen. Eine Netzfreigabe, die aufgehört hat zu antworten, blockiert im Kernel und keine App kann das aufheben; aber wer weiß, worauf gewartet wird, kann entscheiden, ob er wartet oder abbricht.",
+            "en": "When a scan stops making progress, the progress strip now says so and names the folder it is waiting on, instead of animating a bar over a scan that is going nowhere. A network share that has stopped answering blocks in the kernel and no app can lift that — but knowing what it is waiting on is what lets you decide whether to wait or stop.",
+            "fr": "Quand une analyse n'avance plus, le bandeau de progression le dit et nomme le dossier attendu, au lieu d'animer une barre au-dessus d'une analyse qui ne va nulle part. Un partage réseau qui ne répond plus bloque dans le noyau et aucune application ne peut y remédier — mais savoir ce qui est attendu permet de choisir entre patienter et arrêter.",
+            "it": "Quando una scansione non avanza più, la barra di avanzamento lo dice e indica la cartella su cui è in attesa, invece di animare un indicatore su una scansione che non va da nessuna parte. Una condivisione di rete che ha smesso di rispondere si blocca nel kernel e nessuna app può sbloccarla — ma sapere su cosa è in attesa permette di decidere se aspettare o fermarsi.",
+            "tr": "Bir tarama ilerlemeyi bıraktığında ilerleme şeridi artık bunu söylüyor ve beklediği klasörü adıyla veriyor; hiçbir yere gitmeyen bir taramanın üstünde çubuk oynatmıyor. Cevap vermeyi bırakmış bir ağ paylaşımı çekirdekte bloke oluyor ve bunu hiçbir uygulama kaldıramaz — ama neyi beklediğini bilmek, beklemekle durdurmak arasında seçim yapmanızı sağlayan şey."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Der Fortschrittsstreifen schien am Ende jedes Scans einzufrieren: nach dem Durchlauf sucht ein weiterer Schritt nach Copy-on-Write-Klonen, und dabei bewegte sich kein Zähler. Diese Phase heißt jetzt „Wird abgeschlossen“ und zählt, was sie prüft, statt eine stehengebliebene Dateizahl zu zeigen.",
+            "en": "The progress strip appeared to freeze at the end of every scan: after the walk there is a second pass looking for copy-on-write clones, and no counter moved during it. That phase now says “Finishing up” and counts what it checks, instead of showing a file count that has stopped.",
+            "fr": "Le bandeau de progression semblait se figer à la fin de chaque analyse : après le parcours vient une seconde passe qui recherche les clones en copie sur écriture, et aucun compteur ne bougeait pendant ce temps. Cette phase affiche désormais « Finalisation » et compte ce qu'elle vérifie, au lieu d'un nombre de fichiers arrêté.",
+            "it": "La barra di avanzamento sembrava bloccarsi alla fine di ogni scansione: dopo la scansione c'è un secondo passaggio che cerca i cloni copy-on-write, e nessun contatore si muoveva. Ora quella fase indica “Completamento” e conta ciò che controlla, invece di mostrare un numero di file fermo.",
+            "tr": "İlerleme şeridi her taramanın sonunda donmuş görünüyordu: yürüyüşten sonra kopyala-yazarken klonlarını arayan ikinci bir geçiş var ve o sırada hiçbir sayaç kımıldamıyordu. O aşama artık “Tamamlanıyor” diyor ve durmuş bir dosya sayısı göstermek yerine denetlediğini sayıyor."
+          }
         }
       ],
       "releases": [
