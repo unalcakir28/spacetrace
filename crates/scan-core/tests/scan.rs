@@ -1,7 +1,9 @@
 use std::fs;
 use std::sync::Arc;
 
-use spacetrace_scan_core::{scan, EntryKind, Phase, ScanOptions, ScanProgress, SizeBasis};
+use spacetrace_scan_core::{
+    scan, EntryKind, Phase, ScanOptions, ScanProgress, SizeBasis, StallWatch, STALL_GRACE,
+};
 
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -870,4 +872,104 @@ fn the_phase_moves_on_when_the_walk_is_done() {
     assert_eq!(progress.phase(), Phase::Walking, "before anything happens");
     scan(dir.path(), ScanOptions::default(), Arc::clone(&progress)).unwrap();
     assert_eq!(progress.phase(), Phase::Finishing);
+}
+
+// ------------------------------------------------- the stall watch
+
+/// A scan that is moving is never a stall, however long it runs.
+#[test]
+fn a_moving_scan_is_never_stalled() {
+    use std::time::{Duration, Instant};
+    let progress = ScanProgress::default();
+    let start = Instant::now();
+    let mut watch = StallWatch::new(start, STALL_GRACE);
+    for step in 1..50u64 {
+        progress
+            .files
+            .store(step, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            watch.observe(&progress, start + Duration::from_secs(step * 60)),
+            None,
+            "the counters moved, so an hour of wall clock is still not a stall"
+        );
+    }
+}
+
+#[test]
+fn standing_still_becomes_a_stall_only_after_the_grace_period() {
+    use std::time::{Duration, Instant};
+    let progress = ScanProgress::default();
+    progress
+        .files
+        .store(7, std::sync::atomic::Ordering::Relaxed);
+    let start = Instant::now();
+    let mut watch = StallWatch::new(start, STALL_GRACE);
+
+    assert_eq!(watch.observe(&progress, start), None, "first sighting");
+    assert_eq!(
+        watch.observe(&progress, start + STALL_GRACE - Duration::from_millis(1)),
+        None,
+        "one millisecond short is not a stall"
+    );
+    assert_eq!(
+        watch.observe(&progress, start + STALL_GRACE),
+        Some(STALL_GRACE),
+        "the boundary itself counts, or the message never appears"
+    );
+}
+
+/// Measured from when movement stopped, not from when anyone last looked: a
+/// watcher polling every 120 ms would otherwise under-report by that much, and
+/// the boundary case would never fire at all.
+#[test]
+fn the_wait_is_measured_from_when_movement_stopped() {
+    use std::time::{Duration, Instant};
+    let progress = ScanProgress::default();
+    let start = Instant::now();
+    let mut watch = StallWatch::new(start, STALL_GRACE);
+    watch.observe(&progress, start);
+    let waited = watch
+        .observe(&progress, start + Duration::from_secs(90))
+        .expect("ninety seconds of nothing is a stall");
+    assert_eq!(waited, Duration::from_secs(90));
+}
+
+#[test]
+fn movement_after_a_stall_clears_it() {
+    use std::time::{Duration, Instant};
+    let progress = ScanProgress::default();
+    let start = Instant::now();
+    let mut watch = StallWatch::new(start, STALL_GRACE);
+    watch.observe(&progress, start);
+    assert!(watch.observe(&progress, start + STALL_GRACE).is_some());
+
+    progress
+        .files
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        watch.observe(&progress, start + STALL_GRACE + Duration::from_secs(1)),
+        None,
+        "one entry read is enough to say the scan is alive again"
+    );
+}
+
+/// Invariant 8 in practice: the phase after the walk moves only
+/// `clones_probed`, and a watcher that ignored it would call that phase a
+/// stall. This is the test that fails if a future counter is left out.
+#[test]
+fn a_phase_that_only_probes_clones_is_not_a_stall() {
+    use std::time::{Duration, Instant};
+    let progress = ScanProgress::default();
+    let start = Instant::now();
+    let mut watch = StallWatch::new(start, STALL_GRACE);
+    watch.observe(&progress, start);
+
+    progress
+        .clones_probed
+        .store(1, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        watch.observe(&progress, start + Duration::from_secs(60)),
+        None,
+        "the clone probe is work, not a stall"
+    );
 }

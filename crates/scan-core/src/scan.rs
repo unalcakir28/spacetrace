@@ -73,6 +73,70 @@ impl Phase {
     }
 }
 
+/// How long the counters may stand still before a watcher should say so.
+///
+/// Long enough not to nag a slow network share on its first directory, short
+/// enough to answer "is this stuck" before the reader gives up and kills it.
+pub const STALL_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Decides when a scan has stopped moving.
+///
+/// The counters are the only evidence available: a mount that stopped
+/// answering blocks a thread in the kernel, and nothing in this process can
+/// see that directly. So a watcher polls, and this says whether anything has
+/// changed.
+///
+/// It reads the counters off [`ScanProgress`] rather than taking them as an
+/// argument, which is what keeps invariant 8 workable: when a new phase adds a
+/// counter, every watcher starts including it without being changed. A caller
+/// that assembled its own tuple would go on ignoring the new one and report a
+/// healthy phase as a stall.
+pub struct StallWatch {
+    counters: [u64; 5],
+    /// When these values were **first** seen — not the second sighting. The
+    /// counters stopped somewhere between the two, and the first is the
+    /// earliest moment they are known to have been still already.
+    since: std::time::Instant,
+    grace: std::time::Duration,
+}
+
+impl StallWatch {
+    /// Starts counting from `now`, so a scan that produces nothing at all —
+    /// blocked on its own root — is still reported.
+    pub fn new(now: std::time::Instant, grace: std::time::Duration) -> Self {
+        StallWatch {
+            counters: [0; 5],
+            since: now,
+            grace,
+        }
+    }
+
+    /// How long the scan has been stalled, or `None` while it is moving or has
+    /// not been still for longer than the grace period.
+    pub fn observe(
+        &mut self,
+        progress: &ScanProgress,
+        now: std::time::Instant,
+    ) -> Option<std::time::Duration> {
+        let counters = [
+            progress.files.load(Ordering::Relaxed),
+            progress.dirs.load(Ordering::Relaxed),
+            progress.bytes.load(Ordering::Relaxed),
+            progress.errors.load(Ordering::Relaxed),
+            progress.clones_probed.load(Ordering::Relaxed),
+        ];
+        if counters != self.counters {
+            self.counters = counters;
+            self.since = now;
+            return None;
+        }
+        // `checked_duration_since`, not `-`: the caller passes the clock, and
+        // one handed an earlier instant should get "not stalled", not a panic.
+        let waited = now.checked_duration_since(self.since)?;
+        (waited >= self.grace).then_some(waited)
+    }
+}
+
 /// Live counters a UI can poll while a scan runs, and the switch that stops it.
 #[derive(Debug, Default)]
 pub struct ScanProgress {
