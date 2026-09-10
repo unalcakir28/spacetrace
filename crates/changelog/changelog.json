@@ -272,7 +272,18 @@
       ]
     },
     "desktop": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Das .dmg ließ sich unter macOS nicht mehr öffnen. Die Signaturidentität aus 0.4.1 wurde auch auf das Disk-Image gesetzt, und ein Image mit einem Zertifikat, dem macOS nicht vertraut, wird schon beim Einhängen abgewiesen — die Warnung erschien also vor dem ersten Start, beim Öffnen der Datei selbst. Das Image ist wieder unsigniert; die App darin behält ihre Identität.",
+            "en": "The .dmg would no longer open on macOS. The signing identity added in 0.4.1 was applied to the disk image as well, and an image signed by a certificate macOS does not trust is refused at mount time — so the warning arrived when you opened the download, before the app ever ran. The image is unsigned again; the app inside keeps its identity.",
+            "fr": "Le .dmg ne s'ouvrait plus sous macOS. L'identité de signature ajoutée en 0.4.1 s'appliquait aussi à l'image disque, et une image signée par un certificat que macOS ne reconnaît pas est refusée dès le montage : l'avertissement arrivait donc à l'ouverture du téléchargement, avant même le lancement de l'application. L'image n'est plus signée ; l'application qu'elle contient garde son identité.",
+            "it": "Il .dmg non si apriva più su macOS. L'identità di firma introdotta nella 0.4.1 veniva applicata anche all'immagine disco, e un'immagine firmata da un certificato di cui macOS non si fida viene rifiutata già al montaggio: l'avviso compariva quindi all'apertura del file scaricato, prima ancora di avviare l'app. L'immagine torna non firmata; l'app al suo interno mantiene la propria identità.",
+            "tr": "macOS'ta .dmg dosyası artık açılmıyordu. 0.4.1'de eklenen imza kimliği disk imajına da uygulanıyordu ve macOS'un güvenmediği bir sertifikayla imzalanmış imaj daha bağlanırken reddediliyor — yani uyarı uygulamayı çalıştırmadan önce, indirilen dosyayı açarken çıkıyordu. İmaj yeniden imzasız; içindeki uygulama kimliğini koruyor."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.4.1",

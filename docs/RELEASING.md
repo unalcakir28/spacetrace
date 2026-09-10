@@ -272,7 +272,7 @@ dizeler**, ve TCC requirement'ı yazıldığı gibi karşılaştırıyor. Yani g
 adımını kaldıran bir derleme geçerli bir imza üretir ve yine de herkesin iznini
 düşürür. Sürüm iş akışı bu yüzden tam olarak `root` biçimini doğruluyor.
 
-Kurulumdaki üç tuzak, üçü de yaşandı:
+Kurulumdaki dört tuzak, dördü de yaşandı:
 
 - **OpenSSL 3 varsayılan p12'yi macOS okuyamıyor.** SHA-256 MAC yazıyor;
   `security import` "MAC verification failed (wrong password?)" diyor ve sizi
@@ -285,6 +285,15 @@ Kurulumdaki üç tuzak, üçü de yaşandı:
 - **Sertifikayı değiştirmek herkesin iznini sıfırlar.** Requirement leaf
   parmak iziyle yazılı. Süresi 2036'da doluyor; yenilemek yeni bir sertifika
   demek, yani kullanıcılar izni bir kez daha verecek.
+- **Tauri kimliği .dmg'ye de basıyor, ve bu indirmeyi tamamen kapatıyor.**
+  macOS'un güvenmediği bir sertifikayla imzalı disk imajı *bağlanırken*
+  reddediliyor — uyarı uygulamayı çalıştırmadan önce, dosyayı açarken çıkıyor.
+  İmzasız imaj bağlanıyor ve soruyu uygulamaya bırakıyor; yani bu konuda
+  **imzasız, kötü imzalıdan iyi**. 26.5.2'de ölçüldü: v0.4.0 `source=no usable
+  signature` → açılıyor, v0.4.1 `origin=spacetrace` → açılmıyor. `codesign
+  --remove-signature` disk imajında çalışmıyor ("operation inapplicable"), o
+  yüzden iş akışı imajı `hdiutil convert` ile yeniden kuruyor; içindeki
+  imzalı .app'e dokunulmuyor.
 
 Sır: `APPLE_CERTIFICATE` (p12'nin base64'ü) ve `APPLE_CERTIFICATE_PASSWORD`,
 masaüstü deposunda. Özel anahtar `~/.spacetrace/macos-signing.p12`, hiçbir
@@ -300,6 +309,8 @@ düşmüyor.
    anahtarları ve `Download.astro`'daki alternatif kutusu kaldırılır.
 3. `installMacBody` "çift tıkla, açılır" hâline döner.
 4. Masaüstü `release.yml`'deki "Not code-signed" sürüm notu paragrafı silinir.
+5. Masaüstü `release.yml`'deki "Unsign the disk image" adımı silinir — gerçek
+   bir sertifikayla imzalı `.dmg` doğru olan, notarization zaten onu bekliyor.
 
 ## Site
 
