@@ -158,6 +158,7 @@ the change genuinely spreads out is the one reported.
 | `--min 10M` | Ignore changes smaller than this in a diff |
 | `--files` | Report files in a diff, not just folders |
 | `--threads N` | Walk with N threads (default: `min(cores, 8)`, measured) |
+| `--mount-timeout S` | Give a mounted filesystem S seconds to answer before recording it as unreadable and moving on (default 60; `0` waits forever) |
 | `--json` | Emit JSON (available on every command) |
 | `--db path.sqlite` | Use a different snapshot database |
 

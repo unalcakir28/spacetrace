@@ -44,6 +44,7 @@ label = "nightly"
 exclude = ["node_modules", ".git"]
 one_file_system = true
 threads = 4                  # fewer than the default, to leave the box alone
+mount_timeout = 60           # seconds a dead network share may cost
 keep = 14                    # snapshots of this root to retain
 ```
 
@@ -51,6 +52,21 @@ keep = 14                    # snapshots of this root to retain
 the disk: an NVMe root and a spinning-disk root on the same machine want
 different numbers. The default is `min(cores, 8)` — not one per core, which
 measured slower on every corpus tried (docs/COMPETITORS.md §1.2).
+
+`mount_timeout` is per root for the same reason, and it matters most here: a
+server is the machine most likely to have a network share whose far end has
+gone away. The first `lstat` into such a share never returns and cannot be
+interrupted, so before this the whole nightly scan wedged — and because a
+directory is listed on one thread, one dead share took every sibling with it.
+The agent now reads the mount table at the start of a scan, approaches a mount
+point through a thread it is willing to abandon, and after the timeout records
+it as an unreadable path and carries on. The scan is short by that filesystem
+and says so in its error count.
+
+The default of 60 seconds is deliberately generous: waiting too long makes a
+scan slow, while giving up too early drops an entire volume out of a total
+that claims to be complete. Waiting is no longer silent either — `/status`
+reports the stall and the directory it is waiting on.
 
 Then check what it will do before starting it:
 
@@ -91,6 +107,7 @@ failing silently.
 | `roots[].depth` | — | Stop descending below this depth |
 | `roots[].dedupe_hardlinks` | `true` | Count hardlinked files once |
 | `roots[].threads` | `min(cores, 8)` | Threads to walk this root with |
+| `roots[].mount_timeout` | `60` | Seconds a mounted filesystem under this root gets to answer before it is recorded as unreadable; `0` waits forever |
 | `roots[].keep` | — | Snapshots of this root to retain; unset keeps all |
 
 The token is resolved in this order: `server.token`, `server.token_file`, then

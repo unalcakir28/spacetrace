@@ -123,6 +123,15 @@ pub struct RootConfig {
     /// same number on each of them.
     #[serde(default)]
     pub threads: Option<usize>,
+    /// Seconds to wait for a mounted filesystem under this root before
+    /// recording it as unreadable and moving on. `0` waits forever, which is
+    /// what every version before this did.
+    ///
+    /// Per root for the same reason as `threads`: a root that contains a
+    /// network share needs a different answer from one that does not, and the
+    /// agent is the place most likely to meet a share whose server is down.
+    #[serde(default)]
+    pub mount_timeout: Option<u64>,
 
     /// Snapshots of this root to keep. `None` keeps everything.
     #[serde(default)]
@@ -178,6 +187,7 @@ impl RootConfig {
             dedupe_hardlinks: default_dedupe(),
             dedupe_clones: default_dedupe(),
             threads: None,
+            mount_timeout: None,
             keep: None,
         }
     }
@@ -190,6 +200,11 @@ impl RootConfig {
             dedupe_hardlinks: self.dedupe_hardlinks,
             dedupe_clones: self.dedupe_clones,
             threads: self.threads,
+            mount_timeout: match self.mount_timeout {
+                Some(0) => None,
+                Some(secs) => Some(std::time::Duration::from_secs(secs)),
+                None => Some(spacetrace_scan_core::MOUNT_TIMEOUT),
+            },
         }
     }
 }

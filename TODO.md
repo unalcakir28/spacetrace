@@ -411,44 +411,51 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
 ### D. Sağlamlık
 
-- [ ] **D1 Yavaş/yanıt vermeyen mount'ta timeout ve devam** — *yarısı yapıldı
-      (10 Eylül 2026): takılma artık görünür, atlanmıyor.*
+- [x] **D1 Yavaş/yanıt vermeyen mount'ta timeout ve devam** — yapıldı
+      *(görünürlük 10, timeout 11 Eylül 2026)*.
       *Rakip:* DiskRaptor bu hatayı canlı yaşadı (issue #46: "1TB USB HDD'de
       30 saniye ilerleme yok") ve timeout/retry ekledi.
 
-      **Nerede takılıyor — kod okunarak bulundu.** `read_dir_parallel` her girdi
-      için `entry.metadata()` çağırıyor, yani bir `lstat`, ve bu `dev`
-      karşılaştırmasından **önce**. Üç sonucu var:
+      **Sorun.** `read_dir_parallel` her girdi için `entry.metadata()`, yani
+      bir `lstat` çağırıyor ve bu `dev` karşılaştırmasından **önce**. Ölü bir
+      mount'ta o syscall dönmüyor ve taşınabilir şekilde kesilemiyor. Üç
+      sonucu vardı: `--one-file-system` korumuyordu (kontrol, hang'e sebep
+      olan `lstat`'ın verisini kullanıyor), bir girdi bulunduğu dizinin
+      **tamamını** kilitliyordu (dizin okuma bilinçli olarak tek thread'te),
+      ve iptal kurtarmıyordu (`is_cancelled()` yalnızca `read_dir`'den önce).
 
-      1. **`--one-file-system` bu durumda korumuyor.** `meta.dev == root_dev`
-         kontrolü, hang'e sebep olan `lstat`'ın verisini kullanıyor; ölü bir
-         mount'a girmemek için önce ona dokunmak gerekiyor.
-      2. **Bir girdi, bulunduğu dizinin tamamını kilitliyor.** Dizin okuma
-         bilinçli olarak tek thread'te, yani ölü mount'tan sonraki kardeşler
-         hiç listelenmiyor.
-      3. **İptal takılmayı çözmüyor.** `is_cancelled()` yalnızca `read_dir`'den
-         önce okunuyor (bilinçli: girdi başına atomik okuma en sıcak döngüye
-         konmayacak), yani `entry.metadata()`'da asılı bir tarama durdurulamıyor.
+      **Çözüm.** Dokunmadan önce sınırı bilmek: `mounts.rs` tarama başında
+      mount tablosunu okuyor (macOS `getmntinfo(MNT_NOWAIT)` — **`MNT_WAIT`
+      değil**, o da ölü mount'ta bloke oluyor; Linux `/proc/self/mountinfo`,
+      saf std; diğerleri boş küme = eski davranış). Mount noktasına
+      terk edilmeye razı olunan bir thread üzerinden yaklaşılıyor
+      (`timeout.rs`); cevap gelmezse **okunamayan yol** sayılıyor
+      (değişmez 7) ve yürüyüş kardeşlerle devam ediyor. Kısmi ağaç
+      döndürülmüyor (değişmez 5).
 
-      **Yapılan:** `ScanProgress::reading_now()` o an listelenen dizinleri
-      veriyor (işçi başına bir tane, ata dizinler değil), `Phase` yürüyüş ile
-      sonrasını ayırıyor, ve clone sondasının kendi sayacı var. CLI sayaçlar 10
-      saniye kımıldamazsa "no progress for Ns — waiting on <yol>" yazıyor.
-      Ölçülebilir maliyeti yok (412k girdide −24 ms, gürültü içinde).
+      **`libc` zaten oradaydı.** Bu maddenin engeli diye yazdığım "önce
+      `scan-core`'a `libc` eklenmeli" yanlıştı: `capacity.rs` ve `meta.rs`
+      zaten kullanıyor.
 
-      **Yapılamayan ve nedeni:** zaman aşımıyla atlamak. Değişmez 5 kısmi ağaç
-      döndürmeyi yasaklıyor, yani tek geçerli çözüm asılan mount'u *okunamayan
-      yol* saymak (değişmez 7) — o da mount sınırını **dokunmadan önce**
-      bilmeyi, yani mount tablosunu okumayı gerektiriyor: macOS'ta
-      `getmntinfo`, yani `scan-core`'a `libc`. Doğrulaması da gerçek bir asılı
-      mount istiyor; bu makinede yok (macFUSE macOS 26 için fazla eski,
-      autofs `/net` kapalı). Gerçek bir NAS ya da HDD elde olunca açılacak.
+      **Varsayılan 60 sn, cömert bilerek.** İki hatanın maliyeti eşit değil:
+      fazla beklemek taramayı yavaşlatır, erken vazgeçmek **bütün bir birimi**
+      tam olduğunu iddia eden bir toplamdan sessizce düşürür. `--mount-timeout 0`
+      eski davranışı geri veriyor; ajanda kök başına `mount_timeout`.
 
-      **Masaüstü ve ajan artık taşıyor** *(masaüstü 10, ajan 11 Eylül 2026)*.
-      `/status`'ta `scanning` düz yol listesi değil, tarama başına sayaç +
-      `phase` + `stalled_ms` + `waiting_on` taşıyan bir nesne listesi. Takılma
-      süresini ajan içindeki bir izleyici thread'i ölçüyor, istekten isteğe
-      değil — `/status` seyrek yoklanınca süre şişmesin diye.
+      **Maliyet: dizin başına bir hash sorgusu, ~95 ns.** `~/github` (297.695
+      girdi, 10.856 dizin) için **1,03 ms**, yani ~%0,09. Girdi başına değil
+      dizin başına, çünkü `Mounts` mount noktalarının *ebeveynlerini* de
+      tutuyor: mount içermeyen bir dizin hiçbir girdisini sorgulatmıyor.
+      **Bütün-tarama A/B'si bu işi yapamıyor** — +%9,19 gösterdi, yani gerçek
+      maliyetin 100 katı; 1 ms, ±150 ms'lik koşu gürültüsünün içinde
+      görünmüyor. Sayı mikro-benchmark'tan ve dizin sayımından geliyor.
+
+      **Doğrulanamayan tek şey:** gerçek bir çekirdek seviyesi asılmanın bu
+      yola girdiği. Sonda enjekte edilebilir olduğu için mekanizmanın
+      tamamı test ediliyor (atlanıyor, kardeşler taranıyor, toplam şişmiyor,
+      sağlıklı mount normal taranıyor, kapatınca sonda hiç çağrılmıyor) —
+      ama asılan mount'u üretmek için ikinci bir makine gerekiyor.
+
 - [ ] **D2 Ajanda yerleşik TLS** — şu an ters vekil öneriliyor (Faz 2'de de var).
 - [ ] **D3 Ajanda hız sınırlama** (Faz 2'de de var).
 - [ ] **D4 10M+ dosyada bellek profili** — kısmen ölçüldü (412k girdide 122 MB,
@@ -501,7 +508,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~3~~ ✅ | ~~B1~~ | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar. **Dördü bitti (9 Eylül 2026); kalan tek madde B1-K, en altta** |
 | ~~4~~ ✅ | ~~A3, A5~~ | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma artık sessiz değil. **Bitti (10 Eylül 2026)** |
 | 5 | ~~B2~~ ✅, **B3 ← sıradaki** | Ucuz ve ölçülmüş — B2 bitti (10 Eylül 2026); B3 gerçek bir HDD ya da ağ sürücüsü istiyor |
-| ~~6~~ | ~~C3~~, D1 | C3 yapıldı; D1'in yarısı (görünürlük) yapıldı, timeout kaldı |
+| ~~6~~ | ~~C3, D1~~ | İkisi de yapıldı |
 | 7 | B4, B5, B6 | Platforma özel hızlı yollar — doğruluk düzeldikten **sonra** |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
 | 9 | C1, C2, C4–C9 | Özellik paritesi |

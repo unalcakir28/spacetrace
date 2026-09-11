@@ -7,10 +7,15 @@
 
 mod capacity;
 mod meta;
+mod mounts;
 mod scan;
+mod timeout;
 mod tree;
 
 pub use capacity::{capacity_of, Capacity};
 pub use meta::{EntryKind, FileIdentity, RawMeta};
-pub use scan::{scan, Phase, ScanOptions, ScanProgress, ScanStats, StallWatch, STALL_GRACE};
+pub use mounts::Mounts;
+pub use scan::{
+    scan, Phase, ScanOptions, ScanProgress, ScanStats, StallWatch, MOUNT_TIMEOUT, STALL_GRACE,
+};
 pub use tree::{Node, NodeId, Removed, SizeBasis, StoredNode, Tree, TreeAssembler, TreeError};

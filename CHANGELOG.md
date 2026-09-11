@@ -28,6 +28,7 @@ because anyone can install them.
 ### Fixed
 
 - The progress display appeared to freeze near the end of every scan. After the walk there is a second pass looking for copy-on-write clones, and it moved no counter at all — on `~/github` that was 1193 of 1989 milliseconds. That phase now says what it is and counts what it checks.
+- A network share whose server has gone away no longer wedges the whole scan. The first lookup into a mounted filesystem cannot be interrupted once it hangs, and because a directory is listed on one thread, one dead share used to take every one of its siblings with it. Scans now read the mount table first, approach a mount point through a thread they are willing to abandon, and after 60 seconds record it as an unreadable path and carry on — so the result is short by that one filesystem and says so, instead of never arriving. `--mount-timeout 0` restores the old behaviour; measured cost of the check is about a millisecond on a 300,000-entry tree.
 
 ## 0.5.0 — 2026-09-10
 

@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 265 test, hepsi geçmeli
+cargo test --workspace                   # 283 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -93,6 +93,12 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
    sayıyla aynı şeyi söylemek durumunda. Masaüstü varsayılanı `OnDisk`, CLI
    `Logical` (çağrı yerlerinde açıkça yazılı).
 7. **Hatalar yutulmaz.** Okunamayan yol sayılır ve örneklenir; tarama durmaz.
+   **Cevap vermeyen bir mount da bir okuma hatasıdır.** `entry.metadata()` ölü
+   bir mount'ta dönmüyor ve kesilemiyor, o yüzden mount noktalarına
+   (`mounts.rs`, tarama başında okunur) terk edilebilir bir thread üzerinden
+   yaklaşılıyor; süre dolunca yol okunamayan sayılıp yürüyüş kardeşlerle
+   devam ediyor. Tabloyu `MNT_NOWAIT` ile oku — `MNT_WAIT` ölü mount'ta
+   bloke oluyor, yani önlem bug'a dönüşüyor.
 8. **Uzun süren her aşamanın kımıldayan bir sayacı olmalı.** İzleyen taraf
    "takıldı mı" sorusunu yalnızca sayaçlara bakarak cevaplıyor (CLI 10 saniye
    hareketsizlikte uyarıyor), yani sayacı olmayan bir aşama sağlıklı çalışırken

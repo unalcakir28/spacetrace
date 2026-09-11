@@ -2,11 +2,13 @@ use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rayon::prelude::*;
 
 use crate::capacity::Capacity;
 use crate::meta::{display_name, EntryKind, FileIdentity, RawMeta};
+use crate::mounts::Mounts;
 use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
 
 /// How many failing paths we keep for the report before we only count them.
@@ -35,7 +37,23 @@ pub struct ScanOptions {
     /// How many threads to walk with. `None` (and `Some(0)`) take the default
     /// below, which is measured rather than inherited from the core count.
     pub threads: Option<usize>,
+    /// How long a mounted filesystem gets to answer the walk's first question
+    /// about it before the walk gives up and records it as unreadable.
+    ///
+    /// `None` switches the protection off: every mount point is entered the
+    /// way an ordinary directory is, and one that has stopped answering wedges
+    /// the scan the way it always did.
+    ///
+    /// The default is generous on purpose. The two mistakes are not
+    /// symmetrical: waiting too long makes a scan slow, while giving up too
+    /// early omits an entire volume from a total that claims to be complete.
+    /// A slow scan is also no longer silent — the CLI, the window and the
+    /// agent all say which directory is being waited on.
+    pub mount_timeout: Option<Duration>,
 }
+
+/// How long a mount point gets by default.
+pub const MOUNT_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl Default for ScanOptions {
     fn default() -> Self {
@@ -46,6 +64,7 @@ impl Default for ScanOptions {
             dedupe_hardlinks: true,
             dedupe_clones: true,
             threads: None,
+            mount_timeout: Some(MOUNT_TIMEOUT),
         }
     }
 }
@@ -271,8 +290,25 @@ pub struct ScanStats {
     pub capacity: Option<Capacity>,
 }
 
+/// How the walk asks a mount point whether it is alive.
+///
+/// A function pointer rather than a direct call so the tests below can make a
+/// probe time out on demand. There is no way to create a filesystem that hangs
+/// from a test — that needs a server to kill — so without this seam the entire
+/// skip path would ship unexercised, which for a precaution is the same as
+/// shipping it broken.
+type Probe = fn(&Path, Duration) -> Option<std::io::Result<std::fs::Metadata>>;
+
+/// The real one: `lstat`, on a thread we are prepared to abandon.
+fn probe_mount(path: &Path, limit: Duration) -> Option<std::io::Result<std::fs::Metadata>> {
+    let owned = path.to_path_buf();
+    crate::timeout::with_deadline(limit, move || std::fs::symlink_metadata(&owned))
+}
+
 struct Ctx {
     opts: ScanOptions,
+    mounts: Mounts,
+    probe: Probe,
     root_dev: u64,
     seen_inodes: Mutex<HashSet<(u64, u64)>>,
     hardlinks_deduped: AtomicU64,
@@ -281,6 +317,36 @@ struct Ctx {
 }
 
 impl Ctx {
+    /// Ask a mount point for its metadata, with the configured patience.
+    ///
+    /// `None` means it did not answer. Only called when `mount_timeout` is
+    /// set, so the `unwrap_or` below is unreachable in practice; it is there
+    /// rather than an `expect` because a panic in the walk would lose a whole
+    /// scan over a bookkeeping slip.
+    fn probe_mount(&self, path: &Path) -> Option<std::io::Result<std::fs::Metadata>> {
+        let limit = self.opts.mount_timeout.unwrap_or(MOUNT_TIMEOUT);
+        (self.probe)(path, limit)
+    }
+
+    /// A mount that stopped answering is an unreadable path, not a reason to
+    /// stop (invariant #7). The entry is dropped the same way an entry whose
+    /// metadata could not be read is dropped, and the walk carries on with its
+    /// siblings — which is the whole point, since today one dead mount takes
+    /// the rest of its directory down with it.
+    fn note_unreachable_mount(&self, path: &Path) {
+        let limit = self.opts.mount_timeout.unwrap_or(MOUNT_TIMEOUT);
+        self.note_error(
+            path,
+            &std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "mounted filesystem did not respond within {}s; skipped",
+                    limit.as_secs()
+                ),
+            ),
+        );
+    }
+
     fn note_error(&self, path: &Path, err: &std::io::Error) {
         self.progress.errors.fetch_add(1, Ordering::Relaxed);
         let mut guard = self.errors.lock().unwrap();
@@ -414,6 +480,27 @@ pub fn scan(
     opts: ScanOptions,
     progress: Arc<ScanProgress>,
 ) -> std::io::Result<(Tree, ScanStats)> {
+    // The table is read here rather than in `ScanOptions::default` so that
+    // building options never makes a syscall, and so a scan that has switched
+    // the protection off does not pay for a table it will not consult.
+    let mounts = match opts.mount_timeout {
+        Some(_) => Mounts::read(),
+        None => Mounts::none(),
+    };
+    scan_with(root, opts, progress, mounts, probe_mount)
+}
+
+/// `scan`, with the mount table and the probe supplied.
+///
+/// Private: the two extra arguments exist so the tests can build a filesystem
+/// boundary that is not one and a probe that never answers.
+fn scan_with(
+    root: impl AsRef<Path>,
+    opts: ScanOptions,
+    progress: Arc<ScanProgress>,
+    mounts: Mounts,
+    probe: Probe,
+) -> std::io::Result<(Tree, ScanStats)> {
     let started = std::time::Instant::now();
     let root = root.as_ref();
     let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -431,6 +518,8 @@ pub fn scan(
     let ctx = Ctx {
         root_dev: root_meta.dev,
         opts,
+        mounts,
+        probe,
         seen_inodes: Mutex::new(HashSet::new()),
         hardlinks_deduped: AtomicU64::new(0),
         errors: Mutex::new(Vec::new()),
@@ -601,6 +690,9 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
     // the recursion below runs on the pool where it would only add ancestors
     // to the list. See `ScanProgress::reading_now`.
     let listing = ctx.progress.listing(dir);
+    // One lookup for the whole directory. Almost every directory on a real
+    // disk holds no mount point, and those pay nothing per entry.
+    let guarded = ctx.opts.mount_timeout.is_some() && ctx.mounts.holds_a_boundary(dir);
 
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -626,13 +718,29 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
             }
         };
         let path = entry.path();
-        let md = match entry.metadata() {
-            // `DirEntry::metadata` does not follow symlinks, which is what we
-            // want: a symlink is counted as itself, never as its target.
-            Ok(md) => md,
-            Err(e) => {
-                ctx.note_error(&path, &e);
-                continue;
+        // `DirEntry::metadata` does not follow symlinks, which is what we
+        // want: a symlink is counted as itself, never as its target. It is
+        // also the call that never returns on a mount whose server has gone,
+        // which is why a boundary is approached through `probe` instead.
+        let md = if guarded && ctx.mounts.contains(&path) {
+            match ctx.probe_mount(&path) {
+                Some(Ok(md)) => md,
+                Some(Err(e)) => {
+                    ctx.note_error(&path, &e);
+                    continue;
+                }
+                None => {
+                    ctx.note_unreachable_mount(&path);
+                    continue;
+                }
+            }
+        } else {
+            match entry.metadata() {
+                Ok(md) => md,
+                Err(e) => {
+                    ctx.note_error(&path, &e);
+                    continue;
+                }
             }
         };
         let (meta, failure) =
@@ -832,5 +940,165 @@ mod thread_tests {
             "the default grew past the measured cap: {n}. \
              docs/COMPETITORS.md §1.2 has the numbers this was chosen from"
         );
+    }
+
+    // ------------------------------------------------ unresponsive mounts
+
+    /// A probe that never answers, standing in for a filesystem whose server
+    /// has gone away. There is no way to build one of those in a test — it
+    /// needs a second machine to kill — so this is the seam that lets the
+    /// skip path be exercised at all.
+    fn never_answers(_: &Path, _: Duration) -> Option<std::io::Result<std::fs::Metadata>> {
+        None
+    }
+
+    /// The real prober, reached through the same seam, so the tests below can
+    /// prove that the careful path still produces the ordinary answer.
+    fn answers_normally(
+        path: &Path,
+        limit: Duration,
+    ) -> Option<std::io::Result<std::fs::Metadata>> {
+        super::probe_mount(path, limit)
+    }
+
+    fn corpus() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        // A "mount point" with something under it, and two ordinary siblings
+        // either side of it in the listing.
+        std::fs::create_dir(dir.path().join("aaa")).unwrap();
+        std::fs::write(dir.path().join("aaa/file.bin"), vec![0u8; 1000]).unwrap();
+        std::fs::create_dir(dir.path().join("mnt")).unwrap();
+        std::fs::write(dir.path().join("mnt/hidden.bin"), vec![0u8; 5000]).unwrap();
+        std::fs::create_dir(dir.path().join("zzz")).unwrap();
+        std::fs::write(dir.path().join("zzz/file.bin"), vec![0u8; 2000]).unwrap();
+        dir
+    }
+
+    fn names_in(tree: &Tree) -> Vec<String> {
+        tree.iter()
+            .map(|id| tree.name(id).to_string())
+            .collect::<Vec<_>>()
+    }
+
+    /// The fix, stated as a test: one dead mount costs its own subtree and
+    /// nothing else. Today it costs the rest of the directory, because the
+    /// listing loop is single-threaded and never gets past the entry it is
+    /// stuck on.
+    #[test]
+    fn a_mount_that_never_answers_is_skipped_and_its_siblings_are_still_scanned() {
+        let dir = corpus();
+        let root = dir.path().canonicalize().unwrap();
+        let mounts = Mounts::from_paths([root.join("mnt")]);
+
+        let (tree, stats) = scan_with(
+            &root,
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+            mounts,
+            never_answers,
+        )
+        .unwrap();
+
+        let names = names_in(&tree);
+        assert!(!names.iter().any(|n| n == "mnt"), "got {names:?}");
+        assert!(!names.iter().any(|n| n == "hidden.bin"), "got {names:?}");
+        assert!(
+            names.iter().any(|n| n == "aaa") && names.iter().any(|n| n == "zzz"),
+            "the siblings either side of the dead mount must survive: {names:?}"
+        );
+
+        // Counted and sampled, not swallowed (invariant #7).
+        assert_eq!(stats.errors, 1);
+        assert!(
+            stats.error_samples[0].1.contains("did not respond"),
+            "got {:?}",
+            stats.error_samples[0]
+        );
+    }
+
+    /// The bytes behind a skipped mount must not be invented. A total that
+    /// silently included them would be the failure this whole mechanism
+    /// exists to avoid.
+    #[test]
+    fn a_skipped_mount_contributes_nothing_to_the_total() {
+        let dir = corpus();
+        let root = dir.path().canonicalize().unwrap();
+
+        let (skipped, _) = scan_with(
+            &root,
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+            Mounts::from_paths([root.join("mnt")]),
+            never_answers,
+        )
+        .unwrap();
+        let (whole, _) = scan_with(
+            &root,
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+            Mounts::none(),
+            never_answers,
+        )
+        .unwrap();
+
+        assert!(
+            whole.total_size() > skipped.total_size(),
+            "the skipped subtree held 5000 bytes"
+        );
+        assert_eq!(whole.total_size() - skipped.total_size(), 5000);
+    }
+
+    /// A healthy mount point is scanned exactly like an ordinary directory.
+    /// Nothing about this protection may change the answer on a machine where
+    /// every filesystem is answering, which is every machine most of the time.
+    #[test]
+    fn a_mount_that_answers_is_scanned_normally() {
+        let dir = corpus();
+        let root = dir.path().canonicalize().unwrap();
+
+        let (guarded, stats) = scan_with(
+            &root,
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+            Mounts::from_paths([root.join("mnt")]),
+            answers_normally,
+        )
+        .unwrap();
+        let (plain, _) = scan_with(
+            &root,
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+            Mounts::none(),
+            never_answers,
+        )
+        .unwrap();
+
+        assert_eq!(guarded.total_size(), plain.total_size());
+        assert_eq!(guarded.len(), plain.len());
+        assert_eq!(stats.errors, 0);
+    }
+
+    /// With the protection off, a mount point is not treated specially at all
+    /// — so a probe that never answers is never reached.
+    #[test]
+    fn switching_the_timeout_off_stops_probing_altogether() {
+        let dir = corpus();
+        let root = dir.path().canonicalize().unwrap();
+        let opts = ScanOptions {
+            mount_timeout: None,
+            ..ScanOptions::default()
+        };
+
+        let (tree, stats) = scan_with(
+            &root,
+            opts,
+            Arc::new(ScanProgress::default()),
+            Mounts::from_paths([root.join("mnt")]),
+            never_answers,
+        )
+        .unwrap();
+
+        assert!(names_in(&tree).iter().any(|n| n == "hidden.bin"));
+        assert_eq!(stats.errors, 0);
     }
 }

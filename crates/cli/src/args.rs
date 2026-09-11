@@ -137,6 +137,11 @@ pub struct WalkArgs {
     /// Walk with this many threads (default: measured, not one per core)
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..))]
     pub threads: Option<u16>,
+
+    /// Seconds to wait for a mounted filesystem before skipping it; 0 waits
+    /// forever
+    #[arg(long, value_name = "SECONDS")]
+    pub mount_timeout: Option<u64>,
 }
 
 #[derive(Args, Debug)]
@@ -248,6 +253,15 @@ impl WalkArgs {
             dedupe_hardlinks: !self.no_dedupe,
             dedupe_clones: !self.no_clone_dedupe,
             threads: self.threads.map(usize::from),
+            // `0` means "wait forever", which is what every version before
+            // this did: the flag exists to restore the old behaviour, so the
+            // value that switches the protection off should be the obvious
+            // one rather than a word.
+            mount_timeout: match self.mount_timeout {
+                Some(0) => None,
+                Some(secs) => Some(std::time::Duration::from_secs(secs)),
+                None => Some(spacetrace_scan_core::MOUNT_TIMEOUT),
+            },
         }
     }
 }
@@ -275,5 +289,35 @@ mod tests {
     fn the_cli_definition_is_valid() {
         use clap::CommandFactory;
         Cli::command().debug_assert();
+    }
+
+    /// `0` is the escape hatch back to the old behaviour, so it has to mean
+    /// "wait forever" and not "give up instantly" — the two are opposites and
+    /// the wrong one silently drops whole volumes from a total.
+    #[test]
+    fn a_mount_timeout_of_zero_switches_the_protection_off() {
+        // Through clap rather than by building the struct, so the flag name
+        // and its parsing are covered too.
+        #[derive(Parser)]
+        struct Wrap {
+            #[command(flatten)]
+            walk: WalkArgs,
+        }
+        let walk = |args: &[&str]| {
+            let mut all = vec!["spacetrace"];
+            all.extend_from_slice(args);
+            Wrap::parse_from(all).walk.to_options().mount_timeout
+        };
+
+        assert_eq!(
+            walk(&[]),
+            Some(spacetrace_scan_core::MOUNT_TIMEOUT),
+            "no flag means the default patience, not none"
+        );
+        assert_eq!(walk(&["--mount-timeout", "0"]), None);
+        assert_eq!(
+            walk(&["--mount-timeout", "5"]),
+            Some(std::time::Duration::from_secs(5))
+        );
     }
 }
