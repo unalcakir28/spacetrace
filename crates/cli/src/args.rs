@@ -53,6 +53,8 @@ pub enum Command {
     Import(ImportArgs),
     /// How old the bytes are: what nobody has touched, and how much
     Age(AgeArgs),
+    /// Files holding identical contents, and what deleting the extras returns
+    Dupes(DupesArgs),
     /// Delete all but the newest N snapshots per target
     Prune(PruneArgs),
     /// Delete a snapshot
@@ -249,6 +251,32 @@ pub struct ImportArgs {
     /// Free text stored with the snapshot
     #[arg(long, value_name = "TEXT")]
     pub label: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct DupesArgs {
+    /// Path to scan
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    /// Ignore files smaller than this (default: 1MiB; accepts 500K, 2G)
+    #[arg(long, value_name = "SIZE", value_parser = parse_size)]
+    pub min_size: Option<u64>,
+
+    /// Show at most this many groups
+    #[arg(long, value_name = "N", default_value_t = 25)]
+    pub limit: usize,
+
+    /// Leave out names that are hardlinks of each other
+    #[arg(long)]
+    pub no_hardlinks: bool,
+
+    /// Hash every file again instead of reusing what was hashed before
+    #[arg(long)]
+    pub no_cache: bool,
+
+    #[command(flatten)]
+    pub walk: WalkArgs,
 }
 
 #[derive(Args, Debug)]

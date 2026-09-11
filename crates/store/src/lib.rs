@@ -7,6 +7,7 @@
 
 mod csv;
 mod digest;
+mod hash_cache;
 mod ncdu;
 mod ncdu_import;
 mod schema;
@@ -18,6 +19,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use spacetrace_scan_core::{EntryKind, ScanStats, StoredNode, Tree, TreeAssembler};
 
 pub use csv::export_csv;
+pub use hash_cache::SqliteHashCache;
 pub use ncdu::export_ncdu;
 pub use ncdu_import::import_ncdu;
 

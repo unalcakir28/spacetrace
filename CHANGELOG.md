@@ -10,6 +10,12 @@ Versions marked *development milestone* were never tagged and have no
 downloadable files. They are recorded because the work happened, not
 because anyone can install them.
 
+## Unreleased
+
+### Added
+
+- `spacetrace dupes` finds files holding identical contents and says what deleting the extras would give back. It reads as little as it can: files of different lengths cannot match and the scan already knows every length, files that share a length are separated by their first 16 KiB, and only what survives both is read in full. On a 33.8 GiB tree of 375,585 files that came to 2.6 GiB of reading — 7.7% — and a second run read 30 MiB, because whole-file hashes are remembered between runs. Hardlinked names are listed separately and counted as reclaiming nothing, since they already share their bytes. Nothing is deleted; which copy to keep is not a decision this tool has the context to make.
+
 ## 0.6.1 — 2026-09-11
 
 ### Fixed

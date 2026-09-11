@@ -458,8 +458,29 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       kötü uyumda reddediyor; onun ikinci bir kopyasını masaüstüne koymak iki
       eşik kümesinin birbirinden ayrışması demekti. Taşımak istenirse `trend`
       önce çekirdek depoya alınmalı — ayrı iş.
-- [ ] **C4 Duplicate bulucu** — boyut → ön-hash → blake3, önbellekli.
-      WHY.md'de Pro kademesinde zaten planlı.
+- [x] **C4 Duplicate bulucu** — yapıldı *(11 Eylül 2026)*. `spacetrace dupes`,
+      yeni `crates/dupes`. Üç kademe, her biri yalnızca bir öncekinin
+      eleyemediğine ödeme yapıyor: boyut (bedava, tarama zaten biliyor) → ilk
+      16 KiB → tam dosya. **Ölçüldü:** `~/github` (375.585 dosya, 33,8 GiB) →
+      cevap 2,6 GiB okumaya mal oldu (%7,7); ikinci koşu 30 MiB okudu ve hiçbir
+      şeyi yeniden özetlemedi.
+      **BLAKE3, ve ardından bayt karşılaştırması yok** — 256 bit çıktıda
+      çakışma olasılığı diskin yanlış bayt döndürmesinin çok altında, ve
+      doğrulama geçişi bağlayıcı olmayan bir risk için okumayı ikiye katlardı.
+      Bu, *kriptografik* bir özet hakkında bir iddia ve 64 bitlik biriyle
+      savunulamazdı — xxh3 olmamasının sebebi bu.
+      **Hardlink'ler duplicate değil**: baytlarını zaten paylaşıyorlar, ve
+      geri kazanılabilir diye saymak silinince gelmeyecek yeri vaat etmek
+      olurdu. Ayrı grupta ve sıfır kazançla listeleniyorlar. Dikkat: tarama
+      hardlink'in ikinci adını 0 bayt yazıyor (değişmez 3), o yüzden boyut
+      kademesi `nlink > 1` olanlar için diske bakıyor.
+      **Önbellek snapshot veritabanında değil**, yanındaki ayrı dosyada
+      (`<db>.hashes`): snapshot başka makineye taşınıyor ve yerel inode
+      numaraları orada geçerli görünüp başka bir diske ait olurdu — ayrıca
+      tablo eklemek `SCHEMA_VERSION`'ı ve onunla birlikte RELEASING.md'nin
+      sürüm sırasını tetiklerdi, her an silinebilecek bir önbellek için.
+      **Hiçbir şey silinmiyor**, ajanla aynı gerekçe: hangi kopyanın kalacağı
+      bu crate'in sahip olmadığı bağlamı gerektiren bir karar.
       *Rakip:* DiskRaptor (xxh3), WinDirStat 2.5.0, Czkawka.
 - [ ] **C5 Tarama sırasında canlı büyüyen ağaç (masaüstü)** — FreeSize'ın manşet
       özelliği ve algılanan hızının büyük kısmı. Bizde ilerleme göstergesi var,

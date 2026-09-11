@@ -4,6 +4,7 @@ members = [
     "crates/scan-core",
     "crates/store",
     "crates/diff",
+    "crates/dupes",
     "crates/cli",
     "crates/agent",
     "crates/treemap",
@@ -22,6 +23,7 @@ repository = "https://github.com/unalcakir28/spacetrace"
 spacetrace-scan-core = { path = "crates/scan-core", version = "0.6.1" }
 spacetrace-store = { path = "crates/store", version = "0.6.1" }
 spacetrace-diff = { path = "crates/diff", version = "0.6.1" }
+spacetrace-dupes = { path = "crates/dupes", version = "0.6.1" }
 spacetrace-treemap = { path = "crates/treemap", version = "0.6.1" }
 spacetrace-changelog = { path = "crates/changelog", version = "0.6.1" }
 spacetrace-buildinfo = { path = "crates/buildinfo", version = "0.6.1" }
@@ -29,6 +31,7 @@ spacetrace-buildinfo = { path = "crates/buildinfo", version = "0.6.1" }
 anyhow = "1"
 thiserror = "2"
 rayon = "1.10"
+blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }

@@ -11,15 +11,18 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 use spacetrace_diff::{diff, ChangeKind, DiffOptions, DiffReport};
+use spacetrace_dupes::{find, Options, Sharing, DEFAULT_MIN_SIZE};
 use spacetrace_scan_core::{
     age_profile, scan, EntryKind, Phase, ScanOptions, ScanProgress, ScanStats, SizeBasis,
     StallWatch, Tree, DEFAULT_EDGES, STALL_GRACE,
 };
-use spacetrace_store::{export_csv, export_ncdu, import_ncdu, Integrity, ScanMeta, Store};
+use spacetrace_store::{
+    export_csv, export_ncdu, import_ncdu, Integrity, ScanMeta, SqliteHashCache, Store,
+};
 
 use crate::args::{
-    parse_size, AgeArgs, Cli, Command, DiffArgs, ExportArgs, ExportFormat, ImportArgs, LsArgs,
-    PruneArgs, PullArgs, RmArgs, ScanArgs, VerifyArgs,
+    parse_size, AgeArgs, Cli, Command, DiffArgs, DupesArgs, ExportArgs, ExportFormat, ImportArgs,
+    LsArgs, PruneArgs, PullArgs, RmArgs, ScanArgs, VerifyArgs,
 };
 use crate::remote::Remote;
 
@@ -86,6 +89,7 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Export(a) => cmd_export(a, &db_path, remote.as_ref()),
         Command::Import(a) => cmd_import(a, &db_path, cli.json),
         Command::Age(a) => cmd_age(a, &db_path, cli.json),
+        Command::Dupes(a) => cmd_dupes(a, &db_path, cli.json, cli.remote.is_some()),
         Command::Prune(a) => cmd_prune(a, &db_path, cli.json),
         Command::Rm(a) => cmd_rm(a, &db_path),
         Command::Verify(a) => cmd_verify(a, &db_path, cli.json),
@@ -979,6 +983,95 @@ fn cmd_import(a: &ImportArgs, db_path: &Path, json: bool) -> Result<()> {
         "\nAn imported scan carries no error count and no deduplication: the \
          export does not record them."
     );
+    Ok(())
+}
+
+// --------------------------------------------------------------- duplicates
+
+/// Files with identical contents.
+///
+/// Always a fresh scan, never a stored snapshot. A snapshot names paths on the
+/// machine it was taken on, and this reads bytes off *this* one — pointed at a
+/// snapshot from a server it would hash whatever happens to sit at those paths
+/// here and report the answer as though it were about the server. There is no
+/// flag for it because there is no correct way to offer it.
+fn cmd_dupes(a: &DupesArgs, db_path: &Path, json: bool, remote: bool) -> Result<()> {
+    // `--remote` is global, so it reaches here whatever this command does with
+    // it. Refusing is the only honest answer: quietly ignoring it would scan
+    // the local disk and print the result under a heading the user reads as
+    // being about their server.
+    anyhow::ensure!(
+        !remote,
+        "dupes reads file contents, so it only works on this machine. \
+         A remote snapshot names paths on another one."
+    );
+    let (tree, _) = scan_with_progress(&a.path, a.walk.to_options(), !json)?;
+
+    let options = Options {
+        min_size: a.min_size.unwrap_or(DEFAULT_MIN_SIZE),
+        include_hardlinks: !a.no_hardlinks,
+    };
+
+    // The cache lives beside the snapshot database even though this command
+    // writes no snapshot: it is the one path the user has already chosen for
+    // this tool's state, and a second convention would be a second thing to
+    // find and delete.
+    let cache = match a.no_cache {
+        true => SqliteHashCache::disabled(),
+        false => SqliteHashCache::open(&SqliteHashCache::path_for(db_path)),
+    };
+    let report = find(&tree, &options, &cache);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("{}\n", tree_source(&a.path));
+
+    if report.groups.is_empty() {
+        println!(
+            "No duplicate contents at or above {}.",
+            fmt::size(options.min_size)
+        );
+    } else {
+        for group in report.groups.iter().take(a.limit) {
+            let note = match group.shared {
+                Sharing::Hardlinked => " · hardlinked, deleting one frees nothing".to_string(),
+                Sharing::Separate => format!(" · {} to reclaim", fmt::size(group.reclaimable())),
+            };
+            println!("{} × {}{}", group.copies.len(), fmt::size(group.size), note);
+            for copy in &group.copies {
+                println!("    {}", copy.path.display());
+            }
+            println!();
+        }
+        if report.groups.len() > a.limit {
+            println!("… and {} more groups\n", report.groups.len() - a.limit);
+        }
+        println!(
+            "{} reclaimable across {} groups.",
+            fmt::size(report.reclaimable()),
+            report.groups.len()
+        );
+    }
+
+    // What the funnel cost, because the whole design is about not reading
+    // things and a number is the only way to say whether it worked.
+    println!(
+        "Read {} to answer; {} files hashed in full.",
+        fmt::size(report.bytes_read),
+        report.hashed
+    );
+
+    if !report.unreadable.is_empty() {
+        // Said out loud, not swallowed: "no duplicates" and "half of it could
+        // not be opened" must not look the same.
+        eprintln!("\n{} files could not be read:", report.unreadable.len());
+        for (path, why) in report.unreadable.iter().take(5) {
+            eprintln!("    {}: {why}", path.display());
+        }
+    }
     Ok(())
 }
 

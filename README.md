@@ -116,6 +116,11 @@ spacetrace export --scan 3 --format csv --depth 3 --out report.csv
 # What nobody has touched — the other question a full disk raises
 spacetrace age /srv --bands 30,365,1095
 
+# The same bytes twice: what deleting the extras would give back. Reads a
+# fraction of the tree — length rules most of it out for free, a 16 KiB prefix
+# rules out most of the rest, and whole-file hashes are remembered between runs
+spacetrace dupes ~/Downloads --min-size 10M
+
 # Check stored snapshots against the digest saved with them
 spacetrace verify
 ```
@@ -182,6 +187,7 @@ crates/
 ├── scan-core/   Parallel scanner + arena tree model (platform-specific backends)
 ├── store/       SQLite snapshot store + ncdu import/export + CSV export
 ├── diff/        Snapshot comparison, "culprit folder" detection
+├── dupes/       Identical contents: size → prefix → BLAKE3, with a cache trait
 ├── cli/         the spacetrace binary
 ├── agent/       the spacetrace-agent binary: scheduler + HTTP service
 └── treemap/     squarified layout with level-of-detail, for the desktop app

@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 340 test, hepsi geçmeli
+cargo test --workspace                   # 357 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -150,6 +150,7 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 | `scan-core` | Tarama, ağaç modeli, platforma özel metadata. Hiçbir şeye bağlı değil. |
 | `store` | SQLite anlık görüntü deposu, ncdu uyumlu dışa aktarım |
 | `diff` | İki görüntüyü karşılaştırma, "suçlu klasör" tespiti |
+| `dupes` | Aynı içerikli dosyalar: boyut → ön-hash → blake3, önbellek trait'i |
 | `cli` | `spacetrace` ikilisi (uzak kaynaklar dâhil) |
 | `agent` | `spacetrace-agent` ikilisi: zamanlayıcı + HTTP servisi |
 | `treemap` | Squarified yerleşim + LOD + hiyerarşik hit-test (masaüstü kullanır) |

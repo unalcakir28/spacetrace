@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 spacetrace-scan-core.workspace = true
+spacetrace-dupes.workspace = true
 anyhow.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
