@@ -51,6 +51,8 @@ pub enum Command {
     Export(ExportArgs),
     /// Store an ncdu or gdu JSON export as a snapshot
     Import(ImportArgs),
+    /// How old the bytes are: what nobody has touched, and how much
+    Age(AgeArgs),
     /// Delete all but the newest N snapshots per target
     Prune(PruneArgs),
     /// Delete a snapshot
@@ -247,6 +249,24 @@ pub struct ImportArgs {
     /// Free text stored with the snapshot
     #[arg(long, value_name = "TEXT")]
     pub label: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct AgeArgs {
+    /// Path to scan (when --scan is not given)
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    /// Read a stored snapshot instead of scanning
+    #[arg(long, value_name = "ID")]
+    pub scan: Option<i64>,
+
+    /// Band edges in days, ascending (default: 7,30,90,365,730)
+    #[arg(long, value_name = "DAYS", value_delimiter = ',')]
+    pub bands: Option<Vec<u32>>,
+
+    #[command(flatten)]
+    pub walk: WalkArgs,
 }
 
 #[derive(Args, Debug)]

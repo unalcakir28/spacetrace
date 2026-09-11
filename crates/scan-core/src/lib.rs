@@ -5,6 +5,7 @@
 //! node), makes aggregation a single reverse pass, and gives cache-friendly
 //! traversal for the treemap layout.
 
+mod age;
 #[cfg(target_os = "macos")]
 mod bulk;
 mod capacity;
@@ -14,6 +15,7 @@ mod scan;
 mod timeout;
 mod tree;
 
+pub use age::{age_profile, AgeBucket, AgeProfile, DEFAULT_EDGES};
 pub use capacity::{capacity_of, Capacity};
 pub use meta::{EntryKind, FileIdentity, RawMeta};
 pub use mounts::Mounts;

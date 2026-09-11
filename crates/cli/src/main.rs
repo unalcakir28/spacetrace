@@ -12,14 +12,14 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use spacetrace_diff::{diff, ChangeKind, DiffOptions, DiffReport};
 use spacetrace_scan_core::{
-    scan, EntryKind, Phase, ScanOptions, ScanProgress, ScanStats, SizeBasis, StallWatch, Tree,
-    STALL_GRACE,
+    age_profile, scan, EntryKind, Phase, ScanOptions, ScanProgress, ScanStats, SizeBasis,
+    StallWatch, Tree, DEFAULT_EDGES, STALL_GRACE,
 };
 use spacetrace_store::{export_csv, export_ncdu, import_ncdu, Integrity, ScanMeta, Store};
 
 use crate::args::{
-    parse_size, Cli, Command, DiffArgs, ExportArgs, ExportFormat, ImportArgs, LsArgs, PruneArgs,
-    PullArgs, RmArgs, ScanArgs, VerifyArgs,
+    parse_size, AgeArgs, Cli, Command, DiffArgs, ExportArgs, ExportFormat, ImportArgs, LsArgs,
+    PruneArgs, PullArgs, RmArgs, ScanArgs, VerifyArgs,
 };
 use crate::remote::Remote;
 
@@ -85,6 +85,7 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Diff(a) => cmd_diff(a, &db_path, remote.as_ref(), cli.json),
         Command::Export(a) => cmd_export(a, &db_path, remote.as_ref()),
         Command::Import(a) => cmd_import(a, &db_path, cli.json),
+        Command::Age(a) => cmd_age(a, &db_path, cli.json),
         Command::Prune(a) => cmd_prune(a, &db_path, cli.json),
         Command::Rm(a) => cmd_rm(a, &db_path),
         Command::Verify(a) => cmd_verify(a, &db_path, cli.json),
@@ -979,6 +980,86 @@ fn cmd_import(a: &ImportArgs, db_path: &Path, json: bool) -> Result<()> {
          export does not record them."
     );
     Ok(())
+}
+
+// ------------------------------------------------------------------ age
+
+/// How old the bytes are.
+///
+/// Size answers "what is big"; this answers "what is nobody using", which is
+/// usually the more actionable of the two — the biggest folder is often the
+/// one in daily use, and the one worth moving is the one untouched since the
+/// last machine.
+fn cmd_age(a: &AgeArgs, db_path: &Path, json: bool) -> Result<()> {
+    let (tree, source) = match a.scan {
+        Some(id) => {
+            let store = open_store(db_path)?;
+            let (tree, meta) = store.load(id)?;
+            (tree, format!("snapshot #{} ({})", meta.id, meta.root))
+        }
+        None => {
+            let (tree, _) = scan_with_progress(&a.path, a.walk.to_options(), !json)?;
+            (tree, tree_source(&a.path))
+        }
+    };
+
+    let edges: Vec<u32> = a.bands.clone().unwrap_or_else(|| DEFAULT_EDGES.to_vec());
+    // The clock is read here and nowhere deeper: the profile takes `now` as
+    // an argument so it can be tested against a fixture.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let profile = age_profile(&tree, now, &edges);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&profile)?);
+        return Ok(());
+    }
+
+    println!("{source}\n");
+    println!("{:>14}  {:>12}  {:>9}  age", "on disk", "logical", "files");
+    let total: u64 = profile.buckets.iter().map(|b| b.alloc).sum::<u64>() + profile.unknown.alloc;
+    let mut previous = 0u32;
+    for bucket in &profile.buckets {
+        let label = match bucket.up_to_days {
+            Some(up_to) => format!("{previous}–{up_to} days"),
+            None => format!("over {previous} days"),
+        };
+        print_age_row(bucket, &label, total);
+        if let Some(up_to) = bucket.up_to_days {
+            previous = up_to;
+        }
+    }
+    if profile.unknown.files > 0 {
+        // Named as unknown rather than folded into the oldest band: an
+        // imported snapshot may carry no times at all, and calling that
+        // "untouched for years" would be a confident wrong answer.
+        print_age_row(&profile.unknown, "no recorded date", total);
+    }
+
+    if let Some(&oldest) = edges.last() {
+        let stale = profile.alloc_older_than(oldest);
+        println!(
+            "\n{} has not been touched in over {oldest} days.",
+            fmt::size(stale)
+        );
+    }
+    Ok(())
+}
+
+fn print_age_row(bucket: &spacetrace_scan_core::AgeBucket, label: &str, total: u64) {
+    let share = if total == 0 {
+        0.0
+    } else {
+        bucket.alloc as f64 / total as f64 * 100.0
+    };
+    println!(
+        "{:>14}  {:>12}  {:>9}  {label}  {share:.1}%",
+        fmt::size(bucket.alloc),
+        fmt::size(bucket.size),
+        bucket.files
+    );
 }
 
 fn write_ncdu(tree: &Tree, out: &Path) -> Result<()> {

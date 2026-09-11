@@ -113,6 +113,9 @@ ncdu -o old.json /var && spacetrace import old.json --host retired-nas
 # A spreadsheet for someone who does not have this installed
 spacetrace export --scan 3 --format csv --depth 3 --out report.csv
 
+# What nobody has touched — the other question a full disk raises
+spacetrace age /srv --bands 30,365,1095
+
 # Check stored snapshots against the digest saved with them
 spacetrace verify
 ```

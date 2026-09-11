@@ -447,8 +447,18 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       var.
 - [ ] **C6 Sunburst görünümü (masaüstü)** — yalnızca treemap'imiz var.
       *Rakip:* FreeSize (treemap + sunburst + heatmap), Filelight.
-- [ ] **C7 Dosya yaşı ısı haritası** — "2 yıldır dokunulmamış 400 GB". `mtime`
-      zaten `Node`'da duruyor, yani ucuz. *Rakip:* FreeSize (heatmap).
+- [~] **C7 Dosya yaşı** — **hesap yapıldı, ısı haritası yapılmadı**
+      *(11 Eylül 2026)*. `spacetrace age`, `--bands` ile ayarlanabilir bantlar,
+      `--json`. Hesap çekirdekte (`scan-core/src/age.rs`), C3'teki kalıpla:
+      masaüstünde JS testi yok, kural içeren şey test edilebilir tarafta durur.
+      **Bayta göre ağırlıklı, dosya sayısına göre değil** — yüz bin eski kaynak
+      dosyası cevap değil, bir disk imajı cevap. **Dizinler sayılmıyor:** bir
+      dizinin `mtime`'ı yanına bir şey eklenince değişiyor, içindekilerin
+      yaşıyla ilgisi yok. **`mtime` yoksa ayrı bant** — ncdu'dan gelen snapshot
+      onu taşımıyor ve 1970 okumak "elli yıldır dokunulmamış" demek olurdu.
+      *Kalan:* masaüstündeki ısı haritası görünümü. Ekran görüntüsü alamadığım
+      için görsel doğrulaması yapılamıyor; kullanıcı isterse yapılacak.
+      *Rakip:* FreeSize (heatmap).
 - [x] **C8 ncdu/gdu JSON içe aktarma** — yapıldı *(11 Eylül 2026)*.
       `spacetrace import <dosya>`; `--root`, `--host`, `--label`. Yeni
       bağımlılık yok, `serde_json` zaten `store`'daydı.
