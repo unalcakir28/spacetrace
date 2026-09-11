@@ -19,6 +19,8 @@
 //! screen. That is what a quadtree would have been for, except the structure is
 //! already there and costs nothing to keep.
 
+pub mod sunburst;
+
 use spacetrace_scan_core::{NodeId, SizeBasis, Tree};
 
 /// An axis-aligned rectangle in layout space, y growing downward.
