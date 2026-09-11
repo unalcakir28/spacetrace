@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use spacetrace_store::{ScanId, Store};
 
 use crate::config::{Config, RootConfig};
-use crate::runner::{AlreadyRunning, Runner};
+use crate::runner::{AlreadyRunning, InFlight, Runner};
 
 /// Compression level for snapshot bodies. Level 3 is zstd's default: on the
 /// measured corpus it gets within a few percent of level 19 while costing a
@@ -174,7 +174,11 @@ struct Status {
     host: String,
     uptime_s: u64,
     roots: Vec<String>,
-    scanning: Vec<String>,
+    /// Scans running right now, with their counters. Objects rather than bare
+    /// paths since 0.6.0: a path alone cannot tell an operator whether the
+    /// scan is working or wedged, which is the question they open `/status`
+    /// to answer.
+    scanning: Vec<InFlight>,
     snapshots: usize,
     /// The newer release, when there is one. Absent means up to date, not
     /// checked yet, or checking switched off — to a reader they are the same
@@ -198,11 +202,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Result<Json<Status>, ApiF
             .iter()
             .map(|r| r.path.to_string_lossy().into_owned())
             .collect(),
-        scanning: runner
-            .in_flight_roots()
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect(),
+        scanning: runner.in_flight(),
         snapshots,
         update_available: state.updates.available(),
     }))

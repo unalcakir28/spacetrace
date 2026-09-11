@@ -444,9 +444,11 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       mount istiyor; bu makinede yok (macFUSE macOS 26 için fazla eski,
       autofs `/net` kapalı). Gerçek bir NAS ya da HDD elde olunca açılacak.
 
-      **Ajanda ve masaüstünde henüz yok.** Ajanın `/status`'u ve masaüstünün
-      ilerleme yükü `reading_now()`/`Phase` taşımıyor; sunucuda asılan bir
-      tarama hâlâ sessiz.
+      **Masaüstü ve ajan artık taşıyor** *(masaüstü 10, ajan 11 Eylül 2026)*.
+      `/status`'ta `scanning` düz yol listesi değil, tarama başına sayaç +
+      `phase` + `stalled_ms` + `waiting_on` taşıyan bir nesne listesi. Takılma
+      süresini ajan içindeki bir izleyici thread'i ölçüyor, istekten isteğe
+      değil — `/status` seyrek yoklanınca süre şişmesin diye.
 - [ ] **D2 Ajanda yerleşik TLS** — şu an ters vekil öneriliyor (Faz 2'de de var).
 - [ ] **D3 Ajanda hız sınırlama** (Faz 2'de de var).
 - [ ] **D4 10M+ dosyada bellek profili** — kısmen ölçüldü (412k girdide 122 MB,

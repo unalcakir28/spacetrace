@@ -164,12 +164,49 @@ All routes except `/health` require `Authorization: Bearer <token>`.
 | Method | Route | Purpose |
 |--------|-------|---------|
 | GET | `/health` | Liveness and version. No token, and deliberately reveals nothing else |
-| GET | `/status` | Host, uptime, configured roots, scans in flight, snapshot count |
+| GET | `/status` | Host, uptime, configured roots, running scans with their counters, snapshot count |
 | GET | `/scans` | Every snapshot's metadata, newest first |
 | GET | `/scans/{id}` | One snapshot's metadata |
 | GET | `/scans/{id}/download` | The snapshot itself, as a standalone SQLite file |
 | POST | `/scans` | Start a scan. Body: `{"root": "/var", "label": "manual"}` |
 | POST | `/snapshots` | Accept a snapshot pushed by another agent |
+
+### Is a scan working, or wedged?
+
+`scanning` in `/status` carries one object per running scan, not just a path —
+because a path alone cannot answer the question the endpoint is opened for:
+
+```json
+{
+  "scanning": [
+    {
+      "root": "/mnt/backup",
+      "elapsed_ms": 94120,
+      "files": 812004, "dirs": 51233, "bytes": 419923884032, "errors": 3,
+      "clones_probed": 0,
+      "phase": "walking",
+      "stalled_ms": 61000,
+      "waiting_on": ["/mnt/backup/nfs-archive"]
+    }
+  ]
+}
+```
+
+Three fields are worth knowing:
+
+- **`phase`** is `walking` or `finishing`. After the walk ends only
+  `clones_probed` moves, so a reader who watches `files` alone reads a healthy
+  scan as a stuck one — on one measured tree that was 1193 ms out of 1989.
+- **`stalled_ms`** is absent while the scan is moving, and otherwise says how
+  long *every* counter has stood still. It is measured by a watcher inside the
+  agent, not from one request to the next, so polling `/status` rarely does not
+  inflate it.
+- **`waiting_on`** is sent only alongside a stall: the directories being listed
+  at that moment. During a healthy scan the answer is already out of date by
+  the time it is read.
+
+A scan that never moves at all is still listed, with every counter at zero —
+that is the shape of an agent wedged on its own root.
 
 `GET /scans/{id}/download` returns the raw SQLite file, `Content-Type:
 application/vnd.sqlite3`. Send `Accept-Encoding: zstd` to get it compressed —

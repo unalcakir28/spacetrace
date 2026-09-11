@@ -17,6 +17,10 @@ because anyone can install them.
 - `--threads N` chooses how wide a scan runs, and the agent takes the same setting per root. There is no best number: the optimum moves with the size of the tree, and someone who knows their disk will choose better than any built-in default.
 - When a scan stops making progress, the progress line now says so and names the directory it is waiting on, instead of going on claiming to be scanning. A network share that has stopped answering blocks in the kernel and no timeout in this program can lift that — but knowing what it is waiting on is what lets you decide whether to wait or quit.
 
+### Changed
+
+- The agent's `/status` now says whether a running scan is working or wedged. `scanning` carries one object per scan instead of a bare path: live counters, the phase (`walking` or `finishing` — after the walk only the clone probe moves, so counting files alone reads a healthy scan as a stuck one), and, once every counter has stood still, how long for and which directories it is waiting on. The stall is timed by a watcher inside the agent, so polling `/status` rarely does not inflate it.
+
 ### Performance
 
 - Scans now use at most eight threads instead of one per core, which was faster on every directory tree measured — 39% on a small one, 11% on a large one. A walk is syscall-bound: past a point the threads queue in the kernel rather than work. `--threads N` overrides it.
