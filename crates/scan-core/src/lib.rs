@@ -5,6 +5,8 @@
 //! node), makes aggregation a single reverse pass, and gives cache-friendly
 //! traversal for the treemap layout.
 
+#[cfg(target_os = "macos")]
+mod bulk;
 mod capacity;
 mod meta;
 mod mounts;

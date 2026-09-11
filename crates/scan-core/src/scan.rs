@@ -7,7 +7,7 @@ use std::time::Duration;
 use rayon::prelude::*;
 
 use crate::capacity::Capacity;
-use crate::meta::{display_name, EntryKind, FileIdentity, RawMeta};
+use crate::meta::{display_name, EntryKind, FileIdentity, NamedMeta, RawMeta};
 use crate::mounts::Mounts;
 use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
 
@@ -694,6 +694,31 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
     // disk holds no mount point, and those pay nothing per entry.
     let guarded = ctx.opts.mount_timeout.is_some() && ctx.mounts.holds_a_boundary(dir);
 
+    // Read the whole directory first, then fan out. Doing the syscalls for one
+    // directory on a single thread keeps readdir sequential (which is what the
+    // kernel is fastest at) while different directories still run in parallel.
+    // Names are collected here, on this one thread, so that the parallel phase
+    // below only has to carry offsets into a buffer nobody else writes to.
+    let mut names = String::new();
+    let mut pending: Vec<(PathBuf, u32, u16, RawMeta)> = Vec::new();
+
+    // macOS can answer names and metadata in one call. Not for a directory
+    // holding a mount point, though: the whole directory arrives at once, so
+    // there is no per-entry moment left at which a filesystem that stopped
+    // answering could be given a deadline, and the protection below is worth
+    // more than the speed.
+    if !guarded {
+        if let Some(entries) = bulk_list(dir) {
+            for item in entries {
+                let path = dir.join(&item.name);
+                let (name_off, name_len) = push_name(&mut names, &item.name.to_string_lossy());
+                pending.push((path, name_off, name_len, item.meta));
+            }
+            drop(listing);
+            return assemble(dir, depth, ctx, names, pending);
+        }
+    }
+
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -702,13 +727,6 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
         }
     };
 
-    // Read the whole directory first, then fan out. Doing the syscalls for one
-    // directory on a single thread keeps readdir sequential (which is what the
-    // kernel is fastest at) while different directories still run in parallel.
-    // Names are collected here, on this one thread, so that the parallel phase
-    // below only has to carry offsets into a buffer nobody else writes to.
-    let mut names = String::new();
-    let mut pending: Vec<(PathBuf, u32, u16, RawMeta)> = Vec::new();
     for entry in rd {
         let entry = match entry {
             Ok(e) => e,
@@ -759,6 +777,20 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
     // Listing done; the recursion that follows is not what hangs.
     drop(listing);
 
+    assemble(dir, depth, ctx, names, pending)
+}
+
+/// Turn one directory's listing into its children, recursing in parallel.
+///
+/// Shared by both listing paths so that whichever produced the metadata, what
+/// happens to it afterwards is the same code.
+fn assemble(
+    _dir: &Path,
+    depth: usize,
+    ctx: &Ctx,
+    names: String,
+    pending: Vec<(PathBuf, u32, u16, RawMeta)>,
+) -> Children {
     let entries = pending
         .into_par_iter()
         .map(|(path, name_off, name_len, meta)| {
@@ -766,6 +798,18 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
         })
         .collect();
     Children { names, entries }
+}
+
+/// The platform's one-call directory listing, where there is one.
+#[cfg(target_os = "macos")]
+fn bulk_list(dir: &Path) -> Option<Vec<NamedMeta>> {
+    crate::bulk::list(dir)
+}
+
+/// Everywhere else the ordinary walk is the only walk.
+#[cfg(not(target_os = "macos"))]
+fn bulk_list(_dir: &Path) -> Option<Vec<NamedMeta>> {
+    None
 }
 
 /// Whether this directory's name is on the skip list.

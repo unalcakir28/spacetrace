@@ -62,6 +62,16 @@
             "it": "Una condivisione di rete il cui server è sparito non blocca più l'intera scansione. La prima richiesta a un filesystem montato non può essere interrotta una volta bloccata e, poiché una cartella viene elencata su un solo thread, una condivisione morta si portava dietro tutte le cartelle vicine. Le scansioni ora leggono prima la tabella dei mount, si avvicinano al punto di mount tramite un thread che sono disposte ad abbandonare e dopo 60 secondi lo registrano come percorso illeggibile e proseguono — il risultato manca solo di quel filesystem e lo dichiara, invece di non arrivare mai. `--mount-timeout 0` ripristina il comportamento precedente; il costo misurato del controllo è circa un millisecondo su un albero di 300.000 voci.",
             "tr": "Sunucusu ortadan kaybolmuş bir ağ paylaşımı artık taramanın tamamını kilitlemiyor. Bağlı bir dosya sistemine yapılan ilk sorgu bir kez asıldığında kesilemiyor ve dizinler tek thread'de listelendiği için ölü bir paylaşım bütün kardeşlerini de beraberinde götürüyordu. Taramalar artık önce mount tablosunu okuyor, mount noktasına terk etmeye razı olduğu bir thread üzerinden yaklaşıyor ve 60 saniye sonra onu okunamayan yol olarak kaydedip devam ediyor — yani sonuç o tek dosya sistemi kadar eksik oluyor ve bunu söylüyor, hiç gelmemek yerine. `--mount-timeout 0` eski davranışı geri veriyor; kontrolün ölçülen maliyeti 300.000 girdilik bir ağaçta yaklaşık bir milisaniye."
           }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Scans auf macOS sind etwa 2,3-mal schneller. Der alte Durchlauf fragte den Kernel zuerst nach den Namen eines Verzeichnisses und dann noch einmal, pro Eintrag, nach Größe und Datum; macOS kann beides in einem einzigen Aufruf beantworten und tut das jetzt. Von Anfang bis Ende an zwei echten Verzeichnisbäumen gemessen: von 1293 ms auf 556 ms beim einen, von 1554 ms auf 646 ms beim anderen, wobei beide Versionen aufs Byte identische Summen melden.",
+            "en": "Scans on macOS are about 2.3 times faster. The old walk asked the kernel for a directory's names and then asked again, once per entry, for each entry's size and dates; macOS can answer both in a single call, and now does. Measured end to end on two real trees: 1293 ms to 556 ms on one, 1554 ms to 646 ms on the other, with both versions reporting byte-for-byte the same totals.",
+            "fr": "Les analyses sur macOS sont environ 2,3 fois plus rapides. L'ancien parcours demandait au noyau les noms d'un dossier, puis de nouveau, une fois par entrée, la taille et les dates ; macOS sait répondre aux deux en un seul appel, et c'est désormais le cas. Mesuré de bout en bout sur deux arborescences réelles : de 1293 ms à 556 ms pour l'une, de 1554 ms à 646 ms pour l'autre, les deux versions rapportant des totaux identiques à l'octet près.",
+            "it": "Le scansioni su macOS sono circa 2,3 volte più rapide. La vecchia scansione chiedeva al kernel i nomi di una cartella e poi, una volta per voce, la dimensione e le date; macOS può rispondere a entrambe con una sola chiamata, e ora lo fa. Misurato da un capo all'altro su due alberi reali: da 1293 ms a 556 ms su uno, da 1554 ms a 646 ms sull'altro, con entrambe le versioni che riportano totali identici byte per byte.",
+            "tr": "macOS'ta taramalar yaklaşık 2,3 kat hızlandı. Eski yürüyüş çekirdekten önce bir dizinin adlarını, sonra girdi başına bir kez daha boyut ve tarihleri istiyordu; macOS ikisini tek çağrıda verebiliyor ve artık öyle yapıyor. Uçtan uca, iki gerçek ağaçta ölçüldü: birinde 1293 ms'den 556 ms'ye, diğerinde 1554 ms'den 646 ms'ye — iki sürüm de birebir aynı toplamları bildiriyor."
+          }
         }
       ],
       "releases": [
@@ -399,6 +409,16 @@
             "fr": "L'historique complet d'un dossier sur une seule ligne. Historique affiche sous forme de graphique tous les instantanés enregistrés d'un dossier, avec à côté ce qui a changé entre chaque paire ; cliquer sur une étape ouvre la comparaison correspondant exactement à ce saut. L'axe part de zéro : la hauteur de la ligne est donc la taille elle-même.",
             "it": "L'intera cronologia di una cartella su una linea. Cronologia mostra in un grafico tutti gli snapshot archiviati di una cartella, con accanto ciò che è cambiato tra una coppia e l'altra; un clic su un passaggio apre il confronto per quel salto preciso. L'asse parte da zero, quindi l'altezza della linea è la dimensione stessa.",
             "tr": "Bir klasörün tüm geçmişi tek çizgide. Geçmiş, bir klasörün saklanan bütün anlık görüntülerini grafik olarak gösteriyor ve her ikisi arasında neyin değiştiğini yanında yazıyor; bir adıma tıklamak tam o sıçramanın karşılaştırmasını açıyor. Eksen sıfırdan başlıyor, yani çizginin yüksekliği boyutun kendisi."
+          }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Scans auf macOS sind etwa 2,3-mal schneller, dank derselben Änderung im Scan-Kern: Das System kann die Namen eines Ordners und die Größen seiner Dateien in einer einzigen Anfrage melden statt in einer pro Datei.",
+            "en": "Scans on macOS are about 2.3 times faster, following the same change in the scanning core: the system can report a folder's names and its files' sizes in one request instead of one request per file.",
+            "fr": "Les analyses sur macOS sont environ 2,3 fois plus rapides, grâce à la même modification du moteur d'analyse : le système peut indiquer les noms d'un dossier et la taille de ses fichiers en une seule requête au lieu d'une par fichier.",
+            "it": "Le scansioni su macOS sono circa 2,3 volte più rapide, grazie alla stessa modifica nel motore di scansione: il sistema può indicare i nomi di una cartella e le dimensioni dei suoi file in un'unica richiesta invece di una per file.",
+            "tr": "macOS'ta taramalar yaklaşık 2,3 kat hızlandı; tarama çekirdeğindeki aynı değişiklikten geliyor: sistem bir klasörün adlarını ve dosyalarının boyutlarını dosya başına bir istek yerine tek istekte verebiliyor."
           }
         }
       ],

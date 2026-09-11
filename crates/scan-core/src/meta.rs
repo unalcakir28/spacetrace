@@ -37,8 +37,23 @@ pub enum FileIdentity {
     Skipped,
 }
 
+/// One directory entry: its name, and what the platform said about it.
+///
+/// Defined here rather than beside the macOS bulk listing that produces it,
+/// because the walk names this type on every platform — one that has a
+/// one-call listing and one that does not — and a type that exists only on
+/// some of them makes the walk itself conditional.
+pub(crate) struct NamedMeta {
+    pub name: std::ffi::OsString,
+    pub meta: RawMeta,
+}
+
 /// Platform-normalised metadata for one entry.
-#[derive(Debug, Clone, Copy)]
+///
+/// `PartialEq` so the two listing paths can be compared field for field: on
+/// macOS the bulk path must produce exactly what `lstat` produces, and an
+/// eyeballed comparison is not a test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RawMeta {
     pub kind: EntryKind,
     /// Logical size in bytes (what `ls` shows).

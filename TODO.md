@@ -360,9 +360,54 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       ReFS'te ve ağ/FAT'te yok → normal yola geri düşme şart, ve o yol A1/A2'de
       düzeliyor. **Sıra bu yüzden A'dan sonra.**
       *Rakip:* WizTree (ham MFT), TreeSize Free (yönetici), WinDirStat 2.5.0.
-- [ ] **B5 macOS `getattrlistbulk` hızlı yolu** (`getattrlistbulk-rs`).
-      *Ölçüm (dış):* `dumac` bununla `du`'dan 6.39× hızlı. **Listedeki tek
-      "öne geçme" maddesi** — rakiplerin hiçbiri macOS'ta bunu yapmıyor.
+- [x] **B5 macOS `getattrlistbulk` hızlı yolu** — yapıldı *(11 Eylül 2026)*.
+      Ayrı bir crate gerekmedi: `libc` zaten `getattrlistbulk`'ü açıyor.
+      Dizin başına `readdir` + **girdi başına `lstat`** yerine tek çağrıda hem
+      adlar hem metadata.
+
+      **Ölçüm, serpiştirilmiş ve medyanlı, iki korpusta:**
+
+      | Ağaç | Eski | Yeni | Kazanç |
+      |------|------|------|--------|
+      | `~/github` (297.695 girdi) | 1293 ms | 556 ms | **2,33×** |
+      | `/Applications` (412k girdi) | 1554 ms | 646 ms | **2,41×** |
+
+      Dağılımlar hiç örtüşmüyor (`~/github`: yeni maks 598, eski min 1225),
+      yani bu makinenin gürültüsünün üretebileceği bir sayı değil. Yalnız
+      listeleme katmanı tek thread'de ölçüldüğünde 3,3×; paralel yürüyüşte
+      uçtan uca 2,3–2,4×, çünkü ağaç kurma ve clone sondası aynı kalıyor.
+      Üç kökte (`~/github`, `/Applications`, `/usr`) iki ikilinin çıktısı
+      birebir aynı.
+
+      **Asıl risk ikinci bir kod yoluydu**, hız değil: sessizce ayrışan iki
+      metadata kaynağı `store::digest`'in kendi başlığında uyardığı hata.
+      O yüzden hızlı yol aynı `RawMeta`'yı üretiyor ve `assert_same_answer_as_lstat`
+      iki yolu alan alan karşılaştırıyor — symlink, kırık symlink, dizine
+      symlink, hardlink ve tek batch'e sığmayan dizin dâhil.
+
+      **Dizin `nlink`'i düzeltilmek zorundaydı.** `ATTR_DIR_LINKCOUNT` APFS'te
+      gerçek hardlink sayısını (1) veriyor, `st_nlink` ise her Unix aracının
+      gösterdiği 2+altdizin'i. Dizin başına bir `lstat` ile eşitlendi;
+      **ölçülen maliyeti yok** (3,31× vs 3,29×), çünkü çekirdek o inode'u az
+      önce okumuş oluyor.
+
+      **Mount içeren dizinde kullanılmıyor.** Dizinin tamamı tek çağrıda
+      geliyor, yani cevap vermeyen bir dosya sistemine süre tanınacak girdi
+      başına an kalmıyor — D1'in koruması eski yolu istiyor ve yürüyüş o
+      dizinleri ona veriyor.
+
+      **"Rakiplerin hiçbiri macOS'ta bunu yapmıyor" notu yanlıştı.**
+      COMPETITORS.md §2'deki tablo DiskRaptor'ın `getattrlistbulk` kullandığını
+      zaten yazıyordu, yani bu madde öne geçme değil eşitlenme. `dumac`'in
+      `du`'ya karşı 6,39× rakamı da bizim 2,3×'imizle karşılaştırılamaz:
+      onların tabanı tek thread'li `du`, bizimki zaten 8 thread'le paralel
+      yürüyen kendi tarayıcımız.
+
+      **İlk denemede `attribute_set_t`'yi bir slot kaydırmıştım** (`attrlist`
+      ile karıştırıp; onun başlığı var, bunun yok) ve her girdi hatalı
+      görünüyordu. Karşılaştırma fonksiyonum da sessizce geçiyordu, çünkü
+      `zip` 9 ile 0'ı sıfır kez dönüyor — sayı eşitliği iddiası sonradan
+      eklendi.
 - [ ] **B6 Linux `getdents64` + `statx` hızlı yolu.**
       *Rakip:* `dut` sıcak cache'te `du`'dan 6.87×, dust/dua/gdu'dan 2.8–3.75×.
 - [ ] **B7 USN Journal ile artımlı yeniden tarama (Windows)** — gecelik tarayan
@@ -509,7 +554,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~4~~ ✅ | ~~A3, A5~~ | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma artık sessiz değil. **Bitti (10 Eylül 2026)** |
 | 5 | ~~B2~~ ✅, **B3 ← sıradaki** | Ucuz ve ölçülmüş — B2 bitti (10 Eylül 2026); B3 gerçek bir HDD ya da ağ sürücüsü istiyor |
 | ~~6~~ | ~~C3, D1~~ | İkisi de yapıldı |
-| 7 | B4, B5, B6 | Platforma özel hızlı yollar — doğruluk düzeldikten **sonra** |
+| 7 | B4, ~~B5~~ ✅, B6 | Platforma özel hızlı yollar — B5 bitti (11 Eylül 2026); B4 Windows, B6 Linux makinesi istiyor |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
 | 9 | C1, C2, C4–C9 | Özellik paritesi |
 | 10 | E3–E5, D2, D3 | Yayın hazırlığı |

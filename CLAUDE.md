@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 283 test, hepsi geçmeli
+cargo test --workspace                   # 289 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -216,6 +216,16 @@ Kodda dikkat edilecekler:
   geçiyor, bu yüzden `Tree::from_parts_checked` arena değişmezlerini doğruluyor.
   Doğrulamayı atlayan bir yol ekleme: bozuk `children_start` indeks panic'i,
   geriye dönük bir çocuk işaretçisi sonsuz döngü demek.
+- **macOS'ta listeleme iki yoldan geçiyor, ve ikisi aynı rakamı vermek
+  zorunda.** `bulk.rs` `getattrlistbulk` ile adları ve metadata'yı tek çağrıda
+  alıyor (ölçüldü: uçtan uca 2,3–2,4×); `read_dir` + `lstat` yolu hem
+  fallback hem mount içeren dizinlerin tek yolu (D1'in girdi başına koruması
+  toplu çağrıda işlemiyor). **İkinci bir metadata kaynağı sessizce
+  ayrışırsa** yıllar sonra "snapshot bozuk" diye çıkıyor —
+  `assert_same_answer_as_lstat` iki yolu alan alan karşılaştırıyor, yeni bir
+  alan eklerken oraya da bak. Dizin `nlink`'i özellikle: `ATTR_DIR_LINKCOUNT`
+  APFS'te 1, `st_nlink` 2+altdizin, ve eşitlemek için dizin başına bir
+  `lstat` ödeniyor (ölçüldü: maliyeti yok).
 - **Yapı doğrulaması değer doğrulaması değil, ve ikincisi `content_hash`.**
   Bir `size` alanındaki bit dönmesi kusursuz bir ağaç bırakır ve yanlış rakam
   raporlar — `from_parts_checked` bunu göremez. Şema v3'ten beri her tarama

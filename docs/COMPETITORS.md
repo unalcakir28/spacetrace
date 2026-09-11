@@ -60,6 +60,27 @@ aracının hızı **dil seçiminden değil, paralellikten ve girdi başına sysc
 sayısından** geliyor. "Rust olduğu için hızlı" savunulabilir bir iddia değil;
 "paralel yürüdüğü için hızlı" ölçülmüş bir iddia.
 
+**Ve bu çıkarımın doğal sonucu ölçüldü (11 Eylül 2026, B5).** Syscall sayısı
+belirleyiciyse, onu azaltmak en büyük kazançtır. macOS'ta `getattrlistbulk`
+bir dizinin adlarını *ve* metadata'sını tek çağrıda veriyor, yani girdi başına
+`lstat` tamamen kalkıyor:
+
+| Ağaç | `readdir` + girdi başına `lstat` | `getattrlistbulk` | Kazanç |
+|------|--------------------------------|-------------------|--------|
+| `~/github` (297.695 girdi) | 1293 ms | 556 ms | **2,33×** |
+| `/Applications` (412k girdi) | 1554 ms | 646 ms | **2,41×** |
+
+*Yöntem:* iki gerçek ikili, dönüşümlü ve sıra her turda değişerek, 7–9 tur,
+medyan. Dağılımlar hiç örtüşmüyor (`~/github`: yeni maks 598 ms, eski min
+1225 ms). Yalnız listeleme katmanı tek thread'de ölçülürse 3,3×; uçtan uca
+2,3–2,4×, çünkü ağaç kurma ve clone sondası değişmedi. Üç kökte iki ikilinin
+çıktısı birebir aynı.
+
+**Bu öne geçme değil, eşitlenme.** §2'deki tablo DiskRaptor'ın macOS'ta zaten
+`getattrlistbulk` kullandığını yazıyor; TODO.md'de B5'in yanında duran
+"rakiplerin hiçbiri macOS'ta bunu yapmıyor" notu **yanlıştı** ve düzeltildi.
+Windows (B4) ve Linux (B6) karşılıkları hâlâ açık, ve o makineler elde yok.
+
 ### 1.2 Thread ölçeklenmesi
 
 | Thread | Süre | Hızlanma |
