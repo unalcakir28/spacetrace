@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 357 test, hepsi geçmeli
+cargo test --workspace                   # 381 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -276,8 +276,11 @@ Bunlara denk gelirsen bug değil, bilinen borç (tam liste TODO.md'de):
   100.001 dedi. Maliyet: girdi başına fazladan çağrı, ölçülmüş mertebe +36%;
   kaldıran şey B4 (`NtQueryDirectoryFileEx`). `FileIdentity::Skipped` ikinci
   sorguyu atlıyor, handle'ı değil.
-- APFS clone'ları tekilleştirilmiyor; btrfs/ZFS'te reflink ve sıkıştırma
-  yüzünden ağaç yürüyüşü gerçek kullanımı yanlış raporluyor.
+- **btrfs/ZFS'te** reflink ve sıkıştırma yüzünden ağaç yürüyüşü gerçek
+  kullanımı yanlış raporluyor. **APFS clone'ları tekilleştiriliyor** (A3,
+  9 Eylül 2026, `fcntl(F_LOG2PHYS_EXT)`, varsayılan açık) — bu satır 11 Eylül'e
+  kadar tersini söylüyordu ve yukarıdaki değişmez 1 ile çelişiyordu; ikisi
+  aynı dosyada.
 - Tarama tüm ağacı bellekte tutuyor. **Ölçüldü (11 Eylül 2026):** ağaç
   **96 bayt/girdi**, 100k–10M arası doğrusal ve iki platformda aynı (10M =
   916 MiB). RSS bundan fazlası ve fark platforma bağlı: Linux'ta ağacın

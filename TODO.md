@@ -758,12 +758,14 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 açıkları" bölümünde rakip bağlamı ve sırasıyla birlikte izleniyor — iş tanımı
 orada, burada yalnızca borç kaydı olarak duruyorlar.
 
-- [ ] **Windows `alloc` gerçek değil** — `GetFileInformationByHandleEx`
-      (FILE_STANDARD_INFO) gerekiyor; şu an mantıksal boyuta eşit
-      (`TODO(win)`, `crates/scan-core/src/meta.rs`) → **A1**
-- [ ] **Windows hardlink dedupe kapalı** — `FileIdInfo` ile `(volume, file id)`
-      → **A2**
-- [ ] APFS clone tekilleştirme yok — macOS'ta `alloc` şişebilir → **A3**
+- [x] ~~Windows `alloc` gerçek değil~~ → **A1 yapıldı** *(9 Eylül 2026)*.
+      Bu satır 11 Eylül'e kadar açık duruyordu ve işaret ettiği `TODO(win)`
+      işareti koddan çoktan kalkmıştı — yani borç listesi aynı dosyanın yol
+      haritası bölümüyle çelişiyordu. Kapanmış bir borcu açık göstermek,
+      birinin bitmiş işi yeniden yapması demek.
+- [x] ~~Windows hardlink dedupe kapalı~~ → **A2 yapıldı** *(9 Eylül 2026)*.
+- [x] ~~APFS clone tekilleştirme yok~~ → **A3 yapıldı** *(9 Eylül 2026)*,
+      `fcntl(F_LOG2PHYS_EXT)` ile, varsayılan açık.
 - [ ] btrfs/ZFS: reflink ve sıkıştırma yüzünden ağaç yürüyüşü yanlış;
       "dosya sistemi farkında mod" gerekiyor → **A6**
 - [x] ~~10M+ dosyalı köklerde bellek profili ölçülmedi~~ → **ölçüldü**
@@ -771,10 +773,15 @@ orada, burada yalnızca borç kaydı olarak duruyorlar.
       (412k girdi = 122 MB RSS). Hedef ~25 B/dosya, yani **11–17 kat üstünde**;
       10M dosyaya ekstrapole ~2,8 GB. Düzeltme işi → **B1**, yeniden ölçüm → **D4**
 - [ ] `Tree::rel_path` her çağrıda kökten yürüyor — sıcak döngüde kullanılmamalı
+      (**D6**; ölçüldü 11 Eylül 2026: CSV dışa aktarımında 412.380 satır için
+      0,28 s, yol kurmayan ncdu dışa aktarımı 0,16 s. Derinlikte doğrusal,
+      ağaçta değil.)
       → **D6**
 - ~~Arayüz dizeleri koda gömülü, i18n yok~~ → borç değil, karar
       ([DECISIONS.md](docs/DECISIONS.md) K1). Dizeler İngilizce ve gömülü kalır.
 - [ ] Büyük ağaçlarda `store::save` tek transaction — ilerleme geri bildirimi yok
+      (**D5**; ölçüldü 11 Eylül 2026 ve sanıldığı kadar acil değil: 412.380
+      girdi için üst sınır ~290 ms, 10M'e ekstrapolasyon ~7 s.)
       → **D5**
 
 ---
