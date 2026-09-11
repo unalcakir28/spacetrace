@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 spacetrace-scan-core.workspace = true
-spacetrace-dupes.workspace = true
+spacetrace-dupes = { workspace = true, optional = true }
 anyhow.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
@@ -22,3 +22,11 @@ gethostname = "0.5"
 [dev-dependencies]
 rusqlite.workspace = true
 tempfile = "3"
+
+[features]
+default = []
+# The duplicate finder's hash cache. Behind a flag because it drags in BLAKE3
+# and this crate is also what the agent is built from — and the agent has to
+# stay a single static binary someone will install on a NAS. The CLI turns it
+# on; nothing else needs it.
+dupes = ["dep:spacetrace-dupes"]

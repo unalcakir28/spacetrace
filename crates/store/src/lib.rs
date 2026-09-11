@@ -7,6 +7,7 @@
 
 mod csv;
 mod digest;
+#[cfg(feature = "dupes")]
 mod hash_cache;
 mod ncdu;
 mod ncdu_import;
@@ -19,6 +20,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use spacetrace_scan_core::{EntryKind, ScanStats, StoredNode, Tree, TreeAssembler};
 
 pub use csv::export_csv;
+#[cfg(feature = "dupes")]
 pub use hash_cache::SqliteHashCache;
 pub use ncdu::export_ncdu;
 pub use ncdu_import::import_ncdu;
