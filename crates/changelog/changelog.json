@@ -433,6 +433,16 @@
             "it": "Gli snapshot importati con `spacetrace import` si aprono nell'app. Venivano salvati con una radice malformata e l'app li rifiutava come albero inutilizzabile.",
             "tr": "`spacetrace import` ile alınan snapshot'lar uygulamada açılıyor. Bozuk bir kökle kaydedildikleri için uygulama onları kullanılamaz ağaç diye reddediyordu."
           }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "en": "The map can be coloured by age instead of by kind. Blue is this week, red is over two years, and a folder takes the age of its middle byte — so half of what is inside it is older than its colour says. The key beside it gives the bytes in each band for the folder on screen, which turns \"red is old\" into \"48 GB here has not been touched in two years\". A folder's own date is deliberately ignored: it moves when anything is added beside it and says nothing about what is inside.",
+            "tr": "Harita türe göre değil yaşa göre renklendirilebiliyor. Mavi bu hafta, kırmızı iki yıldan eski; bir klasör ortadaki baytının yaşını alıyor — yani içindekilerin yarısı renginin söylediğinden daha eski. Yanındaki anahtar, ekrandaki klasör için her banttaki baytı veriyor; böylece \"kırmızı eski demek\" yerine \"burada iki yıldır dokunulmamış 48 GB var\" yazıyor. Klasörün kendi tarihi bilerek yok sayılıyor: yanına bir şey eklenince değişiyor ve içindekiler hakkında hiçbir şey söylemiyor.",
+            "it": "La mappa può essere colorata per età invece che per tipo. Blu è questa settimana, rosso è oltre due anni, e una cartella prende l'età del suo byte mediano: metà di ciò che contiene è più vecchio di quanto dica il colore. La legenda accanto indica i byte di ogni banda per la cartella mostrata, trasformando «rosso vuol dire vecchio» in «qui ci sono 48 GB non toccati da due anni». La data della cartella stessa è ignorata di proposito: cambia quando le si aggiunge qualcosa accanto e non dice nulla del contenuto.",
+            "fr": "La carte peut être colorée par âge plutôt que par type. Le bleu correspond à cette semaine, le rouge à plus de deux ans, et un dossier prend l'âge de son octet médian : la moitié de son contenu est plus ancienne que ce que dit sa couleur. La légende donne les octets de chaque bande pour le dossier affiché, ce qui transforme « rouge veut dire ancien » en « 48 Go ici n'ont pas été touchés depuis deux ans ». La date du dossier lui-même est ignorée volontairement : elle change dès qu'on ajoute quelque chose à côté et ne dit rien du contenu.",
+            "de": "Die Karte lässt sich nach Alter statt nach Art einfärben. Blau ist diese Woche, Rot ist älter als zwei Jahre, und ein Ordner bekommt das Alter seines mittleren Bytes — die Hälfte seines Inhalts ist also älter, als die Farbe sagt. Die Legende daneben nennt die Bytes je Band für den gezeigten Ordner und macht aus „Rot heißt alt\" ein „hier liegen 48 GB, die seit zwei Jahren niemand angefasst hat\". Das Datum des Ordners selbst wird bewusst ignoriert: es ändert sich, sobald etwas daneben abgelegt wird, und sagt nichts über den Inhalt."
+          }
         }
       ],
       "releases": [
