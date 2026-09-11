@@ -7,6 +7,7 @@ use std::time::Duration;
 use rayon::prelude::*;
 
 use crate::capacity::Capacity;
+use crate::live::LiveTree;
 use crate::meta::{display_name, EntryKind, FileIdentity, NamedMeta, RawMeta};
 use crate::mounts::Mounts;
 use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
@@ -176,6 +177,12 @@ pub struct ScanProgress {
     phase: AtomicU8,
     /// Set by [`ScanProgress::cancel`] and read once per directory.
     cancelled: AtomicBool,
+    /// The root's children, filling in as the walk runs.
+    ///
+    /// On `ScanProgress` rather than returned by `scan`, because the whole
+    /// point is to be readable *while* the scan is running, and the progress
+    /// object is the one thing a caller already holds during that time.
+    pub live: LiveTree,
     /// Directories whose listing has started and not finished.
     ///
     /// This exists for one failure: a mount that stops answering. The walk
@@ -531,7 +538,7 @@ fn scan_with(
 
     let children = if root_meta.kind == EntryKind::Dir {
         progress.dirs.fetch_add(1, Ordering::Relaxed);
-        Some(pool.install(|| read_dir_parallel(&root_path, 1, &ctx)))
+        Some(pool.install(|| read_dir_parallel(&root_path, 1, &ctx, None)))
     } else {
         progress.files.fetch_add(1, Ordering::Relaxed);
         progress.bytes.fetch_add(root_meta.alloc, Ordering::Relaxed);
@@ -679,7 +686,7 @@ fn identity_needed(opts: &ScanOptions, is_dir: bool) -> FileIdentity {
     FileIdentity::Needed
 }
 
-fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
+fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx, branch: Option<u32>) -> Children {
     // Checked before the syscall, so a cancelled scan stops issuing I/O
     // immediately instead of draining whatever rayon had already queued.
     if ctx.progress.is_cancelled() {
@@ -715,7 +722,7 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
                 pending.push((path, name_off, name_len, item.meta));
             }
             drop(listing);
-            return assemble(dir, depth, ctx, names, pending);
+            return assemble(dir, depth, ctx, names, pending, branch);
         }
     }
 
@@ -777,7 +784,7 @@ fn read_dir_parallel(dir: &Path, depth: usize, ctx: &Ctx) -> Children {
     // Listing done; the recursion that follows is not what hangs.
     drop(listing);
 
-    assemble(dir, depth, ctx, names, pending)
+    assemble(dir, depth, ctx, names, pending, branch)
 }
 
 /// Turn one directory's listing into its children, recursing in parallel.
@@ -790,13 +797,72 @@ fn assemble(
     ctx: &Ctx,
     names: String,
     pending: Vec<(PathBuf, u32, u16, RawMeta)>,
+    branch: Option<u32>,
 ) -> Children {
-    let entries = pending
+    // The root's own listing is where the live view's branches come from, and
+    // it has to happen before the entries are built: everything under a child
+    // needs an id to attribute to, and the recursion starts inside the map
+    // below.
+    let roots = (branch.is_none() && depth == 1).then(|| {
+        ctx.progress
+            .live
+            .install(pending.iter().map(|(path, _, _, meta)| {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                (name, meta.kind == EntryKind::Dir)
+            }))
+    });
+
+    let entries: Vec<RawEntry> = pending
         .into_par_iter()
-        .map(|(path, name_off, name_len, meta)| {
-            build_entry(path, name_off, name_len, meta, depth, ctx)
+        .enumerate()
+        .map(|(index, (path, name_off, name_len, meta))| {
+            // A child of the root carries its own branch; anything deeper
+            // carries the one it inherited. `roots` can be empty when the
+            // branches were already installed by an earlier scan on the same
+            // progress object, in which case nothing is attributed and the
+            // live view simply stays as it was.
+            let child = match &roots {
+                Some(ids) => ids.get(index).copied(),
+                None => branch,
+            };
+            build_entry(path, name_off, name_len, meta, depth, ctx, child)
         })
         .collect();
+
+    // One publish per directory, of what this directory holds directly. The
+    // recursion publishes for the levels below, so summing subtree totals here
+    // would count every byte once per ancestor.
+    match &roots {
+        Some(ids) => {
+            for (index, entry) in entries.iter().enumerate() {
+                if let Some(&id) = ids.get(index) {
+                    ctx.progress.live.add(
+                        id,
+                        entry.size,
+                        entry.alloc,
+                        u64::from(entry.kind != EntryKind::Dir),
+                    );
+                }
+            }
+        }
+        None => {
+            if let Some(id) = branch {
+                let mut size = 0u64;
+                let mut alloc = 0u64;
+                let mut files = 0u64;
+                for entry in &entries {
+                    size += entry.size;
+                    alloc += entry.alloc;
+                    files += u64::from(entry.kind != EntryKind::Dir);
+                }
+                ctx.progress.live.add(id, size, alloc, files);
+            }
+        }
+    }
+
     Children { names, entries }
 }
 
@@ -831,6 +897,7 @@ fn build_entry(
     meta: RawMeta,
     depth: usize,
     ctx: &Ctx,
+    branch: Option<u32>,
 ) -> RawEntry {
     let is_dir = meta.kind == EntryKind::Dir;
 
@@ -864,7 +931,7 @@ fn build_entry(
     }
 
     let children = if descend {
-        Some(Box::new(read_dir_parallel(&path, depth + 1, ctx)))
+        Some(Box::new(read_dir_parallel(&path, depth + 1, ctx, branch)))
     } else {
         None
     };

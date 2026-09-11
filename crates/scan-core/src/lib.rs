@@ -9,6 +9,7 @@ mod age;
 #[cfg(target_os = "macos")]
 mod bulk;
 mod capacity;
+mod live;
 mod meta;
 mod mounts;
 mod scan;
@@ -17,6 +18,7 @@ mod tree;
 
 pub use age::{age_profile, age_profile_at, median_bands, AgeBucket, AgeProfile, DEFAULT_EDGES};
 pub use capacity::{capacity_of, Capacity};
+pub use live::{LiveEntry, LiveTree};
 pub use meta::{EntryKind, FileIdentity, RawMeta};
 pub use mounts::Mounts;
 pub use scan::{
