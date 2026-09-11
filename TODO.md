@@ -440,7 +440,28 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
             bunun için var ve bir uyarının izlediği yolun aynısını kullanıyor.
             Bakılacak: STARTTLS ile 587, implicit TLS ile 465, ve yanlış
             parolanın verdiği hatanın okunabilirliği.
-- [ ] **C2 Kişi başına hesap (hub)** — şu an tek admin kimliği.
+- [x] **C2 Kişi başına hesap (hub)** — yapıldı *(11 Eylül 2026)*. Kişi başına
+      token, iki rol: `viewer` her şeyi görür hiçbirini değiştiremez, `admin`
+      erişimi kimin aldığı dâhil her şeyi değiştirir.
+      **Parola değil token, ve bu bir kısayol değil sınır**: üretilmiş 256
+      bitlik bir token düz SHA-256 olarak saklanabilir çünkü brute-force
+      edilecek bir şey yok; insan seçimi bir parola saklanamazdı ve yavaş bir
+      KDF ile etrafındaki her şeyi gerektirirdi. Giriş formu zaten token
+      alıyordu, yani bu mekanizmaya ad ve rol eklemek oldu.
+      **Yetkilendirme router'ın şekli, handler'daki bir kontrol değil.**
+      Yazan rotalar kendi grubunda ve `require_write` katmanının arkasında;
+      handler içindeki bir kontrol unutulabilir ve unutulması salt okunur bir
+      hesabın filodaki her uyarı kuralını silebilmesi demek. İki guard var ve
+      ikisinin de diş taşıdığı kanıtlandı: bir write rotasını okuma grubuna
+      taşımak `a_viewer_can_read_everything_and_change_nothing`'i düşürüyor,
+      listeye eklenmemiş yeni bir POST rotası `every_write_route_is_in_this_list`'i
+      düşürüyor (o test `web.rs`'i okuyor, çünkü axum rotalarını dışarı
+      vermiyor).
+      Uyarı kuralları kimin eklediğini taşıyor (`created_by`, v2 satırlarında
+      NULL — geriye doldurmak birinin adını yapmadığı bir işin üstüne yazmak
+      olurdu). Son admin kendini kaldıramıyor: geri dönüş yolu sunucudaki
+      dosya, ve web arayüzünden kendini kilitleyen birinin tam olarak
+      bulunmadığı yer orası.
       *Rakip:* SpaceObServer (Client/Web Access).
 - [x] **C3 Zaman çizelgesi görünümü (masaüstü)** — yapıldı *(11 Eylül 2026)*.
       Bir hedefin `(host, root)` geçmişi tek çizgide, aralarındaki değişim
@@ -654,7 +675,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~6~~ | ~~C3, D1~~ | İkisi de yapıldı |
 | 7 | B4, ~~B5~~ ✅, B6 | Platforma özel hızlı yollar — B5 bitti (11 Eylül 2026); B4 Windows, B6 Linux makinesi istiyor |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
-| 9 | C1, C2, C4–C7, ~~C8, C9~~ ✅ | Özellik paritesi — C8 ve C9 bitti (11 Eylül 2026) |
+| 9 | ~~C1, C2, C4, C7, C8, C9~~ ✅, C5, C6 | Özellik paritesi — kalan ikisi masaüstü görünümü (canlı ağaç, sunburst) |
 | 10 | E3–E5, D2, D3 | Yayın hazırlığı |
 | **son** | **B1-K** | Çift depolama. Sıradan optimizasyon değil, mimari karar — **ayrı oturumda Fable modeliyle derin araştırma**, önce benchmark altyapısı |
 
