@@ -434,7 +434,18 @@
       ]
     },
     "desktop": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "added",
+          "text": {
+            "en": "A first scan now shows what it is finding while it runs, instead of a blank panel and a counter. The top-level folders appear as a map and grow as their contents are read, so the big one usually announces itself long before the scan ends. The figures are what has been found so far and the view says so — a folder that has stopped growing looks exactly like one that is finished. The same layout routine draws this and the finished map, so nothing rearranges when the scan lands. A rescan leaves the map you are already reading alone, as before.",
+            "tr": "İlk tarama artık boş bir panel ve bir sayaç yerine ne bulduğunu koşarken gösteriyor. Üst seviye klasörler harita olarak beliriyor ve içleri okundukça büyüyor; büyük olan genellikle tarama bitmeden çok önce kendini belli ediyor. Rakamlar şu ana kadar bulunanlar ve görünüm bunu söylüyor — büyümesi duran bir klasör, bitmiş bir klasörle birebir aynı görünür. Bunu ve bitmiş haritayı aynı yerleşim rutini çiziyor, yani tarama indiğinde hiçbir şey yeniden dizilmiyor. Yeniden tarama, okumakta olduğunuz haritaya eskisi gibi dokunmuyor.",
+            "it": "Una prima scansione mostra ora ciò che sta trovando mentre procede, invece di un pannello vuoto e un contatore. Le cartelle di primo livello compaiono come una mappa e crescono man mano che il contenuto viene letto, così quella grande si annuncia di solito molto prima della fine. Le cifre sono ciò che è stato trovato finora e la vista lo dice: una cartella che ha smesso di crescere è indistinguibile da una completata. La stessa routine di disposizione disegna questa e la mappa finale, quindi nulla si riorganizza quando la scansione termina. Una nuova scansione lascia intatta la mappa che stai leggendo, come prima.",
+            "fr": "Une première analyse montre désormais ce qu'elle trouve pendant qu'elle travaille, au lieu d'un panneau vide et d'un compteur. Les dossiers de premier niveau apparaissent sous forme de carte et grandissent à mesure que leur contenu est lu ; le gros se signale généralement bien avant la fin. Les chiffres sont ce qui a été trouvé jusqu'ici et la vue le dit : un dossier qui a cessé de grandir ressemble exactement à un dossier terminé. La même routine de disposition dessine ceci et la carte finale, donc rien ne se réorganise quand l'analyse se termine. Une nouvelle analyse laisse intacte la carte que vous consultez, comme avant.",
+            "de": "Ein erster Scan zeigt jetzt schon während des Laufs, was er findet, statt einer leeren Fläche mit einem Zähler. Die obersten Ordner erscheinen als Karte und wachsen, während ihr Inhalt gelesen wird — der große meldet sich meist lange vor dem Ende. Die Zahlen sind das bisher Gefundene, und die Ansicht sagt das auch: ein Ordner, der nicht mehr wächst, sieht genauso aus wie einer, der fertig ist. Dieselbe Layout-Routine zeichnet diese und die fertige Karte, es ordnet sich also nichts neu, wenn der Scan landet. Ein erneuter Scan lässt die Karte, die Sie gerade lesen, unangetastet wie bisher."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.6.2",

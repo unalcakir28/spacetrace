@@ -503,11 +503,34 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       **Hiçbir şey silinmiyor**, ajanla aynı gerekçe: hangi kopyanın kalacağı
       bu crate'in sahip olmadığı bağlamı gerektiren bir karar.
       *Rakip:* DiskRaptor (xxh3), WinDirStat 2.5.0, Czkawka.
-- [ ] **C5 Tarama sırasında canlı büyüyen ağaç (masaüstü)** — FreeSize'ın manşet
-      özelliği ve algılanan hızının büyük kısmı. Bizde ilerleme göstergesi var,
-      canlı ağaç yok. Not: FreeSize bunu DOM'a çizerek yavaşlığının sebebi
-      yaptı; Canvas2D + Rust yerleşimiyle aynı şeyi **hızlı** yapma avantajımız
-      var.
+- [x] **C5 Tarama sırasında canlı büyüyen ağaç (masaüstü)** — yapıldı
+      *(11 Eylül 2026)*. `scan-core/src/live.rs` + masaüstünde `LiveMap.tsx`.
+      **Tek seviye, ve bu taslak değil karar**: treemap asgari alanın altını
+      çizmiyor, yani tarama uçarken okunabilen tek kısım üst seviye, ve koşan
+      bir taramaya sorulan soru her zaman "bunların hangisi büyük". Her
+      seviyeyi taşımak, görülemeyecek kareler için diskle büyüyen ve her
+      işçiden kilitlenen bir yapı demekti.
+      **Baytlar dosya başına değil dizin başına ekleniyor** — en sıcak döngü
+      girdi başına ve oraya paylaşımlı yazma koymamak için zaten ödeme
+      yapılmıştı.
+      **Maliyet ölçüldü:** yayın başına 4 ns (ilk hâli `RwLock` ile 203 ns'ti;
+      "bir kez yazılır sonra okunur" zaten `OnceLock`'un anlamı). 34.000
+      dizinlik `/Applications` için toplam 0,13 ms. Tüm taramanın A/B'si bunu
+      çözemiyor (-%3,45 / -%0,45 — gürültü tabanı), o yüzden doğru form
+      işlem başına ölçüm × işlem sayısı.
+      **Aynı `squarify` rutini** hem canlı önizlemeyi hem bitmiş haritayı
+      çiziyor (treemap crate'inde public edildi), yani tarama bitince resim
+      kendini yeniden dizmiyor — devir teslim algoritma değişikliği değil veri
+      değişikliği.
+      **Yalnızca pencere boşken**: yeniden tarama okunmakta olan haritaya
+      dokunmuyor, çünkü bu uygulamanın kuralı "iş pencereyi elinden almaz".
+      Doğruluk iddiası ayrı testte: canlı toplamlar bitmiş ağacın toplamlarıyla
+      birebir eşleşiyor (iki tamamen farklı yoldan gelen iki cevap).
+      - [ ] **Görsel doğrulama sizde.** Ekran görüntüsü alamıyorum. Bakılacak:
+            karelerin gerçekten büyüyüp yer değiştirdiği, etiketlerin dar
+            karede taşmadığı, ve tarama bitip gerçek harita geldiğinde resmin
+            zıplamadığı. Mantık tarafı test edildi (yerleşim, kap, ölçü,
+            kategori, alan sınırları).
 - [ ] **C6 Sunburst görünümü (masaüstü)** — yalnızca treemap'imiz var.
       *Rakip:* FreeSize (treemap + sunburst + heatmap), Filelight.
 - [x] **C7 Dosya yaşı** — yapıldı *(11 Eylül 2026)*. `spacetrace age`
@@ -707,7 +730,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~6~~ | ~~C3, D1~~ | İkisi de yapıldı |
 | 7 | B4, ~~B5~~ ✅, B6 | Platforma özel hızlı yollar — B5 bitti (11 Eylül 2026); B4 Windows, B6 Linux makinesi istiyor |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
-| 9 | ~~C1, C2, C4, C7, C8, C9~~ ✅, C5, C6 | Özellik paritesi — kalan ikisi masaüstü görünümü (canlı ağaç, sunburst) |
+| 9 | ~~C1, C2, C4, C5, C7, C8, C9~~ ✅, C6 | Özellik paritesi — kalan tek madde sunburst görünümü |
 | 10 | E3–E5, D2, D3 | Yayın hazırlığı |
 | **son** | **B1-K** | Çift depolama. Sıradan optimizasyon değil, mimari karar — **ayrı oturumda Fable modeliyle derin araştırma**, önce benchmark altyapısı |
 
