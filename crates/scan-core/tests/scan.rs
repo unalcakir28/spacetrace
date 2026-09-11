@@ -279,21 +279,41 @@ fn cancelling_from_another_thread_mid_walk_yields_no_tree() {
     let dir = deep_tree();
     let progress = Arc::new(ScanProgress::default());
     let watcher = Arc::clone(&progress);
+
+    // The scan does not start until the watcher is already spinning. Without
+    // this the test was really measuring thread-spawn latency against the
+    // whole walk, and on a two-core CI runner with eight rayon threads the
+    // watcher could fail to be scheduled at all before the walk was over.
+    let ready = Arc::new(std::sync::Barrier::new(2));
+    let their_turn = Arc::clone(&ready);
     let stopper = std::thread::spawn(move || {
+        their_turn.wait();
         while watcher.files.load(std::sync::atomic::Ordering::Relaxed) < 40 {
             std::thread::yield_now();
         }
         watcher.cancel();
     });
+    ready.wait();
 
-    let err = scan(dir.path(), ScanOptions::default(), Arc::clone(&progress)).unwrap_err();
+    let outcome = scan(dir.path(), ScanOptions::default(), Arc::clone(&progress));
     stopper.join().unwrap();
 
-    // Only the outcome is asserted, not how far the walk got. How much of the
-    // tree a concurrent cancel catches is a property of the machine, not of
-    // this code; the guarantee that the walk stops early is pinned by the test
-    // above instead.
-    assert_eq!(err.kind(), std::io::ErrorKind::Interrupted, "{err}");
+    // Whether the cancel lands before the walk ends is a property of the
+    // machine, not of this code — this tree is small and the macOS walk got
+    // 2.3× faster in B5, so a fast machine now often finishes first. What must
+    // hold either way is the thing worth testing: **never a partial tree.**
+    // Cancelled means no tree at all (invariant #5); not cancelled in time
+    // means the whole tree. There is no third answer, and a scan that returned
+    // a truncated tree with a confident total would be the worst outcome of
+    // the three.
+    match outcome {
+        Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::Interrupted, "{err}"),
+        Ok((tree, _)) => assert_eq!(
+            tree.len(),
+            1 + 40 + 40 * 40,
+            "the walk beat the cancel, so it owes a complete tree"
+        ),
+    }
 }
 
 #[test]
