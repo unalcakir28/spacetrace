@@ -616,8 +616,40 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
 - [ ] **D2 Ajanda yerleşik TLS** — şu an ters vekil öneriliyor (Faz 2'de de var).
 - [ ] **D3 Ajanda hız sınırlama** (Faz 2'de de var).
-- [ ] **D4 10M+ dosyada bellek profili** — kısmen ölçüldü (412k girdide 122 MB,
-      10M'e ekstrapolasyon ~2,8 GB). B1 sonrası yeniden ölçülmeli.
+- [~] **D4 10M+ dosyada bellek profili** — **ölçüldü** *(11 Eylül 2026)*.
+      Eskiden burada tek noktadan bir ekstrapolasyon vardı (~2,8 GB); gerçek
+      cevap ondan hem daha iyi hem daha ilginç.
+
+      **Ağacın kendisi: 96 bayt/girdi, 100k'dan 10M'e kusursuz doğrusal, ve
+      macOS ile Linux'ta birebir aynı** (10M girdi = 915–916 MiB). Sentetik
+      ağaç `TreeAssembler` ile kuruldu, yani `store::load`'un kullandığı yol —
+      yapının modeli değil, yapının kendisi.
+
+      **Ama RSS ağaç değil, ve aradaki fark platforma bağlı.** 250k girdilik
+      aynı ağaçta:
+
+      | | macOS | Linux (glibc) |
+      |---|---|---|
+      | tek tarama RSS | 125 MiB (~4× ağaç) | **35 MiB** (~1,2× ağaç) |
+      | 12–20 tarama sonra | **941 MiB** | **37,9 MiB** |
+      | tarama başına | +42 MiB | +0,2 MiB |
+
+      **Aynı kod.** Linux her zaman `read_dir` + `lstat` yolunu kullanıyor ve
+      düz; macOS'ta *aynı yol* (bulk kapatılarak ölçüldü) tarama başına
+      +26 MiB büyüyor. Yani bu bir sızıntı değil, macOS libmalloc'un
+      parçalanmış span'ları geri vermemesi. `malloc_zone_pressure_relief`
+      denendi: **hiçbir şey yapmıyor** (RSS birebir aynı). `getattrlistbulk`
+      yolu ayırma trafiğini artırdığı için büyümeyi +26'dan +45 MiB'a
+      çıkarıyor — sebep değil, çarpan.
+
+      Elenen açıklamalar: thread sayısı (1'de 138 MiB, 16'da 163 — gürültü),
+      thread havuzu sızıntısı (3 girdilik ağaçta 20 tarama boyunca RSS sabit).
+
+      *Sonuç:* **Ajan için sorun yok** — Linux'ta 10M girdi ≈ 1,1 GB ve
+      tekrarlı taramalar birikmiyor. *Kalan:* **masaüstünde "Yeniden tara"**
+      aynı süreçte tekrar tarıyor ve macOS'ta her seferinde büyüyor; uzun bir
+      oturumda görünür. Ucuz bir çare yok (relief işe yaramıyor), gerçek çare
+      yürüyüşteki ayırma trafiğini azaltmak — yani B1.
 - [ ] **D5 `store::save` ilerleme geri bildirimi** — büyük ağaçlarda tek
       transaction, kullanıcı donmuş sanıyor.
       *Ölçüldü (11 Eylül 2026) ve sanıldığı kadar acil değil:*

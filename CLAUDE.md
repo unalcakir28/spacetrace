@@ -278,7 +278,15 @@ Bunlara denk gelirsen bug değil, bilinen borç (tam liste TODO.md'de):
   sorguyu atlıyor, handle'ı değil.
 - APFS clone'ları tekilleştirilmiyor; btrfs/ZFS'te reflink ve sıkıştırma
   yüzünden ağaç yürüyüşü gerçek kullanımı yanlış raporluyor.
-- Tarama tüm ağacı bellekte tutuyor; 10M+ dosyada bellek profili ölçülmedi.
+- Tarama tüm ağacı bellekte tutuyor. **Ölçüldü (11 Eylül 2026):** ağaç
+  **96 bayt/girdi**, 100k–10M arası doğrusal ve iki platformda aynı (10M =
+  916 MiB). RSS bundan fazlası ve fark platforma bağlı: Linux'ta ağacın
+  ~1,2 katı ve tekrarlı taramalarda düz; **macOS'ta ~4 katı ve her taramada
+  +42 MiB büyüyor** (250k girdilik ağaçta 20 taramada 125 → 941 MiB). Aynı
+  kod — bulk yolu kapatılarak ölçüldü, macOS'ta o da büyüyor — yani sebep
+  libmalloc, sızıntı değil; `malloc_zone_pressure_relief` hiçbir şey
+  değiştirmiyor. Ajan etkilenmiyor (Linux). Masaüstünde "Yeniden tara"
+  etkileniyor. Tam ölçüm TODO.md D4.
 - Ajanda yerleşik TLS yok; ters vekil öneriliyor. Hız sınırlama da yok (token
   zaten gerekli olduğu için ertelendi).
 
