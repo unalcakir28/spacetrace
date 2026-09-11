@@ -2,109 +2,115 @@
   "schema": 1,
   "components": {
     "cli": {
-      "unreleased": [
-        {
-          "kind": "performance",
-          "text": {
-            "de": "Scans laufen jetzt mit höchstens acht Threads statt mit einem pro Kern, was auf jedem gemessenen Verzeichnisbaum schneller war — 39% auf einem kleinen, 11% auf einem großen. Ein Durchlauf ist syscall-gebunden: jenseits eines Punkts warten die Threads im Kernel, statt zu arbeiten. Mit `--threads N` lässt sich das überstimmen.",
-            "en": "Scans now use at most eight threads instead of one per core, which was faster on every directory tree measured — 39% on a small one, 11% on a large one. A walk is syscall-bound: past a point the threads queue in the kernel rather than work. `--threads N` overrides it.",
-            "fr": "Les analyses utilisent désormais au plus huit threads au lieu d'un par cœur, ce qui s'est révélé plus rapide sur chaque arborescence mesurée — 39% sur une petite, 11% sur une grande. Un parcours est limité par les appels système : passé un certain point, les threads attendent dans le noyau au lieu de travailler. `--threads N` permet de forcer une valeur.",
-            "it": "Le scansioni usano ora al massimo otto thread invece di uno per core, risultando più veloci su ogni albero di directory misurato: 39% su uno piccolo, 11% su uno grande. Una scansione è limitata dalle chiamate di sistema: oltre un certo punto i thread aspettano nel kernel invece di lavorare. `--threads N` consente di forzare il valore.",
-            "tr": "Taramalar artık çekirdek başına bir yerine en fazla sekiz thread kullanıyor; ölçülen her dizin ağacında daha hızlı çıktı — küçüğünde %39, büyüğünde %11. Yürüyüş syscall'a bağlı: belli bir noktadan sonra thread'ler çalışmak yerine çekirdekte sıraya giriyor. `--threads N` ile değiştirilebilir."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "`--threads N` wählt die Breite eines Scans, und der Agent kennt dieselbe Einstellung pro Wurzel. Es gibt keine beste Zahl: das Optimum verschiebt sich mit der Größe des Baums, und wer seine Platte kennt, trifft eine bessere Wahl als jede eingebaute Vorgabe.",
-            "en": "`--threads N` chooses how wide a scan runs, and the agent takes the same setting per root. There is no best number: the optimum moves with the size of the tree, and someone who knows their disk will choose better than any built-in default.",
-            "fr": "`--threads N` choisit la largeur d'une analyse, et l'agent accepte le même réglage par racine. Il n'existe pas de meilleur nombre : l'optimum varie avec la taille de l'arborescence, et qui connaît son disque choisira mieux que n'importe quelle valeur par défaut.",
-            "it": "`--threads N` sceglie con quanta ampiezza gira una scansione, e l'agente accetta la stessa impostazione per ogni radice. Non esiste un numero migliore: l'ottimo si sposta con la dimensione dell'albero, e chi conosce il proprio disco sceglierà meglio di qualsiasi valore predefinito.",
-            "tr": "`--threads N` bir taramanın kaç thread'le koşacağını seçiyor, ajanda da kök başına aynı ayar var. En iyi bir sayı yok: optimum ağacın büyüklüğüyle kayıyor, ve diskini bilen biri gömülü hiçbir varsayılandan daha iyi seçer."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "Wenn ein Scan nicht mehr vorankommt, sagt die Fortschrittszeile das jetzt und nennt das Verzeichnis, auf das gewartet wird — statt weiter „scanning…“ zu behaupten. Eine Netzfreigabe, die aufgehört hat zu antworten, blockiert im Kernel und kein Zeitlimit in diesem Programm kann das aufheben; wer aber weiß, worauf gewartet wird, kann entscheiden, ob er wartet oder abbricht.",
-            "en": "When a scan stops making progress, the progress line now says so and names the directory it is waiting on, instead of going on claiming to be scanning. A network share that has stopped answering blocks in the kernel and no timeout in this program can lift that — but knowing what it is waiting on is what lets you decide whether to wait or quit.",
-            "fr": "Quand une analyse n'avance plus, la ligne de progression le dit et nomme le répertoire attendu, au lieu de continuer à prétendre analyser. Un partage réseau qui ne répond plus bloque dans le noyau et aucun délai d'attente dans ce programme ne peut y remédier — mais savoir ce qui est attendu permet de choisir entre patienter et abandonner.",
-            "it": "Quando una scansione non avanza più, la riga di avanzamento lo dice e indica la directory su cui è in attesa, invece di continuare a sostenere di stare scansionando. Una condivisione di rete che ha smesso di rispondere si blocca nel kernel e nessun timeout in questo programma può sbloccarla — ma sapere su cosa è in attesa è ciò che permette di decidere se aspettare o interrompere.",
-            "tr": "Bir tarama ilerlemeyi bıraktığında ilerleme satırı artık bunu söylüyor ve beklediği dizini adıyla veriyor; \"scanning…\" demeye devam etmiyor. Cevap vermeyi bırakmış bir ağ paylaşımı çekirdekte bloke oluyor ve bu programdaki hiçbir zaman aşımı onu kaldıramaz — ama neyi beklediğini bilmek, beklemekle vazgeçmek arasında seçim yapmanızı sağlayan şey."
-          }
-        },
-        {
-          "kind": "fixed",
-          "text": {
-            "de": "Die Fortschrittsanzeige stand am Ende jedes Scans scheinbar still. Nach dem Durchlauf sucht ein weiterer Schritt nach Copy-on-Write-Klonen, und der bewegte keinen einzigen Zähler — auf `~/github` waren das 1193 von 1989 Millisekunden. Diese Phase heißt jetzt so und zählt, was sie prüft.",
-            "en": "The progress display appeared to freeze near the end of every scan. After the walk there is a second pass looking for copy-on-write clones, and it moved no counter at all — on `~/github` that was 1193 of 1989 milliseconds. That phase now says what it is and counts what it checks.",
-            "fr": "L'affichage de progression semblait se figer vers la fin de chaque analyse. Après le parcours vient une seconde passe qui recherche les clones en copie sur écriture, et elle ne faisait bouger aucun compteur — sur `~/github`, 1193 des 1989 millisecondes. Cette phase s'annonce désormais et compte ce qu'elle vérifie.",
-            "it": "L'indicatore di avanzamento sembrava bloccarsi verso la fine di ogni scansione. Dopo la scansione c'è un secondo passaggio che cerca i cloni copy-on-write, e non muoveva alcun contatore: su `~/github` erano 1193 dei 1989 millisecondi. Ora quella fase si dichiara e conta ciò che controlla.",
-            "tr": "İlerleme göstergesi her taramanın sonuna doğru donmuş görünüyordu. Yürüyüşten sonra kopyala-yazarken klonlarını arayan ikinci bir geçiş var ve hiçbir sayacı kımıldatmıyordu — `~/github`'da 1989 milisaniyenin 1193'ü. O aşama artık adını söylüyor ve denetlediğini sayıyor."
-          }
-        },
-        {
-          "kind": "changed",
-          "text": {
-            "de": "Der `/status` des Agenten sagt jetzt, ob ein laufender Scan arbeitet oder feststeckt. `scanning` enthält pro Scan ein Objekt statt nur eines Pfades: laufende Zähler, die Phase (`walking` oder `finishing` — nach dem Durchlauf bewegt sich nur noch die Klon-Prüfung, wer also nur Dateien zählt, hält einen gesunden Scan für einen steckengebliebenen) und, sobald alle Zähler stillstehen, seit wann und auf welche Verzeichnisse er wartet. Der Stillstand wird von einem Beobachter im Agenten gemessen, seltenes Abfragen von `/status` bläht ihn also nicht auf.",
-            "en": "The agent's `/status` now says whether a running scan is working or wedged. `scanning` carries one object per scan instead of a bare path: live counters, the phase (`walking` or `finishing` — after the walk only the clone probe moves, so counting files alone reads a healthy scan as a stuck one), and, once every counter has stood still, how long for and which directories it is waiting on. The stall is timed by a watcher inside the agent, so polling `/status` rarely does not inflate it.",
-            "fr": "Le `/status` de l'agent indique désormais si une analyse en cours avance ou est bloquée. `scanning` contient un objet par analyse au lieu d'un simple chemin : compteurs en direct, la phase (`walking` ou `finishing` — après le parcours seule la détection de clones progresse, si bien qu'en ne comptant que les fichiers on prend une analyse saine pour une analyse bloquée) et, une fois tous les compteurs immobiles, depuis combien de temps et sur quels dossiers elle attend. Le blocage est chronométré par un observateur interne à l'agent : interroger `/status` rarement ne gonfle donc pas la durée.",
-            "it": "L'endpoint `/status` dell'agente ora dice se una scansione in corso sta lavorando o è bloccata. `scanning` contiene un oggetto per scansione anziché un semplice percorso: contatori in tempo reale, la fase (`walking` o `finishing` — dopo la scansione si muove solo il controllo dei clone, quindi chi conta solo i file legge una scansione sana come bloccata) e, quando tutti i contatori si sono fermati, da quanto tempo e quali cartelle sta aspettando. Il blocco è cronometrato da un osservatore interno all'agente, quindi interrogare `/status` di rado non gonfia il valore.",
-            "tr": "Ajanın `/status`'u artık çalışan bir taramanın ilerlediğini mi yoksa takıldığını mı söylüyor. `scanning` düz bir yol yerine tarama başına bir nesne taşıyor: canlı sayaçlar, aşama (`walking` ya da `finishing` — yürüyüşten sonra yalnızca clone sondası kımıldıyor, yani yalnızca dosya sayan biri sağlıklı bir taramayı takılmış sanıyor) ve bütün sayaçlar durduğunda ne kadar süredir durdukları ile hangi dizinleri bekledikleri. Takılma süresini ajanın içindeki bir izleyici ölçüyor, yani `/status`'u seyrek yoklamak süreyi şişirmiyor."
-          }
-        },
-        {
-          "kind": "fixed",
-          "text": {
-            "de": "Eine Netzwerkfreigabe, deren Server verschwunden ist, legt nicht mehr den ganzen Scan lahm. Die erste Abfrage an ein eingehängtes Dateisystem lässt sich nicht mehr abbrechen, sobald sie hängt, und da ein Verzeichnis auf einem einzigen Thread gelesen wird, riss eine tote Freigabe alle Nachbarn mit. Scans lesen jetzt zuerst die Mount-Tabelle, nähern sich einem Einhängepunkt über einen Thread, den sie aufzugeben bereit sind, und vermerken ihn nach 60 Sekunden als unlesbaren Pfad und machen weiter — das Ergebnis fehlt nur um dieses eine Dateisystem und sagt das auch, statt nie einzutreffen. `--mount-timeout 0` stellt das alte Verhalten wieder her; die gemessenen Kosten der Prüfung liegen bei etwa einer Millisekunde auf einem Baum mit 300.000 Einträgen.",
-            "en": "A network share whose server has gone away no longer wedges the whole scan. The first lookup into a mounted filesystem cannot be interrupted once it hangs, and because a directory is listed on one thread, one dead share used to take every one of its siblings with it. Scans now read the mount table first, approach a mount point through a thread they are willing to abandon, and after 60 seconds record it as an unreadable path and carry on — so the result is short by that one filesystem and says so, instead of never arriving. `--mount-timeout 0` restores the old behaviour; measured cost of the check is about a millisecond on a 300,000-entry tree.",
-            "fr": "Un partage réseau dont le serveur a disparu ne bloque plus toute l'analyse. La première requête vers un système de fichiers monté ne peut plus être interrompue une fois figée et, comme un dossier est listé sur un seul thread, un partage mort emportait tous ses voisins avec lui. Les analyses lisent désormais d'abord la table des montages, abordent un point de montage via un thread qu'elles acceptent d'abandonner et, au bout de 60 secondes, l'enregistrent comme chemin illisible et poursuivent — le résultat ne manque que de ce système de fichiers et le signale, au lieu de ne jamais arriver. `--mount-timeout 0` rétablit l'ancien comportement ; le coût mesuré de la vérification est d'environ une milliseconde sur une arborescence de 300 000 entrées.",
-            "it": "Una condivisione di rete il cui server è sparito non blocca più l'intera scansione. La prima richiesta a un filesystem montato non può essere interrotta una volta bloccata e, poiché una cartella viene elencata su un solo thread, una condivisione morta si portava dietro tutte le cartelle vicine. Le scansioni ora leggono prima la tabella dei mount, si avvicinano al punto di mount tramite un thread che sono disposte ad abbandonare e dopo 60 secondi lo registrano come percorso illeggibile e proseguono — il risultato manca solo di quel filesystem e lo dichiara, invece di non arrivare mai. `--mount-timeout 0` ripristina il comportamento precedente; il costo misurato del controllo è circa un millisecondo su un albero di 300.000 voci.",
-            "tr": "Sunucusu ortadan kaybolmuş bir ağ paylaşımı artık taramanın tamamını kilitlemiyor. Bağlı bir dosya sistemine yapılan ilk sorgu bir kez asıldığında kesilemiyor ve dizinler tek thread'de listelendiği için ölü bir paylaşım bütün kardeşlerini de beraberinde götürüyordu. Taramalar artık önce mount tablosunu okuyor, mount noktasına terk etmeye razı olduğu bir thread üzerinden yaklaşıyor ve 60 saniye sonra onu okunamayan yol olarak kaydedip devam ediyor — yani sonuç o tek dosya sistemi kadar eksik oluyor ve bunu söylüyor, hiç gelmemek yerine. `--mount-timeout 0` eski davranışı geri veriyor; kontrolün ölçülen maliyeti 300.000 girdilik bir ağaçta yaklaşık bir milisaniye."
-          }
-        },
-        {
-          "kind": "performance",
-          "text": {
-            "de": "Scans auf macOS sind etwa 2,3-mal schneller. Der alte Durchlauf fragte den Kernel zuerst nach den Namen eines Verzeichnisses und dann noch einmal, pro Eintrag, nach Größe und Datum; macOS kann beides in einem einzigen Aufruf beantworten und tut das jetzt. Von Anfang bis Ende an zwei echten Verzeichnisbäumen gemessen: von 1293 ms auf 556 ms beim einen, von 1554 ms auf 646 ms beim anderen, wobei beide Versionen aufs Byte identische Summen melden.",
-            "en": "Scans on macOS are about 2.3 times faster. The old walk asked the kernel for a directory's names and then asked again, once per entry, for each entry's size and dates; macOS can answer both in a single call, and now does. Measured end to end on two real trees: 1293 ms to 556 ms on one, 1554 ms to 646 ms on the other, with both versions reporting byte-for-byte the same totals.",
-            "fr": "Les analyses sur macOS sont environ 2,3 fois plus rapides. L'ancien parcours demandait au noyau les noms d'un dossier, puis de nouveau, une fois par entrée, la taille et les dates ; macOS sait répondre aux deux en un seul appel, et c'est désormais le cas. Mesuré de bout en bout sur deux arborescences réelles : de 1293 ms à 556 ms pour l'une, de 1554 ms à 646 ms pour l'autre, les deux versions rapportant des totaux identiques à l'octet près.",
-            "it": "Le scansioni su macOS sono circa 2,3 volte più rapide. La vecchia scansione chiedeva al kernel i nomi di una cartella e poi, una volta per voce, la dimensione e le date; macOS può rispondere a entrambe con una sola chiamata, e ora lo fa. Misurato da un capo all'altro su due alberi reali: da 1293 ms a 556 ms su uno, da 1554 ms a 646 ms sull'altro, con entrambe le versioni che riportano totali identici byte per byte.",
-            "tr": "macOS'ta taramalar yaklaşık 2,3 kat hızlandı. Eski yürüyüş çekirdekten önce bir dizinin adlarını, sonra girdi başına bir kez daha boyut ve tarihleri istiyordu; macOS ikisini tek çağrıda verebiliyor ve artık öyle yapıyor. Uçtan uca, iki gerçek ağaçta ölçüldü: birinde 1293 ms'den 556 ms'ye, diğerinde 1554 ms'den 646 ms'ye — iki sürüm de birebir aynı toplamları bildiriyor."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "`spacetrace import` liest einen JSON-Export von ncdu oder gdu und legt ihn als Snapshot ab, sodass bereits vorhandene Scans zum Vergleichsmaßstab werden — auch Scans einer Maschine, die es zum erneuten Scannen nicht mehr gibt. Die eigene scheinbare Größe eines Verzeichnisses wird dabei verworfen: sie mitzuzählen ist genau das, was `du --apparent-size` von der Zahl abweichen lässt, die dieses Werkzeug nennt.",
-            "en": "`spacetrace import` reads an ncdu or gdu JSON export and stores it as a snapshot, so scans you already have become something to compare against — including scans of a machine that no longer exists to be rescanned. A directory's own apparent size is dropped on the way in: counting it is what makes `du --apparent-size` disagree with the figure this tool reports.",
-            "fr": "`spacetrace import` lit un export JSON d'ncdu ou de gdu et l'enregistre comme instantané : les analyses que vous avez déjà deviennent ainsi comparables — y compris celles d'une machine qui n'existe plus pour être réanalysée. La taille apparente propre d'un dossier est écartée à l'entrée : la compter est précisément ce qui fait diverger `du --apparent-size` du chiffre annoncé par cet outil.",
-            "it": "`spacetrace import` legge un export JSON di ncdu o gdu e lo archivia come snapshot, così le scansioni che avete già diventano un termine di paragone — comprese quelle di una macchina che non esiste più per essere riscansionata. La dimensione apparente propria di una cartella viene scartata all'ingresso: contarla è ciò che fa divergere `du --apparent-size` dalla cifra riportata da questo strumento.",
-            "tr": "`spacetrace import` bir ncdu ya da gdu JSON dışa aktarımını okuyup anlık görüntü olarak saklıyor; böylece elinizdeki eski taramalar karşılaştırılabilir hâle geliyor — artık yeniden taranamayacak, ortadan kalkmış bir makinenin taraması dâhil. Bir dizinin kendi görünen boyutu içeri alınırken atılıyor: onu saymak, `du --apparent-size`'ın bu aracın bildirdiği rakamla çelişmesinin sebebi."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "`spacetrace export --format csv` schreibt eine Zeile je Eintrag für die Tabellenkalkulation, mit `--depth`, um bei den obersten Ebenen eines Baums haltzumachen, den keine Tabelle vollständig öffnen würde. Beide Maße sind Spalten statt einer Einstellung — was die Dateien angeben und was die Festplatte belegt — daneben die Eigenkosten jedes Eintrags, sodass sich eine Summe bilden lässt, ohne eine Datei für jeden darüberliegenden Ordner erneut zu zählen. Kommas, Anführungszeichen und Zeilenumbrüche in Namen werden korrekt maskiert: sie sind in Dateinamen erlaubt, und ein naiver Export macht daraus stillschweigend falsche Zeilen.",
-            "en": "`spacetrace export --format csv` writes one row per entry for a spreadsheet, with `--depth` to stop at the top few levels of a tree no spreadsheet would open whole. Both measures are columns rather than a setting — what files claim and what the disk holds — alongside each entry's own cost, so a total can be rebuilt without counting a file once for every folder above it. Commas, quotes and newlines in names are quoted properly; they are legal in a filename and a naive export turns them into silently wrong rows.",
-            "fr": "`spacetrace export --format csv` écrit une ligne par entrée pour un tableur, avec `--depth` pour s'arrêter aux premiers niveaux d'une arborescence qu'aucun tableur n'ouvrirait en entier. Les deux mesures sont des colonnes plutôt qu'un réglage — ce que les fichiers annoncent et ce que le disque occupe — à côté du coût propre de chaque entrée, de sorte qu'un total se reconstruit sans compter un fichier une fois par dossier au-dessus de lui. Les virgules, guillemets et sauts de ligne dans les noms sont correctement échappés : ce sont des caractères légaux dans un nom de fichier, et un export naïf en fait des lignes silencieusement fausses.",
-            "it": "`spacetrace export --format csv` scrive una riga per voce, pronta per un foglio di calcolo, con `--depth` per fermarsi ai primi livelli di un albero che nessun foglio aprirebbe per intero. Entrambe le misure sono colonne anziché un'impostazione — quanto dichiarano i file e quanto occupa il disco — accanto al costo proprio di ogni voce, così un totale si può ricostruire senza contare un file una volta per ogni cartella sopra di esso. Virgole, virgolette e a capo nei nomi vengono quotati correttamente: sono caratteri legali in un nome di file e un export ingenuo li trasforma in righe silenziosamente sbagliate.",
-            "tr": "`spacetrace export --format csv` her girdi için bir satır yazıyor; `--depth` ile de hiçbir hesap tablosunun bütün açamayacağı bir ağacın yalnızca üst katmanlarında durabiliyorsunuz. İki ölçü de ayrı sütun, ayar değil — dosyaların iddia ettiği ve diskin tuttuğu — ve yanlarında her girdinin kendi maliyeti var, böylece bir dosyayı üstündeki her klasör için tekrar saymadan toplam yeniden kurulabiliyor. İsimlerdeki virgül, tırnak ve satır sonu düzgün kaçırılıyor: bunlar dosya adında geçerli karakterler ve naif bir dışa aktarım onları sessizce yanlış satırlara çeviriyor."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "`spacetrace age` beantwortet die andere Frage, die eine volle Festplatte aufwirft: nicht was groß ist, sondern was niemand mehr anfasst. Bytes werden nach dem Zeitpunkt der letzten Änderung gruppiert — die Bänder legen Sie mit `--bands` fest — und nach Größe statt nach Dateianzahl gewichtet, denn hunderttausend alte Quelldateien sind nicht die Antwort, ein altes Festplatten-Image schon. Dateien ohne aufgezeichnetes Änderungsdatum werden getrennt ausgewiesen, statt als fünfzig Jahre alt zu gelten.",
-            "en": "`spacetrace age` answers the other question a full disk raises: not what is big, but what nobody has touched. Bytes are grouped by when they were last modified — the bands are yours to set with `--bands` — and weighted by size rather than by file count, because a hundred thousand stale source files are not the answer and one stale disk image is. Files whose modification time was never recorded are reported separately instead of being counted as fifty years old.",
-            "fr": "`spacetrace age` répond à l'autre question que pose un disque plein : non pas ce qui est gros, mais ce que plus personne ne touche. Les octets sont regroupés par date de dernière modification — les tranches se règlent avec `--bands` — et pondérés par la taille plutôt que par le nombre de fichiers, parce que cent mille vieux fichiers source ne sont pas la réponse et qu'une vieille image disque l'est. Les fichiers dont la date de modification n'a jamais été enregistrée sont signalés à part au lieu d'être comptés comme vieux de cinquante ans.",
-            "it": "`spacetrace age` risponde all'altra domanda che pone un disco pieno: non cosa è grande, ma cosa non tocca nessuno. I byte sono raggruppati per data di ultima modifica — le fasce le decidete voi con `--bands` — e pesati per dimensione anziché per numero di file, perché centomila vecchi file sorgente non sono la risposta e una vecchia immagine disco sì. I file senza data di modifica registrata sono riportati a parte invece di essere contati come vecchi di cinquant'anni.",
-            "tr": "`spacetrace age` dolu bir diskin sorduğu diğer soruyu cevaplıyor: ne büyük değil, kimsenin dokunmadığı ne. Baytlar son değiştirilme zamanına göre gruplanıyor — bantları `--bands` ile siz belirliyorsunuz — ve dosya sayısına göre değil boyuta göre ağırlıklandırılıyor, çünkü yüz bin eski kaynak dosyası cevap değil, bir tane eski disk imajı cevap. Değiştirilme zamanı hiç kaydedilmemiş dosyalar elli yıllık sayılmak yerine ayrı bildiriliyor."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.6.0",
+          "date": "2026-09-11",
+          "published": true,
+          "entries": [
+            {
+              "kind": "performance",
+              "text": {
+                "de": "Scans laufen jetzt mit höchstens acht Threads statt mit einem pro Kern, was auf jedem gemessenen Verzeichnisbaum schneller war — 39% auf einem kleinen, 11% auf einem großen. Ein Durchlauf ist syscall-gebunden: jenseits eines Punkts warten die Threads im Kernel, statt zu arbeiten. Mit `--threads N` lässt sich das überstimmen.",
+                "en": "Scans now use at most eight threads instead of one per core, which was faster on every directory tree measured — 39% on a small one, 11% on a large one. A walk is syscall-bound: past a point the threads queue in the kernel rather than work. `--threads N` overrides it.",
+                "fr": "Les analyses utilisent désormais au plus huit threads au lieu d'un par cœur, ce qui s'est révélé plus rapide sur chaque arborescence mesurée — 39% sur une petite, 11% sur une grande. Un parcours est limité par les appels système : passé un certain point, les threads attendent dans le noyau au lieu de travailler. `--threads N` permet de forcer une valeur.",
+                "it": "Le scansioni usano ora al massimo otto thread invece di uno per core, risultando più veloci su ogni albero di directory misurato: 39% su uno piccolo, 11% su uno grande. Una scansione è limitata dalle chiamate di sistema: oltre un certo punto i thread aspettano nel kernel invece di lavorare. `--threads N` consente di forzare il valore.",
+                "tr": "Taramalar artık çekirdek başına bir yerine en fazla sekiz thread kullanıyor; ölçülen her dizin ağacında daha hızlı çıktı — küçüğünde %39, büyüğünde %11. Yürüyüş syscall'a bağlı: belli bir noktadan sonra thread'ler çalışmak yerine çekirdekte sıraya giriyor. `--threads N` ile değiştirilebilir."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "`--threads N` wählt die Breite eines Scans, und der Agent kennt dieselbe Einstellung pro Wurzel. Es gibt keine beste Zahl: das Optimum verschiebt sich mit der Größe des Baums, und wer seine Platte kennt, trifft eine bessere Wahl als jede eingebaute Vorgabe.",
+                "en": "`--threads N` chooses how wide a scan runs, and the agent takes the same setting per root. There is no best number: the optimum moves with the size of the tree, and someone who knows their disk will choose better than any built-in default.",
+                "fr": "`--threads N` choisit la largeur d'une analyse, et l'agent accepte le même réglage par racine. Il n'existe pas de meilleur nombre : l'optimum varie avec la taille de l'arborescence, et qui connaît son disque choisira mieux que n'importe quelle valeur par défaut.",
+                "it": "`--threads N` sceglie con quanta ampiezza gira una scansione, e l'agente accetta la stessa impostazione per ogni radice. Non esiste un numero migliore: l'ottimo si sposta con la dimensione dell'albero, e chi conosce il proprio disco sceglierà meglio di qualsiasi valore predefinito.",
+                "tr": "`--threads N` bir taramanın kaç thread'le koşacağını seçiyor, ajanda da kök başına aynı ayar var. En iyi bir sayı yok: optimum ağacın büyüklüğüyle kayıyor, ve diskini bilen biri gömülü hiçbir varsayılandan daha iyi seçer."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Wenn ein Scan nicht mehr vorankommt, sagt die Fortschrittszeile das jetzt und nennt das Verzeichnis, auf das gewartet wird — statt weiter „scanning…“ zu behaupten. Eine Netzfreigabe, die aufgehört hat zu antworten, blockiert im Kernel und kein Zeitlimit in diesem Programm kann das aufheben; wer aber weiß, worauf gewartet wird, kann entscheiden, ob er wartet oder abbricht.",
+                "en": "When a scan stops making progress, the progress line now says so and names the directory it is waiting on, instead of going on claiming to be scanning. A network share that has stopped answering blocks in the kernel and no timeout in this program can lift that — but knowing what it is waiting on is what lets you decide whether to wait or quit.",
+                "fr": "Quand une analyse n'avance plus, la ligne de progression le dit et nomme le répertoire attendu, au lieu de continuer à prétendre analyser. Un partage réseau qui ne répond plus bloque dans le noyau et aucun délai d'attente dans ce programme ne peut y remédier — mais savoir ce qui est attendu permet de choisir entre patienter et abandonner.",
+                "it": "Quando una scansione non avanza più, la riga di avanzamento lo dice e indica la directory su cui è in attesa, invece di continuare a sostenere di stare scansionando. Una condivisione di rete che ha smesso di rispondere si blocca nel kernel e nessun timeout in questo programma può sbloccarla — ma sapere su cosa è in attesa è ciò che permette di decidere se aspettare o interrompere.",
+                "tr": "Bir tarama ilerlemeyi bıraktığında ilerleme satırı artık bunu söylüyor ve beklediği dizini adıyla veriyor; \"scanning…\" demeye devam etmiyor. Cevap vermeyi bırakmış bir ağ paylaşımı çekirdekte bloke oluyor ve bu programdaki hiçbir zaman aşımı onu kaldıramaz — ama neyi beklediğini bilmek, beklemekle vazgeçmek arasında seçim yapmanızı sağlayan şey."
+              }
+            },
+            {
+              "kind": "fixed",
+              "text": {
+                "de": "Die Fortschrittsanzeige stand am Ende jedes Scans scheinbar still. Nach dem Durchlauf sucht ein weiterer Schritt nach Copy-on-Write-Klonen, und der bewegte keinen einzigen Zähler — auf `~/github` waren das 1193 von 1989 Millisekunden. Diese Phase heißt jetzt so und zählt, was sie prüft.",
+                "en": "The progress display appeared to freeze near the end of every scan. After the walk there is a second pass looking for copy-on-write clones, and it moved no counter at all — on `~/github` that was 1193 of 1989 milliseconds. That phase now says what it is and counts what it checks.",
+                "fr": "L'affichage de progression semblait se figer vers la fin de chaque analyse. Après le parcours vient une seconde passe qui recherche les clones en copie sur écriture, et elle ne faisait bouger aucun compteur — sur `~/github`, 1193 des 1989 millisecondes. Cette phase s'annonce désormais et compte ce qu'elle vérifie.",
+                "it": "L'indicatore di avanzamento sembrava bloccarsi verso la fine di ogni scansione. Dopo la scansione c'è un secondo passaggio che cerca i cloni copy-on-write, e non muoveva alcun contatore: su `~/github` erano 1193 dei 1989 millisecondi. Ora quella fase si dichiara e conta ciò che controlla.",
+                "tr": "İlerleme göstergesi her taramanın sonuna doğru donmuş görünüyordu. Yürüyüşten sonra kopyala-yazarken klonlarını arayan ikinci bir geçiş var ve hiçbir sayacı kımıldatmıyordu — `~/github`'da 1989 milisaniyenin 1193'ü. O aşama artık adını söylüyor ve denetlediğini sayıyor."
+              }
+            },
+            {
+              "kind": "changed",
+              "text": {
+                "de": "Der `/status` des Agenten sagt jetzt, ob ein laufender Scan arbeitet oder feststeckt. `scanning` enthält pro Scan ein Objekt statt nur eines Pfades: laufende Zähler, die Phase (`walking` oder `finishing` — nach dem Durchlauf bewegt sich nur noch die Klon-Prüfung, wer also nur Dateien zählt, hält einen gesunden Scan für einen steckengebliebenen) und, sobald alle Zähler stillstehen, seit wann und auf welche Verzeichnisse er wartet. Der Stillstand wird von einem Beobachter im Agenten gemessen, seltenes Abfragen von `/status` bläht ihn also nicht auf.",
+                "en": "The agent's `/status` now says whether a running scan is working or wedged. `scanning` carries one object per scan instead of a bare path: live counters, the phase (`walking` or `finishing` — after the walk only the clone probe moves, so counting files alone reads a healthy scan as a stuck one), and, once every counter has stood still, how long for and which directories it is waiting on. The stall is timed by a watcher inside the agent, so polling `/status` rarely does not inflate it.",
+                "fr": "Le `/status` de l'agent indique désormais si une analyse en cours avance ou est bloquée. `scanning` contient un objet par analyse au lieu d'un simple chemin : compteurs en direct, la phase (`walking` ou `finishing` — après le parcours seule la détection de clones progresse, si bien qu'en ne comptant que les fichiers on prend une analyse saine pour une analyse bloquée) et, une fois tous les compteurs immobiles, depuis combien de temps et sur quels dossiers elle attend. Le blocage est chronométré par un observateur interne à l'agent : interroger `/status` rarement ne gonfle donc pas la durée.",
+                "it": "L'endpoint `/status` dell'agente ora dice se una scansione in corso sta lavorando o è bloccata. `scanning` contiene un oggetto per scansione anziché un semplice percorso: contatori in tempo reale, la fase (`walking` o `finishing` — dopo la scansione si muove solo il controllo dei clone, quindi chi conta solo i file legge una scansione sana come bloccata) e, quando tutti i contatori si sono fermati, da quanto tempo e quali cartelle sta aspettando. Il blocco è cronometrato da un osservatore interno all'agente, quindi interrogare `/status` di rado non gonfia il valore.",
+                "tr": "Ajanın `/status`'u artık çalışan bir taramanın ilerlediğini mi yoksa takıldığını mı söylüyor. `scanning` düz bir yol yerine tarama başına bir nesne taşıyor: canlı sayaçlar, aşama (`walking` ya da `finishing` — yürüyüşten sonra yalnızca clone sondası kımıldıyor, yani yalnızca dosya sayan biri sağlıklı bir taramayı takılmış sanıyor) ve bütün sayaçlar durduğunda ne kadar süredir durdukları ile hangi dizinleri bekledikleri. Takılma süresini ajanın içindeki bir izleyici ölçüyor, yani `/status`'u seyrek yoklamak süreyi şişirmiyor."
+              }
+            },
+            {
+              "kind": "fixed",
+              "text": {
+                "de": "Eine Netzwerkfreigabe, deren Server verschwunden ist, legt nicht mehr den ganzen Scan lahm. Die erste Abfrage an ein eingehängtes Dateisystem lässt sich nicht mehr abbrechen, sobald sie hängt, und da ein Verzeichnis auf einem einzigen Thread gelesen wird, riss eine tote Freigabe alle Nachbarn mit. Scans lesen jetzt zuerst die Mount-Tabelle, nähern sich einem Einhängepunkt über einen Thread, den sie aufzugeben bereit sind, und vermerken ihn nach 60 Sekunden als unlesbaren Pfad und machen weiter — das Ergebnis fehlt nur um dieses eine Dateisystem und sagt das auch, statt nie einzutreffen. `--mount-timeout 0` stellt das alte Verhalten wieder her; die gemessenen Kosten der Prüfung liegen bei etwa einer Millisekunde auf einem Baum mit 300.000 Einträgen.",
+                "en": "A network share whose server has gone away no longer wedges the whole scan. The first lookup into a mounted filesystem cannot be interrupted once it hangs, and because a directory is listed on one thread, one dead share used to take every one of its siblings with it. Scans now read the mount table first, approach a mount point through a thread they are willing to abandon, and after 60 seconds record it as an unreadable path and carry on — so the result is short by that one filesystem and says so, instead of never arriving. `--mount-timeout 0` restores the old behaviour; measured cost of the check is about a millisecond on a 300,000-entry tree.",
+                "fr": "Un partage réseau dont le serveur a disparu ne bloque plus toute l'analyse. La première requête vers un système de fichiers monté ne peut plus être interrompue une fois figée et, comme un dossier est listé sur un seul thread, un partage mort emportait tous ses voisins avec lui. Les analyses lisent désormais d'abord la table des montages, abordent un point de montage via un thread qu'elles acceptent d'abandonner et, au bout de 60 secondes, l'enregistrent comme chemin illisible et poursuivent — le résultat ne manque que de ce système de fichiers et le signale, au lieu de ne jamais arriver. `--mount-timeout 0` rétablit l'ancien comportement ; le coût mesuré de la vérification est d'environ une milliseconde sur une arborescence de 300 000 entrées.",
+                "it": "Una condivisione di rete il cui server è sparito non blocca più l'intera scansione. La prima richiesta a un filesystem montato non può essere interrotta una volta bloccata e, poiché una cartella viene elencata su un solo thread, una condivisione morta si portava dietro tutte le cartelle vicine. Le scansioni ora leggono prima la tabella dei mount, si avvicinano al punto di mount tramite un thread che sono disposte ad abbandonare e dopo 60 secondi lo registrano come percorso illeggibile e proseguono — il risultato manca solo di quel filesystem e lo dichiara, invece di non arrivare mai. `--mount-timeout 0` ripristina il comportamento precedente; il costo misurato del controllo è circa un millisecondo su un albero di 300.000 voci.",
+                "tr": "Sunucusu ortadan kaybolmuş bir ağ paylaşımı artık taramanın tamamını kilitlemiyor. Bağlı bir dosya sistemine yapılan ilk sorgu bir kez asıldığında kesilemiyor ve dizinler tek thread'de listelendiği için ölü bir paylaşım bütün kardeşlerini de beraberinde götürüyordu. Taramalar artık önce mount tablosunu okuyor, mount noktasına terk etmeye razı olduğu bir thread üzerinden yaklaşıyor ve 60 saniye sonra onu okunamayan yol olarak kaydedip devam ediyor — yani sonuç o tek dosya sistemi kadar eksik oluyor ve bunu söylüyor, hiç gelmemek yerine. `--mount-timeout 0` eski davranışı geri veriyor; kontrolün ölçülen maliyeti 300.000 girdilik bir ağaçta yaklaşık bir milisaniye."
+              }
+            },
+            {
+              "kind": "performance",
+              "text": {
+                "de": "Scans auf macOS sind etwa 2,3-mal schneller. Der alte Durchlauf fragte den Kernel zuerst nach den Namen eines Verzeichnisses und dann noch einmal, pro Eintrag, nach Größe und Datum; macOS kann beides in einem einzigen Aufruf beantworten und tut das jetzt. Von Anfang bis Ende an zwei echten Verzeichnisbäumen gemessen: von 1293 ms auf 556 ms beim einen, von 1554 ms auf 646 ms beim anderen, wobei beide Versionen aufs Byte identische Summen melden.",
+                "en": "Scans on macOS are about 2.3 times faster. The old walk asked the kernel for a directory's names and then asked again, once per entry, for each entry's size and dates; macOS can answer both in a single call, and now does. Measured end to end on two real trees: 1293 ms to 556 ms on one, 1554 ms to 646 ms on the other, with both versions reporting byte-for-byte the same totals.",
+                "fr": "Les analyses sur macOS sont environ 2,3 fois plus rapides. L'ancien parcours demandait au noyau les noms d'un dossier, puis de nouveau, une fois par entrée, la taille et les dates ; macOS sait répondre aux deux en un seul appel, et c'est désormais le cas. Mesuré de bout en bout sur deux arborescences réelles : de 1293 ms à 556 ms pour l'une, de 1554 ms à 646 ms pour l'autre, les deux versions rapportant des totaux identiques à l'octet près.",
+                "it": "Le scansioni su macOS sono circa 2,3 volte più rapide. La vecchia scansione chiedeva al kernel i nomi di una cartella e poi, una volta per voce, la dimensione e le date; macOS può rispondere a entrambe con una sola chiamata, e ora lo fa. Misurato da un capo all'altro su due alberi reali: da 1293 ms a 556 ms su uno, da 1554 ms a 646 ms sull'altro, con entrambe le versioni che riportano totali identici byte per byte.",
+                "tr": "macOS'ta taramalar yaklaşık 2,3 kat hızlandı. Eski yürüyüş çekirdekten önce bir dizinin adlarını, sonra girdi başına bir kez daha boyut ve tarihleri istiyordu; macOS ikisini tek çağrıda verebiliyor ve artık öyle yapıyor. Uçtan uca, iki gerçek ağaçta ölçüldü: birinde 1293 ms'den 556 ms'ye, diğerinde 1554 ms'den 646 ms'ye — iki sürüm de birebir aynı toplamları bildiriyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "`spacetrace import` liest einen JSON-Export von ncdu oder gdu und legt ihn als Snapshot ab, sodass bereits vorhandene Scans zum Vergleichsmaßstab werden — auch Scans einer Maschine, die es zum erneuten Scannen nicht mehr gibt. Die eigene scheinbare Größe eines Verzeichnisses wird dabei verworfen: sie mitzuzählen ist genau das, was `du --apparent-size` von der Zahl abweichen lässt, die dieses Werkzeug nennt.",
+                "en": "`spacetrace import` reads an ncdu or gdu JSON export and stores it as a snapshot, so scans you already have become something to compare against — including scans of a machine that no longer exists to be rescanned. A directory's own apparent size is dropped on the way in: counting it is what makes `du --apparent-size` disagree with the figure this tool reports.",
+                "fr": "`spacetrace import` lit un export JSON d'ncdu ou de gdu et l'enregistre comme instantané : les analyses que vous avez déjà deviennent ainsi comparables — y compris celles d'une machine qui n'existe plus pour être réanalysée. La taille apparente propre d'un dossier est écartée à l'entrée : la compter est précisément ce qui fait diverger `du --apparent-size` du chiffre annoncé par cet outil.",
+                "it": "`spacetrace import` legge un export JSON di ncdu o gdu e lo archivia come snapshot, così le scansioni che avete già diventano un termine di paragone — comprese quelle di una macchina che non esiste più per essere riscansionata. La dimensione apparente propria di una cartella viene scartata all'ingresso: contarla è ciò che fa divergere `du --apparent-size` dalla cifra riportata da questo strumento.",
+                "tr": "`spacetrace import` bir ncdu ya da gdu JSON dışa aktarımını okuyup anlık görüntü olarak saklıyor; böylece elinizdeki eski taramalar karşılaştırılabilir hâle geliyor — artık yeniden taranamayacak, ortadan kalkmış bir makinenin taraması dâhil. Bir dizinin kendi görünen boyutu içeri alınırken atılıyor: onu saymak, `du --apparent-size`'ın bu aracın bildirdiği rakamla çelişmesinin sebebi."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "`spacetrace export --format csv` schreibt eine Zeile je Eintrag für die Tabellenkalkulation, mit `--depth`, um bei den obersten Ebenen eines Baums haltzumachen, den keine Tabelle vollständig öffnen würde. Beide Maße sind Spalten statt einer Einstellung — was die Dateien angeben und was die Festplatte belegt — daneben die Eigenkosten jedes Eintrags, sodass sich eine Summe bilden lässt, ohne eine Datei für jeden darüberliegenden Ordner erneut zu zählen. Kommas, Anführungszeichen und Zeilenumbrüche in Namen werden korrekt maskiert: sie sind in Dateinamen erlaubt, und ein naiver Export macht daraus stillschweigend falsche Zeilen.",
+                "en": "`spacetrace export --format csv` writes one row per entry for a spreadsheet, with `--depth` to stop at the top few levels of a tree no spreadsheet would open whole. Both measures are columns rather than a setting — what files claim and what the disk holds — alongside each entry's own cost, so a total can be rebuilt without counting a file once for every folder above it. Commas, quotes and newlines in names are quoted properly; they are legal in a filename and a naive export turns them into silently wrong rows.",
+                "fr": "`spacetrace export --format csv` écrit une ligne par entrée pour un tableur, avec `--depth` pour s'arrêter aux premiers niveaux d'une arborescence qu'aucun tableur n'ouvrirait en entier. Les deux mesures sont des colonnes plutôt qu'un réglage — ce que les fichiers annoncent et ce que le disque occupe — à côté du coût propre de chaque entrée, de sorte qu'un total se reconstruit sans compter un fichier une fois par dossier au-dessus de lui. Les virgules, guillemets et sauts de ligne dans les noms sont correctement échappés : ce sont des caractères légaux dans un nom de fichier, et un export naïf en fait des lignes silencieusement fausses.",
+                "it": "`spacetrace export --format csv` scrive una riga per voce, pronta per un foglio di calcolo, con `--depth` per fermarsi ai primi livelli di un albero che nessun foglio aprirebbe per intero. Entrambe le misure sono colonne anziché un'impostazione — quanto dichiarano i file e quanto occupa il disco — accanto al costo proprio di ogni voce, così un totale si può ricostruire senza contare un file una volta per ogni cartella sopra di esso. Virgole, virgolette e a capo nei nomi vengono quotati correttamente: sono caratteri legali in un nome di file e un export ingenuo li trasforma in righe silenziosamente sbagliate.",
+                "tr": "`spacetrace export --format csv` her girdi için bir satır yazıyor; `--depth` ile de hiçbir hesap tablosunun bütün açamayacağı bir ağacın yalnızca üst katmanlarında durabiliyorsunuz. İki ölçü de ayrı sütun, ayar değil — dosyaların iddia ettiği ve diskin tuttuğu — ve yanlarında her girdinin kendi maliyeti var, böylece bir dosyayı üstündeki her klasör için tekrar saymadan toplam yeniden kurulabiliyor. İsimlerdeki virgül, tırnak ve satır sonu düzgün kaçırılıyor: bunlar dosya adında geçerli karakterler ve naif bir dışa aktarım onları sessizce yanlış satırlara çeviriyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "`spacetrace age` beantwortet die andere Frage, die eine volle Festplatte aufwirft: nicht was groß ist, sondern was niemand mehr anfasst. Bytes werden nach dem Zeitpunkt der letzten Änderung gruppiert — die Bänder legen Sie mit `--bands` fest — und nach Größe statt nach Dateianzahl gewichtet, denn hunderttausend alte Quelldateien sind nicht die Antwort, ein altes Festplatten-Image schon. Dateien ohne aufgezeichnetes Änderungsdatum werden getrennt ausgewiesen, statt als fünfzig Jahre alt zu gelten.",
+                "en": "`spacetrace age` answers the other question a full disk raises: not what is big, but what nobody has touched. Bytes are grouped by when they were last modified — the bands are yours to set with `--bands` — and weighted by size rather than by file count, because a hundred thousand stale source files are not the answer and one stale disk image is. Files whose modification time was never recorded are reported separately instead of being counted as fifty years old.",
+                "fr": "`spacetrace age` répond à l'autre question que pose un disque plein : non pas ce qui est gros, mais ce que plus personne ne touche. Les octets sont regroupés par date de dernière modification — les tranches se règlent avec `--bands` — et pondérés par la taille plutôt que par le nombre de fichiers, parce que cent mille vieux fichiers source ne sont pas la réponse et qu'une vieille image disque l'est. Les fichiers dont la date de modification n'a jamais été enregistrée sont signalés à part au lieu d'être comptés comme vieux de cinquante ans.",
+                "it": "`spacetrace age` risponde all'altra domanda che pone un disco pieno: non cosa è grande, ma cosa non tocca nessuno. I byte sono raggruppati per data di ultima modifica — le fasce le decidete voi con `--bands` — e pesati per dimensione anziché per numero di file, perché centomila vecchi file sorgente non sono la risposta e una vecchia immagine disco sì. I file senza data di modifica registrata sono riportati a parte invece di essere contati come vecchi di cinquant'anni.",
+                "tr": "`spacetrace age` dolu bir diskin sorduğu diğer soruyu cevaplıyor: ne büyük değil, kimsenin dokunmadığı ne. Baytlar son değiştirilme zamanına göre gruplanıyor — bantları `--bands` ile siz belirliyorsunuz — ve dosya sayısına göre değil boyuta göre ağırlıklandırılıyor, çünkü yüz bin eski kaynak dosyası cevap değil, bir tane eski disk imajı cevap. Değiştirilme zamanı hiç kaydedilmemiş dosyalar elli yıllık sayılmak yerine ayrı bildiriliyor."
+              }
+            }
+          ]
+        },
         {
           "version": "0.5.0",
           "date": "2026-09-10",
@@ -400,59 +406,65 @@
       ]
     },
     "desktop": {
-      "unreleased": [
-        {
-          "kind": "performance",
-          "text": {
-            "de": "Scans laufen mit höchstens acht Threads statt mit einem pro Kern und wurden dadurch auf jedem gemessenen Verzeichnisbaum schneller — 39% auf einem kleinen, 11% auf einem großen. Ein Durchlauf ist syscall-gebunden: jenseits eines Punkts warten die Threads im Kernel, statt zu arbeiten.",
-            "en": "Scans use at most eight threads instead of one per core, which made them faster on every directory tree measured — 39% on a small one, 11% on a large one. A walk is syscall-bound: past a point the threads queue in the kernel rather than work.",
-            "fr": "Les analyses utilisent au plus huit threads au lieu d'un par cœur, ce qui les a accélérées sur chaque arborescence mesurée — 39% sur une petite, 11% sur une grande. Un parcours est limité par les appels système : passé un certain point, les threads attendent dans le noyau au lieu de travailler.",
-            "it": "Le scansioni usano al massimo otto thread invece di uno per core, risultando più veloci su ogni albero di directory misurato: 39% su uno piccolo, 11% su uno grande. Una scansione è limitata dalle chiamate di sistema: oltre un certo punto i thread aspettano nel kernel invece di lavorare.",
-            "tr": "Taramalar çekirdek başına bir yerine en fazla sekiz thread kullanıyor; ölçülen her dizin ağacında hızlandı — küçüğünde %39, büyüğünde %11. Yürüyüş syscall'a bağlı: belli bir noktadan sonra thread'ler çalışmak yerine çekirdekte sıraya giriyor."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "Wenn ein Scan nicht mehr vorankommt, sagt der Fortschrittsstreifen das jetzt und nennt den Ordner, auf den gewartet wird — statt einen Balken weiterlaufen zu lassen. Eine Netzfreigabe, die aufgehört hat zu antworten, blockiert im Kernel und keine App kann das aufheben; aber wer weiß, worauf gewartet wird, kann entscheiden, ob er wartet oder abbricht.",
-            "en": "When a scan stops making progress, the progress strip now says so and names the folder it is waiting on, instead of animating a bar over a scan that is going nowhere. A network share that has stopped answering blocks in the kernel and no app can lift that — but knowing what it is waiting on is what lets you decide whether to wait or stop.",
-            "fr": "Quand une analyse n'avance plus, le bandeau de progression le dit et nomme le dossier attendu, au lieu d'animer une barre au-dessus d'une analyse qui ne va nulle part. Un partage réseau qui ne répond plus bloque dans le noyau et aucune application ne peut y remédier — mais savoir ce qui est attendu permet de choisir entre patienter et arrêter.",
-            "it": "Quando una scansione non avanza più, la barra di avanzamento lo dice e indica la cartella su cui è in attesa, invece di animare un indicatore su una scansione che non va da nessuna parte. Una condivisione di rete che ha smesso di rispondere si blocca nel kernel e nessuna app può sbloccarla — ma sapere su cosa è in attesa permette di decidere se aspettare o fermarsi.",
-            "tr": "Bir tarama ilerlemeyi bıraktığında ilerleme şeridi artık bunu söylüyor ve beklediği klasörü adıyla veriyor; hiçbir yere gitmeyen bir taramanın üstünde çubuk oynatmıyor. Cevap vermeyi bırakmış bir ağ paylaşımı çekirdekte bloke oluyor ve bunu hiçbir uygulama kaldıramaz — ama neyi beklediğini bilmek, beklemekle durdurmak arasında seçim yapmanızı sağlayan şey."
-          }
-        },
-        {
-          "kind": "fixed",
-          "text": {
-            "de": "Der Fortschrittsstreifen schien am Ende jedes Scans einzufrieren: nach dem Durchlauf sucht ein weiterer Schritt nach Copy-on-Write-Klonen, und dabei bewegte sich kein Zähler. Diese Phase heißt jetzt „Wird abgeschlossen“ und zählt, was sie prüft, statt eine stehengebliebene Dateizahl zu zeigen.",
-            "en": "The progress strip appeared to freeze at the end of every scan: after the walk there is a second pass looking for copy-on-write clones, and no counter moved during it. That phase now says “Finishing up” and counts what it checks, instead of showing a file count that has stopped.",
-            "fr": "Le bandeau de progression semblait se figer à la fin de chaque analyse : après le parcours vient une seconde passe qui recherche les clones en copie sur écriture, et aucun compteur ne bougeait pendant ce temps. Cette phase affiche désormais « Finalisation » et compte ce qu'elle vérifie, au lieu d'un nombre de fichiers arrêté.",
-            "it": "La barra di avanzamento sembrava bloccarsi alla fine di ogni scansione: dopo la scansione c'è un secondo passaggio che cerca i cloni copy-on-write, e nessun contatore si muoveva. Ora quella fase indica “Completamento” e conta ciò che controlla, invece di mostrare un numero di file fermo.",
-            "tr": "İlerleme şeridi her taramanın sonunda donmuş görünüyordu: yürüyüşten sonra kopyala-yazarken klonlarını arayan ikinci bir geçiş var ve o sırada hiçbir sayaç kımıldamıyordu. O aşama artık “Tamamlanıyor” diyor ve durmuş bir dosya sayısı göstermek yerine denetlediğini sayıyor."
-          }
-        },
-        {
-          "kind": "added",
-          "text": {
-            "de": "Der gesamte Verlauf eines Ordners auf einer Linie. Verlauf zeigt alle gespeicherten Snapshots eines Ordners als Diagramm, daneben was sich zwischen je zwei Snapshots geändert hat; ein Klick auf einen Schritt öffnet den Vergleich genau für diesen Sprung. Die Achse beginnt bei null, die Höhe der Linie ist also die Größe selbst.",
-            "en": "A folder's whole history on one line. History shows every stored snapshot of a folder as a chart, with what changed between each pair beside it; clicking a step opens the comparison for exactly that jump. The axis starts at zero, so the height of the line is the size itself.",
-            "fr": "L'historique complet d'un dossier sur une seule ligne. Historique affiche sous forme de graphique tous les instantanés enregistrés d'un dossier, avec à côté ce qui a changé entre chaque paire ; cliquer sur une étape ouvre la comparaison correspondant exactement à ce saut. L'axe part de zéro : la hauteur de la ligne est donc la taille elle-même.",
-            "it": "L'intera cronologia di una cartella su una linea. Cronologia mostra in un grafico tutti gli snapshot archiviati di una cartella, con accanto ciò che è cambiato tra una coppia e l'altra; un clic su un passaggio apre il confronto per quel salto preciso. L'asse parte da zero, quindi l'altezza della linea è la dimensione stessa.",
-            "tr": "Bir klasörün tüm geçmişi tek çizgide. Geçmiş, bir klasörün saklanan bütün anlık görüntülerini grafik olarak gösteriyor ve her ikisi arasında neyin değiştiğini yanında yazıyor; bir adıma tıklamak tam o sıçramanın karşılaştırmasını açıyor. Eksen sıfırdan başlıyor, yani çizginin yüksekliği boyutun kendisi."
-          }
-        },
-        {
-          "kind": "performance",
-          "text": {
-            "de": "Scans auf macOS sind etwa 2,3-mal schneller, dank derselben Änderung im Scan-Kern: Das System kann die Namen eines Ordners und die Größen seiner Dateien in einer einzigen Anfrage melden statt in einer pro Datei.",
-            "en": "Scans on macOS are about 2.3 times faster, following the same change in the scanning core: the system can report a folder's names and its files' sizes in one request instead of one request per file.",
-            "fr": "Les analyses sur macOS sont environ 2,3 fois plus rapides, grâce à la même modification du moteur d'analyse : le système peut indiquer les noms d'un dossier et la taille de ses fichiers en une seule requête au lieu d'une par fichier.",
-            "it": "Le scansioni su macOS sono circa 2,3 volte più rapide, grazie alla stessa modifica nel motore di scansione: il sistema può indicare i nomi di una cartella e le dimensioni dei suoi file in un'unica richiesta invece di una per file.",
-            "tr": "macOS'ta taramalar yaklaşık 2,3 kat hızlandı; tarama çekirdeğindeki aynı değişiklikten geliyor: sistem bir klasörün adlarını ve dosyalarının boyutlarını dosya başına bir istek yerine tek istekte verebiliyor."
-          }
-        }
-      ],
+      "unreleased": [],
       "releases": [
+        {
+          "version": "0.6.0",
+          "date": "2026-09-11",
+          "published": true,
+          "entries": [
+            {
+              "kind": "performance",
+              "text": {
+                "de": "Scans laufen mit höchstens acht Threads statt mit einem pro Kern und wurden dadurch auf jedem gemessenen Verzeichnisbaum schneller — 39% auf einem kleinen, 11% auf einem großen. Ein Durchlauf ist syscall-gebunden: jenseits eines Punkts warten die Threads im Kernel, statt zu arbeiten.",
+                "en": "Scans use at most eight threads instead of one per core, which made them faster on every directory tree measured — 39% on a small one, 11% on a large one. A walk is syscall-bound: past a point the threads queue in the kernel rather than work.",
+                "fr": "Les analyses utilisent au plus huit threads au lieu d'un par cœur, ce qui les a accélérées sur chaque arborescence mesurée — 39% sur une petite, 11% sur une grande. Un parcours est limité par les appels système : passé un certain point, les threads attendent dans le noyau au lieu de travailler.",
+                "it": "Le scansioni usano al massimo otto thread invece di uno per core, risultando più veloci su ogni albero di directory misurato: 39% su uno piccolo, 11% su uno grande. Una scansione è limitata dalle chiamate di sistema: oltre un certo punto i thread aspettano nel kernel invece di lavorare.",
+                "tr": "Taramalar çekirdek başına bir yerine en fazla sekiz thread kullanıyor; ölçülen her dizin ağacında hızlandı — küçüğünde %39, büyüğünde %11. Yürüyüş syscall'a bağlı: belli bir noktadan sonra thread'ler çalışmak yerine çekirdekte sıraya giriyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Wenn ein Scan nicht mehr vorankommt, sagt der Fortschrittsstreifen das jetzt und nennt den Ordner, auf den gewartet wird — statt einen Balken weiterlaufen zu lassen. Eine Netzfreigabe, die aufgehört hat zu antworten, blockiert im Kernel und keine App kann das aufheben; aber wer weiß, worauf gewartet wird, kann entscheiden, ob er wartet oder abbricht.",
+                "en": "When a scan stops making progress, the progress strip now says so and names the folder it is waiting on, instead of animating a bar over a scan that is going nowhere. A network share that has stopped answering blocks in the kernel and no app can lift that — but knowing what it is waiting on is what lets you decide whether to wait or stop.",
+                "fr": "Quand une analyse n'avance plus, le bandeau de progression le dit et nomme le dossier attendu, au lieu d'animer une barre au-dessus d'une analyse qui ne va nulle part. Un partage réseau qui ne répond plus bloque dans le noyau et aucune application ne peut y remédier — mais savoir ce qui est attendu permet de choisir entre patienter et arrêter.",
+                "it": "Quando una scansione non avanza più, la barra di avanzamento lo dice e indica la cartella su cui è in attesa, invece di animare un indicatore su una scansione che non va da nessuna parte. Una condivisione di rete che ha smesso di rispondere si blocca nel kernel e nessuna app può sbloccarla — ma sapere su cosa è in attesa permette di decidere se aspettare o fermarsi.",
+                "tr": "Bir tarama ilerlemeyi bıraktığında ilerleme şeridi artık bunu söylüyor ve beklediği klasörü adıyla veriyor; hiçbir yere gitmeyen bir taramanın üstünde çubuk oynatmıyor. Cevap vermeyi bırakmış bir ağ paylaşımı çekirdekte bloke oluyor ve bunu hiçbir uygulama kaldıramaz — ama neyi beklediğini bilmek, beklemekle durdurmak arasında seçim yapmanızı sağlayan şey."
+              }
+            },
+            {
+              "kind": "fixed",
+              "text": {
+                "de": "Der Fortschrittsstreifen schien am Ende jedes Scans einzufrieren: nach dem Durchlauf sucht ein weiterer Schritt nach Copy-on-Write-Klonen, und dabei bewegte sich kein Zähler. Diese Phase heißt jetzt „Wird abgeschlossen“ und zählt, was sie prüft, statt eine stehengebliebene Dateizahl zu zeigen.",
+                "en": "The progress strip appeared to freeze at the end of every scan: after the walk there is a second pass looking for copy-on-write clones, and no counter moved during it. That phase now says “Finishing up” and counts what it checks, instead of showing a file count that has stopped.",
+                "fr": "Le bandeau de progression semblait se figer à la fin de chaque analyse : après le parcours vient une seconde passe qui recherche les clones en copie sur écriture, et aucun compteur ne bougeait pendant ce temps. Cette phase affiche désormais « Finalisation » et compte ce qu'elle vérifie, au lieu d'un nombre de fichiers arrêté.",
+                "it": "La barra di avanzamento sembrava bloccarsi alla fine di ogni scansione: dopo la scansione c'è un secondo passaggio che cerca i cloni copy-on-write, e nessun contatore si muoveva. Ora quella fase indica “Completamento” e conta ciò che controlla, invece di mostrare un numero di file fermo.",
+                "tr": "İlerleme şeridi her taramanın sonunda donmuş görünüyordu: yürüyüşten sonra kopyala-yazarken klonlarını arayan ikinci bir geçiş var ve o sırada hiçbir sayaç kımıldamıyordu. O aşama artık “Tamamlanıyor” diyor ve durmuş bir dosya sayısı göstermek yerine denetlediğini sayıyor."
+              }
+            },
+            {
+              "kind": "added",
+              "text": {
+                "de": "Der gesamte Verlauf eines Ordners auf einer Linie. Verlauf zeigt alle gespeicherten Snapshots eines Ordners als Diagramm, daneben was sich zwischen je zwei Snapshots geändert hat; ein Klick auf einen Schritt öffnet den Vergleich genau für diesen Sprung. Die Achse beginnt bei null, die Höhe der Linie ist also die Größe selbst.",
+                "en": "A folder's whole history on one line. History shows every stored snapshot of a folder as a chart, with what changed between each pair beside it; clicking a step opens the comparison for exactly that jump. The axis starts at zero, so the height of the line is the size itself.",
+                "fr": "L'historique complet d'un dossier sur une seule ligne. Historique affiche sous forme de graphique tous les instantanés enregistrés d'un dossier, avec à côté ce qui a changé entre chaque paire ; cliquer sur une étape ouvre la comparaison correspondant exactement à ce saut. L'axe part de zéro : la hauteur de la ligne est donc la taille elle-même.",
+                "it": "L'intera cronologia di una cartella su una linea. Cronologia mostra in un grafico tutti gli snapshot archiviati di una cartella, con accanto ciò che è cambiato tra una coppia e l'altra; un clic su un passaggio apre il confronto per quel salto preciso. L'asse parte da zero, quindi l'altezza della linea è la dimensione stessa.",
+                "tr": "Bir klasörün tüm geçmişi tek çizgide. Geçmiş, bir klasörün saklanan bütün anlık görüntülerini grafik olarak gösteriyor ve her ikisi arasında neyin değiştiğini yanında yazıyor; bir adıma tıklamak tam o sıçramanın karşılaştırmasını açıyor. Eksen sıfırdan başlıyor, yani çizginin yüksekliği boyutun kendisi."
+              }
+            },
+            {
+              "kind": "performance",
+              "text": {
+                "de": "Scans auf macOS sind etwa 2,3-mal schneller, dank derselben Änderung im Scan-Kern: Das System kann die Namen eines Ordners und die Größen seiner Dateien in einer einzigen Anfrage melden statt in einer pro Datei.",
+                "en": "Scans on macOS are about 2.3 times faster, following the same change in the scanning core: the system can report a folder's names and its files' sizes in one request instead of one request per file.",
+                "fr": "Les analyses sur macOS sont environ 2,3 fois plus rapides, grâce à la même modification du moteur d'analyse : le système peut indiquer les noms d'un dossier et la taille de ses fichiers en une seule requête au lieu d'une par fichier.",
+                "it": "Le scansioni su macOS sono circa 2,3 volte più rapide, grazie alla stessa modifica nel motore di scansione: il sistema può indicare i nomi di una cartella e le dimensioni dei suoi file in un'unica richiesta invece di una per file.",
+                "tr": "macOS'ta taramalar yaklaşık 2,3 kat hızlandı; tarama çekirdeğindeki aynı değişiklikten geliyor: sistem bir klasörün adlarını ve dosyalarının boyutlarını dosya başına bir istek yerine tek istekte verebiliyor."
+              }
+            }
+          ]
+        },
         {
           "version": "0.5.0",
           "date": "2026-09-10",

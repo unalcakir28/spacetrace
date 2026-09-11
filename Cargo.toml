@@ -12,19 +12,19 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
 repository = "https://github.com/unalcakir28/spacetrace"
 
 [workspace.dependencies]
-spacetrace-scan-core = { path = "crates/scan-core", version = "0.5.0" }
-spacetrace-store = { path = "crates/store", version = "0.5.0" }
-spacetrace-diff = { path = "crates/diff", version = "0.5.0" }
-spacetrace-treemap = { path = "crates/treemap", version = "0.5.0" }
-spacetrace-changelog = { path = "crates/changelog", version = "0.5.0" }
-spacetrace-buildinfo = { path = "crates/buildinfo", version = "0.5.0" }
+spacetrace-scan-core = { path = "crates/scan-core", version = "0.6.0" }
+spacetrace-store = { path = "crates/store", version = "0.6.0" }
+spacetrace-diff = { path = "crates/diff", version = "0.6.0" }
+spacetrace-treemap = { path = "crates/treemap", version = "0.6.0" }
+spacetrace-changelog = { path = "crates/changelog", version = "0.6.0" }
+spacetrace-buildinfo = { path = "crates/buildinfo", version = "0.6.0" }
 
 anyhow = "1"
 thiserror = "2"
