@@ -3,7 +3,7 @@ mod fmt;
 mod remote;
 mod update;
 
-use std::io::{IsTerminal, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,11 +15,11 @@ use spacetrace_scan_core::{
     scan, EntryKind, Phase, ScanOptions, ScanProgress, ScanStats, SizeBasis, StallWatch, Tree,
     STALL_GRACE,
 };
-use spacetrace_store::{export_ncdu, Integrity, ScanMeta, Store};
+use spacetrace_store::{export_ncdu, import_ncdu, Integrity, ScanMeta, Store};
 
 use crate::args::{
-    parse_size, Cli, Command, DiffArgs, ExportArgs, LsArgs, PruneArgs, PullArgs, RmArgs, ScanArgs,
-    VerifyArgs,
+    parse_size, Cli, Command, DiffArgs, ExportArgs, ImportArgs, LsArgs, PruneArgs, PullArgs,
+    RmArgs, ScanArgs, VerifyArgs,
 };
 use crate::remote::Remote;
 
@@ -84,6 +84,7 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Scans => cmd_scans(&db_path, remote.as_ref(), cli.json),
         Command::Diff(a) => cmd_diff(a, &db_path, remote.as_ref(), cli.json),
         Command::Export(a) => cmd_export(a, &db_path, remote.as_ref()),
+        Command::Import(a) => cmd_import(a, &db_path, cli.json),
         Command::Prune(a) => cmd_prune(a, &db_path, cli.json),
         Command::Rm(a) => cmd_rm(a, &db_path),
         Command::Verify(a) => cmd_verify(a, &db_path, cli.json),
@@ -879,6 +880,78 @@ fn print_errors(stats: &ScanStats) {
     if stats.error_samples.len() > 5 {
         println!("  …");
     }
+}
+
+// -------------------------------------------------------------- import
+
+/// Read an ncdu or gdu export and store it as a snapshot.
+///
+/// The point is that an existing ncdu user's scans are worth something here
+/// without rescanning anything — including scans of machines that are no
+/// longer reachable, which cannot be rescanned at all.
+fn cmd_import(a: &ImportArgs, db_path: &Path, json: bool) -> Result<()> {
+    let text = if a.file == Path::new("-") {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("reading the export from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(&a.file)
+            .with_context(|| format!("cannot read {}", a.file.display()))?
+    };
+
+    // `None` lets the importer take the path the export names, which is the
+    // only provenance the file carries.
+    let tree = import_ncdu(&text, a.root.clone().map(PathBuf::from))?;
+
+    let root = tree.node(tree.root());
+    // An imported scan reports no errors and no deduplication, because the
+    // file does not say: writing zero here would be a claim, so the numbers
+    // that are genuinely unknown stay at their empty value and the summary
+    // below says where this came from.
+    let stats = ScanStats {
+        files: u64::from(root.files),
+        dirs: u64::from(root.dirs),
+        errors: 0,
+        hardlinks_deduped: 0,
+        clones_deduped: 0,
+        error_samples: Vec::new(),
+        duration_ms: 0,
+        capacity: None,
+    };
+
+    let mut store = open_store(db_path)?;
+    let host = a.host.clone().unwrap_or_else(Store::local_host);
+    let id = store.save(&tree, &stats, &host, a.label.as_deref())?;
+
+    if json {
+        let payload = serde_json::json!({
+            "scan_id": id,
+            "root": tree.root_path().to_string_lossy(),
+            "host": host,
+            "total_size": tree.total_size(),
+            "total_alloc": tree.total_alloc(),
+            "files": stats.files,
+            "dirs": stats.dirs,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    println!(
+        "Imported {} — {} in {} files, {} directories",
+        tree.root_path().display(),
+        fmt::size(tree.total_alloc()),
+        stats.files,
+        stats.dirs
+    );
+    println!("Snapshot #{id} saved → {}", db_path.display());
+    println!(
+        "\nAn imported scan carries no error count and no deduplication: the \
+         export does not record them."
+    );
+    Ok(())
 }
 
 fn write_ncdu(tree: &Tree, out: &Path) -> Result<()> {

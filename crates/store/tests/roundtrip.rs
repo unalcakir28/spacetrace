@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::Arc;
 
 use spacetrace_scan_core::{scan, ScanOptions, ScanProgress, Tree};
-use spacetrace_store::{export_ncdu, Integrity, Store};
+use spacetrace_store::{export_ncdu, import_ncdu, Integrity, Store};
 
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
@@ -776,4 +776,64 @@ fn a_writer_survives_readers_racing_it_on_a_brand_new_database() {
     reading.store(false, std::sync::atomic::Ordering::Relaxed);
     readers.join().unwrap();
     assert_eq!(Store::open(&path).unwrap().list().unwrap().len(), 6);
+}
+
+/// Out through our exporter and back through our importer.
+///
+/// This is the test that makes the importer worth trusting: the exporter has
+/// been right since Phase 1 and is checked against ncdu's own shape above, so
+/// a round trip that loses or invents a byte is the importer's fault and
+/// nobody has to argue about which side is wrong.
+#[test]
+fn a_tree_survives_a_trip_through_ncdu_json() {
+    let dir = fixture();
+    let (tree, _) = scan_fixture(&dir);
+
+    let mut buf = Vec::new();
+    export_ncdu(&tree, &mut buf).unwrap();
+    let back = import_ncdu(std::str::from_utf8(&buf).unwrap(), None)
+        .expect("our own export must be readable by our own importer");
+
+    assert_eq!(back.len(), tree.len(), "same number of entries");
+    assert_eq!(
+        back.total_size(),
+        tree.total_size(),
+        "logical bytes must survive the trip"
+    );
+    assert_eq!(
+        back.total_alloc(),
+        tree.total_alloc(),
+        "on-disk bytes must survive the trip: the exporter writes a directory's \
+         own cost and the importer has to add the children back"
+    );
+    assert_eq!(back.node(back.root()).files, tree.node(tree.root()).files);
+    assert_eq!(back.node(back.root()).dirs, tree.node(tree.root()).dirs);
+
+    let mut before: Vec<String> = tree.iter().map(|id| tree.name(id).to_string()).collect();
+    let mut after: Vec<String> = back.iter().map(|id| back.name(id).to_string()).collect();
+    before.sort();
+    after.sort();
+    assert_eq!(before, after, "same names");
+}
+
+/// The measure a user reads has to survive too, not just the grand total: a
+/// per-directory subtotal is what the treemap draws.
+#[test]
+fn every_directory_keeps_its_subtotal_through_ncdu_json() {
+    let dir = fixture();
+    let (tree, _) = scan_fixture(&dir);
+
+    let mut buf = Vec::new();
+    export_ncdu(&tree, &mut buf).unwrap();
+    let back = import_ncdu(std::str::from_utf8(&buf).unwrap(), None).unwrap();
+
+    let subtotal = |t: &Tree, name: &str| {
+        let id = t.iter().find(|&id| t.name(id) == name).expect(name);
+        (
+            t.node(id).measure(spacetrace_scan_core::SizeBasis::Logical),
+            t.node(id).measure(spacetrace_scan_core::SizeBasis::OnDisk),
+        )
+    };
+    assert_eq!(subtotal(&tree, "sub"), subtotal(&back, "sub"));
+    assert_eq!(subtotal(&tree, "b.bin"), subtotal(&back, "b.bin"));
 }

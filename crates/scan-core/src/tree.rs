@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::meta::EntryKind;
@@ -468,6 +469,124 @@ impl TreeBuilder {
     pub(crate) fn finish(mut self, root_path: PathBuf) -> Tree {
         self.aggregate();
         Tree::new(self.nodes, self.names, root_path)
+    }
+}
+
+/// One entry as an importer describes it, before any arena exists.
+///
+/// Foreign formats — ncdu's JSON today, whatever comes next — are nested and
+/// carry only each entry's own cost. Turning that into this crate's arena
+/// means laying the nodes out in BFS order and summing the subtree totals
+/// upward, which is exactly what the scanner already does at the end of a
+/// walk. An importer that did its own version of that would be a second
+/// implementation of the arena invariants (#2) and of aggregation, free to
+/// drift; `Tree::from_nested` exists so there is only ever one.
+#[derive(Debug, Clone)]
+pub struct ImportedNode {
+    pub name: String,
+    pub kind: EntryKind,
+    /// This entry's **own** logical bytes, not its subtree's.
+    pub size: u64,
+    /// This entry's **own** allocated bytes. For a directory that is the cost
+    /// of the directory itself, the way `du` charges it.
+    pub alloc: u64,
+    pub mtime: i64,
+    pub nlink: u32,
+    pub children: Vec<ImportedNode>,
+}
+
+impl ImportedNode {
+    /// A leaf with nothing but a name and a size.
+    pub fn file(name: impl Into<String>, size: u64, alloc: u64) -> Self {
+        ImportedNode {
+            name: name.into(),
+            kind: EntryKind::File,
+            size,
+            alloc,
+            mtime: 0,
+            nlink: 1,
+            children: Vec::new(),
+        }
+    }
+
+    /// An empty directory.
+    pub fn dir(name: impl Into<String>) -> Self {
+        ImportedNode {
+            name: name.into(),
+            kind: EntryKind::Dir,
+            size: 0,
+            alloc: 0,
+            mtime: 0,
+            nlink: 1,
+            children: Vec::new(),
+        }
+    }
+
+    fn count(&self) -> usize {
+        1 + self.children.iter().map(ImportedNode::count).sum::<usize>()
+    }
+}
+
+impl Tree {
+    /// Build a tree from a nested description, through the same layout and
+    /// aggregation the scanner uses.
+    ///
+    /// Children are laid out breadth-first and contiguously, so the arena
+    /// invariants hold by construction rather than by an importer remembering
+    /// them.
+    pub fn from_nested(root_path: PathBuf, root: ImportedNode) -> Tree {
+        let mut builder = TreeBuilder::with_capacity(root.count());
+        let root_id = builder.push(
+            0,
+            NewNode {
+                name: &root.name,
+                kind: root.kind,
+                size: root.size,
+                alloc: root.alloc,
+                mtime: root.mtime,
+                nlink: root.nlink,
+            },
+        );
+
+        // Breadth-first with an explicit queue: a recursive descent would lay
+        // the children out depth-first and break invariant #2, and it would
+        // also blow the stack on a deep tree read off an untrusted file.
+        let mut queue: VecDeque<(NodeId, Vec<ImportedNode>)> = VecDeque::new();
+        queue.push_back((root_id, root.children));
+        while let Some((parent, children)) = queue.pop_front() {
+            if children.is_empty() {
+                continue;
+            }
+            // Recorded before pushing anything: the children of one parent go
+            // in as one uninterrupted run, and that run's start and length are
+            // what every later reader addresses them by. `push` does not do
+            // this — the scanner fills these in during its own flatten pass —
+            // and leaving them at zero produces a tree whose totals are right
+            // and whose every `children()` call is empty.
+            let start = builder.nodes.len() as NodeId;
+            let len = children.len() as u32;
+            for child in children {
+                let id = builder.push(
+                    parent,
+                    NewNode {
+                        name: &child.name,
+                        kind: child.kind,
+                        size: child.size,
+                        alloc: child.alloc,
+                        mtime: child.mtime,
+                        nlink: child.nlink,
+                    },
+                );
+                if !child.children.is_empty() {
+                    queue.push_back((id, child.children));
+                }
+            }
+            let p = &mut builder.nodes[parent as usize];
+            p.children_start = start;
+            p.children_len = len;
+        }
+
+        builder.finish(root_path)
     }
 }
 

@@ -106,6 +106,10 @@ spacetrace ls --scan 3 --subpath docker/overlay2
 # Open in ncdu (inspect a snapshot pulled off a server)
 spacetrace export --scan 3 --out scan.json && ncdu -f scan.json
 
+# Bring an existing ncdu or gdu export in, including one of a machine that
+# no longer exists to be rescanned
+ncdu -o old.json /var && spacetrace import old.json --host retired-nas
+
 # Check stored snapshots against the digest saved with them
 spacetrace verify
 ```
@@ -170,7 +174,7 @@ Default database: `~/Library/Application Support/spacetrace/` on macOS,
 ```
 crates/
 ├── scan-core/   Parallel scanner + arena tree model (platform-specific backends)
-├── store/       SQLite snapshot store + ncdu-compatible export
+├── store/       SQLite snapshot store + ncdu-compatible export and import
 ├── diff/        Snapshot comparison, "culprit folder" detection
 ├── cli/         the spacetrace binary
 ├── agent/       the spacetrace-agent binary: scheduler + HTTP service

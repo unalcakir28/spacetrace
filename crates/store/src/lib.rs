@@ -7,6 +7,7 @@
 
 mod digest;
 mod ncdu;
+mod ncdu_import;
 mod schema;
 
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use spacetrace_scan_core::{EntryKind, ScanStats, StoredNode, Tree, TreeAssembler};
 
 pub use ncdu::export_ncdu;
+pub use ncdu_import::import_ncdu;
 
 pub type ScanId = i64;
 

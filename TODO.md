@@ -449,8 +449,31 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       *Rakip:* FreeSize (treemap + sunburst + heatmap), Filelight.
 - [ ] **C7 Dosya yaşı ısı haritası** — "2 yıldır dokunulmamış 400 GB". `mtime`
       zaten `Node`'da duruyor, yani ucuz. *Rakip:* FreeSize (heatmap).
-- [ ] **C8 ncdu/gdu JSON içe aktarma** — dışa aktarabiliyoruz, içe alamıyoruz.
-      Mevcut kullanıcıların eski taramaları bir edinim kanalı. *Rakip:* ncdu.
+- [x] **C8 ncdu/gdu JSON içe aktarma** — yapıldı *(11 Eylül 2026)*.
+      `spacetrace import <dosya>`; `--root`, `--host`, `--label`. Yeni
+      bağımlılık yok, `serde_json` zaten `store`'daydı.
+
+      **Toplama ikinci kez yazılmadı.** İçe aktarıcı `Tree::from_nested`'e
+      veriyor, o da yürüyüşün kullandığı `TreeBuilder` + `aggregate`'i
+      çağırıyor. Arena değişmezleri ve toplama tek uygulamada kalıyor.
+
+      **Mutasyon testi iki gerçek hata çıkardı.** Birincisi: `from_nested`
+      `children_start`/`children_len` doldurmuyordu (`push` yapmıyor, tarayıcı
+      onu `flatten`'da yapıyor) — ağacın toplamları doğru, her `children()`
+      çağrısı boştu. Layout testi de bu yüzden **boş bir iddiaydı**:
+      `children_len = 0` olunca iki döngü de hiç dönmüyordu. Fixture'da bir
+      alt dizinden *sonra* kardeş yoktu, o yüzden DFS mutasyonu bile
+      geçiyordu; fixture düzeltilince hata çıktı.
+
+      İkincisi ve daha ciddisi: **gerçek ncdu dizinlere de `asize` yazıyor** ve
+      ben onu mantıksal toplama ekliyordum — **değişmez 1 ihlali**, GNU
+      `du --apparent-size`'ın bizden ayrıldığı noktanın ta kendisi. Kendi
+      dışa aktarıcımız dizinlere `asize: 0` yazdığı için gidiş-dönüş testi
+      bunu asla göremezdi; spec'ten yazılmış gerçekçi bir ncdu fixture'ı
+      yakaladı.
+
+      **Doğrulanmayan tek şey:** gerçek bir `ncdu` çıktısı. ncdu bu makinede
+      kurulu değil (kurmak izin isterdi), fixture spec'ten yazıldı.
 - [ ] **C9 CSV dışa aktarma** — kurumsal kullanıcının Excel'e attığı format.
       *Rakip:* WizTree.
 

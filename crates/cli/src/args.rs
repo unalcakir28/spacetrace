@@ -49,6 +49,8 @@ pub enum Command {
     Diff(DiffArgs),
     /// Export a snapshot as ncdu-compatible JSON
     Export(ExportArgs),
+    /// Store an ncdu or gdu JSON export as a snapshot
+    Import(ImportArgs),
     /// Delete all but the newest N snapshots per target
     Prune(PruneArgs),
     /// Delete a snapshot
@@ -210,6 +212,25 @@ pub struct ExportArgs {
     /// Destination file ("-" = stdout)
     #[arg(long, default_value = "-", value_name = "FILE")]
     pub out: PathBuf,
+}
+
+#[derive(Args, Debug)]
+pub struct ImportArgs {
+    /// The ncdu or gdu JSON file ("-" = stdin)
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    /// What to call the scanned root (defaults to the name inside the file)
+    #[arg(long, value_name = "PATH")]
+    pub root: Option<String>,
+
+    /// Which machine this came from (defaults to this one)
+    #[arg(long, value_name = "NAME")]
+    pub host: Option<String>,
+
+    /// Free text stored with the snapshot
+    #[arg(long, value_name = "TEXT")]
+    pub label: Option<String>,
 }
 
 #[derive(Args, Debug)]

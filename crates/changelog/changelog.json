@@ -72,6 +72,16 @@
             "it": "Le scansioni su macOS sono circa 2,3 volte più rapide. La vecchia scansione chiedeva al kernel i nomi di una cartella e poi, una volta per voce, la dimensione e le date; macOS può rispondere a entrambe con una sola chiamata, e ora lo fa. Misurato da un capo all'altro su due alberi reali: da 1293 ms a 556 ms su uno, da 1554 ms a 646 ms sull'altro, con entrambe le versioni che riportano totali identici byte per byte.",
             "tr": "macOS'ta taramalar yaklaşık 2,3 kat hızlandı. Eski yürüyüş çekirdekten önce bir dizinin adlarını, sonra girdi başına bir kez daha boyut ve tarihleri istiyordu; macOS ikisini tek çağrıda verebiliyor ve artık öyle yapıyor. Uçtan uca, iki gerçek ağaçta ölçüldü: birinde 1293 ms'den 556 ms'ye, diğerinde 1554 ms'den 646 ms'ye — iki sürüm de birebir aynı toplamları bildiriyor."
           }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "`spacetrace import` liest einen JSON-Export von ncdu oder gdu und legt ihn als Snapshot ab, sodass bereits vorhandene Scans zum Vergleichsmaßstab werden — auch Scans einer Maschine, die es zum erneuten Scannen nicht mehr gibt. Die eigene scheinbare Größe eines Verzeichnisses wird dabei verworfen: sie mitzuzählen ist genau das, was `du --apparent-size` von der Zahl abweichen lässt, die dieses Werkzeug nennt.",
+            "en": "`spacetrace import` reads an ncdu or gdu JSON export and stores it as a snapshot, so scans you already have become something to compare against — including scans of a machine that no longer exists to be rescanned. A directory's own apparent size is dropped on the way in: counting it is what makes `du --apparent-size` disagree with the figure this tool reports.",
+            "fr": "`spacetrace import` lit un export JSON d'ncdu ou de gdu et l'enregistre comme instantané : les analyses que vous avez déjà deviennent ainsi comparables — y compris celles d'une machine qui n'existe plus pour être réanalysée. La taille apparente propre d'un dossier est écartée à l'entrée : la compter est précisément ce qui fait diverger `du --apparent-size` du chiffre annoncé par cet outil.",
+            "it": "`spacetrace import` legge un export JSON di ncdu o gdu e lo archivia come snapshot, così le scansioni che avete già diventano un termine di paragone — comprese quelle di una macchina che non esiste più per essere riscansionata. La dimensione apparente propria di una cartella viene scartata all'ingresso: contarla è ciò che fa divergere `du --apparent-size` dalla cifra riportata da questo strumento.",
+            "tr": "`spacetrace import` bir ncdu ya da gdu JSON dışa aktarımını okuyup anlık görüntü olarak saklıyor; böylece elinizdeki eski taramalar karşılaştırılabilir hâle geliyor — artık yeniden taranamayacak, ortadan kalkmış bir makinenin taraması dâhil. Bir dizinin kendi görünen boyutu içeri alınırken atılıyor: onu saymak, `du --apparent-size`'ın bu aracın bildirdiği rakamla çelişmesinin sebebi."
+          }
         }
       ],
       "releases": [

@@ -20,4 +20,6 @@ pub use mounts::Mounts;
 pub use scan::{
     scan, Phase, ScanOptions, ScanProgress, ScanStats, StallWatch, MOUNT_TIMEOUT, STALL_GRACE,
 };
-pub use tree::{Node, NodeId, Removed, SizeBasis, StoredNode, Tree, TreeAssembler, TreeError};
+pub use tree::{
+    ImportedNode, Node, NodeId, Removed, SizeBasis, StoredNode, Tree, TreeAssembler, TreeError,
+};

@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 289 test, hepsi geçmeli
+cargo test --workspace                   # 307 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -212,6 +212,12 @@ Kodda dikkat edilecekler:
 - Snapshot telde **ham SQLite**. `Store::export_snapshot` ATTACH ile tek taramayı
   ayrı dosyaya kopyalar; `import_snapshot` kimliği yeniden atar ama host/root/
   `started_at` üçlüsünü korur — yinelenme kontrolü bu üçlüye dayanıyor.
+- **Dışarıdan gelen bir ağaç `Tree::from_nested`'den geçer.** ncdu içe
+  aktarımı (ve sonra gelecek her format) kendi arena düzenini kurmaz: o yol
+  yürüyüşün `TreeBuilder` + `aggregate`'ini çağırır, yoksa değişmez 2'nin ve
+  toplamanın ikinci bir uygulaması doğar. **Dizinin kendi `asize`'ı atılır**
+  (değişmez 1) — gerçek ncdu onu yazıyor, bizim dışa aktarıcımız yazmıyor,
+  yani kendi çıktımızla gidiş-dönüş testi bu hatayı göremiyor.
 - **`store::load` bir güven sınırı.** Uzaktan indirilen snapshot da bu yoldan
   geçiyor, bu yüzden `Tree::from_parts_checked` arena değişmezlerini doğruluyor.
   Doğrulamayı atlayan bir yol ekleme: bozuk `children_start` indeks panic'i,
