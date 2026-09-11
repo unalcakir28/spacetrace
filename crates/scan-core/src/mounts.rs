@@ -136,10 +136,16 @@ fn read_points() -> HashSet<PathBuf> {
 
 /// Mount points out of `/proc/self/mountinfo`.
 ///
+/// Compiled under `test` on every Unix so the parser can be exercised from a
+/// Mac, but **not** on Windows: it decodes raw bytes through `OsStringExt`,
+/// which has no Windows counterpart. Leaving `test` unqualified broke the
+/// Windows build, and only in CI — `cargo check --target …-windows-msvc`
+/// without `--all-targets` does not compile test code.
+///
 /// The mount point is the fifth space-separated field. Octal escapes are
 /// undone because the kernel writes `\040` for a space, and a path with a
 /// space in it is common enough on removable media to matter.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn parse_mountinfo(text: &str) -> HashSet<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
 
@@ -150,7 +156,7 @@ fn parse_mountinfo(text: &str) -> HashSet<PathBuf> {
 }
 
 /// `\040` and friends back to their bytes.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn unescape(field: &str) -> Vec<u8> {
     let bytes = field.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -232,6 +238,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn mountinfo_lines_yield_their_mount_points() {
         let text = "\
 25 0 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw
@@ -249,6 +256,7 @@ mod tests {
     /// names with spaces in them. Taking the field literally would leave a
     /// mount point that never matches anything.
     #[test]
+    #[cfg(unix)]
     fn an_escaped_space_in_a_mount_point_is_decoded() {
         let text = "40 25 8:2 / /media/My\\040Backup\\040Disk rw - vfat /dev/sdb1 rw\n";
         let points = parse_mountinfo(text);
@@ -261,6 +269,7 @@ mod tests {
     /// A backslash is a legal character in a Unix path, so only a complete
     /// octal escape may be consumed.
     #[test]
+    #[cfg(unix)]
     fn a_lone_backslash_survives() {
         assert_eq!(unescape(r"a\b"), b"a\\b");
         assert_eq!(unescape(r"a\04"), b"a\\04");
@@ -268,6 +277,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_short_or_malformed_mountinfo_line_is_skipped_not_panicked_on() {
         assert!(parse_mountinfo("garbage\n\n25 0 8:1 /\n").is_empty());
     }

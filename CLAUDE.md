@@ -17,8 +17,13 @@ cargo test --workspace                   # 283 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
-cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc
+cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc --all-targets
 ```
+
+**`--all-targets` şart:** onsuz test kodu hiç derlenmiyor ve `#[cfg(test)]`
+altındaki platforma bağlı bir hata ancak CI'da görünüyor (11 Eylül 2026'da
+öyle oldu: `parse_mountinfo` testte her platformda derleniyordu ve içi
+`std::os::unix` kullanıyordu).
 
 Windows tip denetimi yalnızca `scan-core` için yapılabiliyor: `agent` ve `cli`
 zstd üzerinden C koduna bağlı ve macOS'ta msvc hedefi için çapraz derleyici yok.
