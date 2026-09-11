@@ -531,8 +531,24 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
             karede taşmadığı, ve tarama bitip gerçek harita geldiğinde resmin
             zıplamadığı. Mantık tarafı test edildi (yerleşim, kap, ölçü,
             kategori, alan sınırları).
-- [ ] **C6 Sunburst görünümü (masaüstü)** — yalnızca treemap'imiz var.
+- [x] **C6 Sunburst görünümü (masaüstü)** — yapıldı *(11 Eylül 2026)*.
+      `treemap/src/sunburst.rs` + masaüstünde `Sunburst.tsx`. Halka başına bir
+      seviye, yayın açısı **ebeveynindeki pay** (kökteki değil) — halkaların
+      alt alta hizalanmasının sebebi bu.
+      **Açı boyut, alan değil.** Bir yayın alanı yarıçapla büyüyor, yani
+      dışarıda duran küçük bir klasör içeride duran büyüğünden çok mürekkep
+      kaplıyor. Görünümün sınırı, uygulamanın değil — treemap'in varsayılan
+      kalmasının sebebi de bu, ve arayüz bunu ipucu metninde söylüyor.
+      Ortadaki delik yalnızca etiket için değil: en içteki halkanın yayları
+      aksi hâlde bir noktada birleşirdi ve en çok okunan seviye nişan alması
+      en zor olan olurdu.
+      Mutasyonla üç davranış doğrulandı, üçü de yakalandı: ebeveyn payı yerine
+      kök payı, hit-test'in açı kuralı, çok ince yayların elenmesi.
       *Rakip:* FreeSize (treemap + sunburst + heatmap), Filelight.
+      - [ ] **Görsel doğrulama sizde.** Bakılacak: halkaların hizalandığı,
+            etiketlerin dar yayda taşmadığı, imlecin işaret ettiğini seçtiği
+            (özellikle saat 12 dikişinde), ve dar/geniş pencerede dairenin
+            elips olmadığı.
 - [x] **C7 Dosya yaşı** — yapıldı *(11 Eylül 2026)*. `spacetrace age`
       (`--bands`, `--json`) ve masaüstünde yaşa göre renklendirilen harita.
       Hesap çekirdekte (`scan-core/src/age.rs`), C3'teki kalıpla: masaüstünde
@@ -730,7 +746,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~6~~ | ~~C3, D1~~ | İkisi de yapıldı |
 | 7 | B4, ~~B5~~ ✅, B6 | Platforma özel hızlı yollar — B5 bitti (11 Eylül 2026); B4 Windows, B6 Linux makinesi istiyor |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
-| 9 | ~~C1, C2, C4, C5, C7, C8, C9~~ ✅, C6 | Özellik paritesi — kalan tek madde sunburst görünümü |
+| 9 | ~~C1–C9~~ ✅ | Özellik paritesi tamamlandı *(11 Eylül 2026)* |
 | 10 | E3–E5, D2, D3 | Yayın hazırlığı |
 | **son** | **B1-K** | Çift depolama. Sıradan optimizasyon değil, mimari karar — **ayrı oturumda Fable modeliyle derin araştırma**, önce benchmark altyapısı |
 
