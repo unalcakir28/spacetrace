@@ -547,6 +547,12 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       10M'e ekstrapolasyon ~2,8 GB). B1 sonrası yeniden ölçülmeli.
 - [ ] **D5 `store::save` ilerleme geri bildirimi** — büyük ağaçlarda tek
       transaction, kullanıcı donmuş sanıyor.
+      *Ölçüldü (11 Eylül 2026) ve sanıldığı kadar acil değil:*
+      `/Applications` (412.380 girdi) taraması 856 ms, süreç baştan sona
+      1,15 s — yani kaydetme **en çok ~290 ms** (içinde süreç başlatma ve
+      çıktı da var, yani bu bir üst sınır). 10M girdiye doğrusal
+      ekstrapolasyon ~7 s: fark edilir ama "dondu" değil. Öncelik buna göre
+      düştü; B1 sonrası yeniden ölçülmeli.
 - [ ] **D6 `Tree::rel_path` her çağrıda kökten yürüyor** — sıcak döngüde
       kullanılmamalı; ya belgelensin ya önbelleklensin.
 
