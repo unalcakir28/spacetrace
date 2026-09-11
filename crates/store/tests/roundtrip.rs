@@ -837,3 +837,67 @@ fn every_directory_keeps_its_subtotal_through_ncdu_json() {
     assert_eq!(subtotal(&tree, "sub"), subtotal(&back, "sub"));
     assert_eq!(subtotal(&tree, "b.bin"), subtotal(&back, "b.bin"));
 }
+
+/// The bug this catches shipped: every imported snapshot could be stored and
+/// then never opened again.
+///
+/// `Tree::from_nested` gave the root itself as its own parent, which looks
+/// harmless because every path walk in the tree stops at entry 0 by index. But
+/// `save` writes a non-null `parent_id` for it, and `load`'s structural check
+/// refuses a root that claims a parent — so `spacetrace import` wrote a row
+/// nobody could read, and said nothing.
+///
+/// The reason it got through is the shape of the test above it: comparing the
+/// tree that came out of the importer against the tree that went into the
+/// exporter never touches the store, and the store is where an import lands.
+/// An import path has to be tested through the thing it is imported *into*.
+#[test]
+fn an_imported_tree_can_be_stored_and_read_back() {
+    let dir = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+
+    let mut buf = Vec::new();
+    export_ncdu(&tree, &mut buf).unwrap();
+    let imported = import_ncdu(std::str::from_utf8(&buf).unwrap(), None).unwrap();
+
+    let mut store = Store::open_in_memory().unwrap();
+    let id = store.save(&imported, &stats, "testhost", None).unwrap();
+    let (loaded, _) = store
+        .load(id)
+        .expect("an imported snapshot must be readable again");
+
+    assert_eq!(loaded.len(), imported.len());
+    assert_eq!(loaded.total_alloc(), imported.total_alloc());
+    assert!(
+        !loaded.node(loaded.root()).has_parent(),
+        "the root of a stored tree must not claim a parent"
+    );
+}
+
+/// The same root that broke storage would also have hung the desktop: the
+/// ancestor walk in `remove_subtree` stops at the no-parent sentinel, and a
+/// root pointing at itself never reaches it. Moving anything to the Trash in
+/// an imported scan would have spun forever.
+///
+/// A test that can hang is worth having only because the alternative is a
+/// frozen window with no error and no log line.
+#[test]
+fn moving_an_entry_out_of_an_imported_tree_terminates() {
+    let dir = fixture();
+    let (tree, _) = scan_fixture(&dir);
+
+    let mut buf = Vec::new();
+    export_ncdu(&tree, &mut buf).unwrap();
+    let mut imported = import_ncdu(std::str::from_utf8(&buf).unwrap(), None).unwrap();
+
+    let victim = imported
+        .children(imported.root())
+        .find(|&id| !imported.node(id).is_dir())
+        .expect("the fixture has a file at the top level");
+    let before = imported.total_alloc();
+    let removed = imported
+        .remove_subtree(victim)
+        .expect("the entry is there to remove");
+
+    assert_eq!(imported.total_alloc(), before - removed.alloc);
+}

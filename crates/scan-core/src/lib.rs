@@ -15,7 +15,7 @@ mod scan;
 mod timeout;
 mod tree;
 
-pub use age::{age_profile, AgeBucket, AgeProfile, DEFAULT_EDGES};
+pub use age::{age_profile, age_profile_at, median_bands, AgeBucket, AgeProfile, DEFAULT_EDGES};
 pub use capacity::{capacity_of, Capacity};
 pub use meta::{EntryKind, FileIdentity, RawMeta};
 pub use mounts::Mounts;

@@ -10,6 +10,12 @@ Versions marked *development milestone* were never tagged and have no
 downloadable files. They are recorded because the work happened, not
 because anyone can install them.
 
+## Unreleased
+
+### Fixed
+
+- A snapshot created by `spacetrace import` could be stored and then never opened again: every attempt failed with "entry 0 is not a root: it claims a parent". The import wrote a malformed root and nothing noticed until the read. Snapshots already imported are readable by this version without being imported again.
+
 ## 0.6.0 — 2026-09-11
 
 ### Added

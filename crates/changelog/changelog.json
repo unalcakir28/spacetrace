@@ -2,7 +2,18 @@
   "schema": 1,
   "components": {
     "cli": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "fixed",
+          "text": {
+            "en": "A snapshot created by `spacetrace import` could be stored and then never opened again: every attempt failed with \"entry 0 is not a root: it claims a parent\". The import wrote a malformed root and nothing noticed until the read. Snapshots already imported are readable by this version without being imported again.",
+            "tr": "`spacetrace import` ile oluşturulan bir snapshot kaydedilebiliyor ama bir daha açılamıyordu: her deneme \"entry 0 is not a root: it claims a parent\" hatası veriyordu. İçe aktarma bozuk bir kök yazıyordu ve bu, okumaya kadar fark edilmiyordu. Halihazırda içe aktarılmış snapshot'lar bu sürümle yeniden içe aktarmaya gerek kalmadan okunabiliyor.",
+            "it": "Uno snapshot creato con `spacetrace import` poteva essere salvato ma non più riaperto: ogni tentativo falliva con \"entry 0 is not a root: it claims a parent\". L'importazione scriveva una radice malformata e nessuno se ne accorgeva fino alla lettura. Gli snapshot già importati sono leggibili con questa versione senza doverli reimportare.",
+            "fr": "Un instantané créé par `spacetrace import` pouvait être enregistré puis jamais rouvert : chaque tentative échouait avec « entry 0 is not a root: it claims a parent ». L'import écrivait une racine mal formée, et rien ne le signalait avant la lecture. Les instantanés déjà importés sont lisibles avec cette version sans nouvelle importation.",
+            "de": "Ein mit `spacetrace import` erzeugter Snapshot ließ sich speichern, aber nie wieder öffnen: jeder Versuch scheiterte mit \"entry 0 is not a root: it claims a parent\". Der Import schrieb eine fehlerhafte Wurzel, und bis zum Lesen fiel das niemandem auf. Bereits importierte Snapshots sind mit dieser Version lesbar, ohne sie erneut zu importieren."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.6.0",
@@ -406,7 +417,18 @@
       ]
     },
     "desktop": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "fixed",
+          "text": {
+            "en": "Snapshots brought in with `spacetrace import` open in the app. They were stored with a malformed root, so the app refused them as an unusable tree.",
+            "tr": "`spacetrace import` ile alınan snapshot'lar uygulamada açılıyor. Bozuk bir kökle kaydedildikleri için uygulama onları kullanılamaz ağaç diye reddediyordu.",
+            "it": "Gli snapshot importati con `spacetrace import` si aprono nell'app. Venivano salvati con una radice malformata e l'app li rifiutava come albero inutilizzabile.",
+            "fr": "Les instantanés importés avec `spacetrace import` s'ouvrent dans l'application. Ils étaient enregistrés avec une racine mal formée et l'application les refusait comme arbre inutilisable.",
+            "de": "Mit `spacetrace import` übernommene Snapshots lassen sich in der App öffnen. Sie wurden mit einer fehlerhaften Wurzel gespeichert, weshalb die App sie als unbrauchbaren Baum abwies."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.6.0",

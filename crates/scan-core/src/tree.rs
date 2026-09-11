@@ -536,8 +536,16 @@ impl Tree {
     /// them.
     pub fn from_nested(root_path: PathBuf, root: ImportedNode) -> Tree {
         let mut builder = TreeBuilder::with_capacity(root.count());
+        // `NO_PARENT`, not `0`. A root that names itself as its parent looks
+        // harmless — every path walk here stops at id 0 by index — but two
+        // other readers use the sentinel instead, and both break: `save`
+        // writes a non-null `parent_id` for entry 0, and loading that back
+        // fails the structural check outright ("entry 0 is not a root: it
+        // claims a parent"), so an imported scan could be stored and never
+        // read again. `remove_subtree` walks ancestors to the sentinel too,
+        // and would have spun forever on entry 0.
         let root_id = builder.push(
-            0,
+            Tree::NO_PARENT,
             NewNode {
                 name: &root.name,
                 kind: root.kind,
