@@ -417,8 +417,29 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
 ### C. Özellik açıkları
 
-- [ ] **C1 E-posta uyarısı (hub)** — şu an yalnızca webhook.
+- [x] **C1 E-posta uyarısı (hub)** — yapıldı *(11 Eylül 2026)*. Bir kuralın
+      hedefi ya http(s) URL'i ya da e-posta adresi; **tek sütun**, yanyana iki
+      nullable alan değil, yani "tam olarak bir hedef" hatırlanması gereken bir
+      kural değil verinin şekli. `mailto:` şeması seçildi çünkü v1'deki her
+      webhook satırı zaten geçerli bir değer — göç dönüştürme değil, yeniden
+      adlandırma (hub şeması v1 → v2, testi `db.rs` içinde, gerçekten v1'in
+      yazdığı gibi kurulmuş bir veritabanıyla).
+      **Kimlik bilgileri veritabanında değil**, config dosyasında
+      (`password_file` ile, `admin_token` kalıbının aynısı): veritabanı
+      yedeklenen ve hata raporuna eklenen dosya.
+      **`lettre` bağımlılığı bilinçli** — cron ayrıştırıcısını elle yazdık ama
+      SMTP öyle bir liste değil: TLS std'de yok, ve asıl ısıran kısım ağdan
+      gelen bir hostname'in başlığa girmesi. Çıplak bir CRLF başlık bloğunu
+      bitiriyor ve gerisi başlık olarak okunuyor. rustls-only alındı, `cargo
+      tree`'de openssl/native-tls yok (musl statik derleme için şart).
       *Rakip:* SpaceObServer.
+      - [ ] **Gerçek teslimat testi sizde.** Burada doğrulanan: rotalar (28
+            entegrasyon testi, gerçek sokette), parolanın sayfaya sızmaması,
+            CRLF'li alıcının reddi, v1→v2 göçü. **Doğrulanmayan: gerçek bir
+            röleye gerçek posta.** Ayarlar → "Send a test message" tam olarak
+            bunun için var ve bir uyarının izlediği yolun aynısını kullanıyor.
+            Bakılacak: STARTTLS ile 587, implicit TLS ile 465, ve yanlış
+            parolanın verdiği hatanın okunabilirliği.
 - [ ] **C2 Kişi başına hesap (hub)** — şu an tek admin kimliği.
       *Rakip:* SpaceObServer (Client/Web Access).
 - [x] **C3 Zaman çizelgesi görünümü (masaüstü)** — yapıldı *(11 Eylül 2026)*.
