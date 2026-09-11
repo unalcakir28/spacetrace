@@ -447,18 +447,28 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       var.
 - [ ] **C6 Sunburst görünümü (masaüstü)** — yalnızca treemap'imiz var.
       *Rakip:* FreeSize (treemap + sunburst + heatmap), Filelight.
-- [~] **C7 Dosya yaşı** — **hesap yapıldı, ısı haritası yapılmadı**
-      *(11 Eylül 2026)*. `spacetrace age`, `--bands` ile ayarlanabilir bantlar,
-      `--json`. Hesap çekirdekte (`scan-core/src/age.rs`), C3'teki kalıpla:
-      masaüstünde JS testi yok, kural içeren şey test edilebilir tarafta durur.
+- [x] **C7 Dosya yaşı** — yapıldı *(11 Eylül 2026)*. `spacetrace age`
+      (`--bands`, `--json`) ve masaüstünde yaşa göre renklendirilen harita.
+      Hesap çekirdekte (`scan-core/src/age.rs`), C3'teki kalıpla: masaüstünde
+      JS testi yok, kural içeren şey test edilebilir tarafta durur.
       **Bayta göre ağırlıklı, dosya sayısına göre değil** — yüz bin eski kaynak
-      dosyası cevap değil, bir disk imajı cevap. **Dizinler sayılmıyor:** bir
-      dizinin `mtime`'ı yanına bir şey eklenince değişiyor, içindekilerin
+      dosyası cevap değil, bir disk imajı cevap. **Dizinler profile girmiyor:**
+      bir dizinin `mtime`'ı yanına bir şey eklenince değişiyor, içindekilerin
       yaşıyla ilgisi yok. **`mtime` yoksa ayrı bant** — ncdu'dan gelen snapshot
       onu taşımıyor ve 1970 okumak "elli yıldır dokunulmamış" demek olurdu.
-      *Kalan:* masaüstündeki ısı haritası görünümü. Ekran görüntüsü alamadığım
-      için görsel doğrulaması yapılamıyor; kullanıcı isterse yapılacak.
+      **Haritada dizin de renkleniyor** ve bandı alt ağacının *medyan baytı*
+      (`median_bands`) — kendi `mtime`'ı değil. Isı haritasını yeniden
+      renklendirilmiş kategori haritasından ayıran şey bu: bakılmaya değer her
+      derinlikte alanın çoğu klasör, ve hareket edilebilen birim klasör.
+      Medyan, "en çok bayt hangi bantta" yerine seçildi çünkü ikincisi 51/49
+      bölünmüş bir klasörü tek bir renge boyuyor ve renk tek dosyada dönüyor.
       *Rakip:* FreeSize (heatmap).
+      - [ ] **Görsel doğrulama sizde.** Bu makinede ekran görüntüsü izni yok,
+            yani rampanın okunurluğu, lejandın dar pencerede taşıp taşmadığı ve
+            klasör tonunun (%55 alfa) çocuklarını gömüp gömmediği
+            **denenmedi**. Hesap tarafı doğrulandı: `/Applications`'ın en büyük
+            300 dizininde `median_bands` ile alt ağaç profilinin medyanı
+            bağımsız iki yürüyüşle karşılaştırıldı, sıfır uyuşmazlık.
 - [x] **C8 ncdu/gdu JSON içe aktarma** — yapıldı *(11 Eylül 2026)*.
       `spacetrace import <dosya>`; `--root`, `--host`, `--label`. Yeni
       bağımlılık yok, `serde_json` zaten `store`'daydı.

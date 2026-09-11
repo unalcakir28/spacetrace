@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 329 test, hepsi geçmeli
+cargo test --workspace                   # 340 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -218,6 +218,11 @@ Kodda dikkat edilecekler:
   toplamanın ikinci bir uygulaması doğar. **Dizinin kendi `asize`'ı atılır**
   (değişmez 1) — gerçek ncdu onu yazıyor, bizim dışa aktarıcımız yazmıyor,
   yani kendi çıktımızla gidiş-dönüş testi bu hatayı göremiyor.
+  **Ve testi store'dan geçir.** Kökün ebeveyni `NO_PARENT` olmak zorunda;
+  `0` yazmak bellekte kusursuz görünen ama `save` → `load` turunu
+  `RootHasParent` ile düşen bir ağaç üretiyor ve `remove_subtree`'yi sonsuz
+  döngüye sokuyor. İki ağacı bellekte karşılaştıran bir test bunu göremez —
+  11 Eylül 2026'da göremedi ve kırık `import` yayınlandı.
 - **`store::load` bir güven sınırı.** Uzaktan indirilen snapshot da bu yoldan
   geçiyor, bu yüzden `Tree::from_parts_checked` arena değişmezlerini doğruluyor.
   Doğrulamayı atlayan bir yol ekleme: bozuk `children_start` indeks panic'i,
