@@ -370,6 +370,16 @@
             "it": "La barra di avanzamento sembrava bloccarsi alla fine di ogni scansione: dopo la scansione c'è un secondo passaggio che cerca i cloni copy-on-write, e nessun contatore si muoveva. Ora quella fase indica “Completamento” e conta ciò che controlla, invece di mostrare un numero di file fermo.",
             "tr": "İlerleme şeridi her taramanın sonunda donmuş görünüyordu: yürüyüşten sonra kopyala-yazarken klonlarını arayan ikinci bir geçiş var ve o sırada hiçbir sayaç kımıldamıyordu. O aşama artık “Tamamlanıyor” diyor ve durmuş bir dosya sayısı göstermek yerine denetlediğini sayıyor."
           }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Der gesamte Verlauf eines Ordners auf einer Linie. Verlauf zeigt alle gespeicherten Snapshots eines Ordners als Diagramm, daneben was sich zwischen je zwei Snapshots geändert hat; ein Klick auf einen Schritt öffnet den Vergleich genau für diesen Sprung. Die Achse beginnt bei null, die Höhe der Linie ist also die Größe selbst.",
+            "en": "A folder's whole history on one line. History shows every stored snapshot of a folder as a chart, with what changed between each pair beside it; clicking a step opens the comparison for exactly that jump. The axis starts at zero, so the height of the line is the size itself.",
+            "fr": "L'historique complet d'un dossier sur une seule ligne. Historique affiche sous forme de graphique tous les instantanés enregistrés d'un dossier, avec à côté ce qui a changé entre chaque paire ; cliquer sur une étape ouvre la comparaison correspondant exactement à ce saut. L'axe part de zéro : la hauteur de la ligne est donc la taille elle-même.",
+            "it": "L'intera cronologia di una cartella su una linea. Cronologia mostra in un grafico tutti gli snapshot archiviati di una cartella, con accanto ciò che è cambiato tra una coppia e l'altra; un clic su un passaggio apre il confronto per quel salto preciso. L'asse parte da zero, quindi l'altezza della linea è la dimensione stessa.",
+            "tr": "Bir klasörün tüm geçmişi tek çizgide. Geçmiş, bir klasörün saklanan bütün anlık görüntülerini grafik olarak gösteriyor ve her ikisi arasında neyin değiştiğini yanında yazıyor; bir adıma tıklamak tam o sıçramanın karşılaştırmasını açıyor. Eksen sıfırdan başlıyor, yani çizginin yüksekliği boyutun kendisi."
+          }
         }
       ],
       "releases": [

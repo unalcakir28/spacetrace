@@ -376,9 +376,22 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       *Rakip:* SpaceObServer.
 - [ ] **C2 Kişi başına hesap (hub)** — şu an tek admin kimliği.
       *Rakip:* SpaceObServer (Client/Web Access).
-- [ ] **C3 Zaman çizelgesi görünümü (masaüstü)** — bir hedefin tüm geçmişi.
-      Geçmiş ana iddiamız ama masaüstünde görselleştirilmiyor; **iddiamızın
-      karşılığı olan görünüm eksik**, bu yüzden özellik listesinde önce geliyor.
+- [x] **C3 Zaman çizelgesi görünümü (masaüstü)** — yapıldı *(11 Eylül 2026)*.
+      Bir hedefin `(host, root)` geçmişi tek çizgide, aralarındaki değişim
+      yanında, ve her adımdan tam o sıçramanın diff'ine bir tık.
+      **Eksen sıfırdan başlıyor** — kendi verisine kırpılmış bir eksen %2'lik
+      sürüklenmeyi uçuruma çeviriyor ve bu görünüm tam da "büyüyor mu?"
+      sorusunu cevaplamak için var.
+      **Gruplama Rust'ta** (`src-tauri/src/history.rs`), çünkü masaüstünde JS
+      test koşucusu yok; kural içeren hiçbir şey test edilemeyen tarafta
+      durmamalı (treemap yerleşimi de aynı sebeple Rust'ta). Kök yolu
+      normalleştiriliyor: `/data` ile `/data/` bir hedefin geçmişini ikiye
+      bölerdi.
+      **Kapsam sınırı:** masaüstü *olanı* gösteriyor, hub *tahmin ediyor*.
+      Hub'daki `trend.rs` en küçük kareler + `r2` eşiğiyle tahmin yapıyor ve
+      kötü uyumda reddediyor; onun ikinci bir kopyasını masaüstüne koymak iki
+      eşik kümesinin birbirinden ayrışması demekti. Taşımak istenirse `trend`
+      önce çekirdek depoya alınmalı — ayrı iş.
 - [ ] **C4 Duplicate bulucu** — boyut → ön-hash → blake3, önbellekli.
       WHY.md'de Pro kademesinde zaten planlı.
       *Rakip:* DiskRaptor (xxh3), WinDirStat 2.5.0, Czkawka.
@@ -486,7 +499,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~3~~ ✅ | ~~B1~~ | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar. **Dördü bitti (9 Eylül 2026); kalan tek madde B1-K, en altta** |
 | ~~4~~ ✅ | ~~A3, A5~~ | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma artık sessiz değil. **Bitti (10 Eylül 2026)** |
 | 5 | ~~B2~~ ✅, **B3 ← sıradaki** | Ucuz ve ölçülmüş — B2 bitti (10 Eylül 2026); B3 gerçek bir HDD ya da ağ sürücüsü istiyor |
-| 6 | C3, D1 | Geçmiş iddiamızın masaüstü karşılığı + hiç denenmemiş hata senaryosu |
+| ~~6~~ | ~~C3~~, D1 | C3 yapıldı; D1'in yarısı (görünürlük) yapıldı, timeout kaldı |
 | 7 | B4, B5, B6 | Platforma özel hızlı yollar — doğruluk düzeldikten **sonra** |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
 | 9 | C1, C2, C4–C9 | Özellik paritesi |
