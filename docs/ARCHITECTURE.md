@@ -33,13 +33,21 @@ shared the same way across its CLI, GTK4, and Slint interfaces.
 | Crate | Responsibility | Depends on |
 |-------|------------|----------------|
 | `scan-core` | Directory scan, tree model, platform-specific backends | rayon |
-| `store` | SQLite snapshot store, ncdu export | scan-core, rusqlite |
+| `store` | SQLite snapshot store, ncdu import/export, CSV export | scan-core, rusqlite |
 | `diff` | Comparing two snapshots | scan-core |
+| `dupes` | Identical contents: size → prefix → BLAKE3 | scan-core, blake3, rayon |
 | `cli` | The `spacetrace` binary | all of the above, clap |
 
 The dependency direction is one-way: `scan-core` depends on nothing, and
-`store` and `diff` only look toward it. The agent (Phase 2) will use all
-three and will not depend on `cli`.
+`store`, `diff` and `dupes` only look toward it. The agent (Phase 2) will use
+them and will not depend on `cli`.
+
+`dupes` reaches `store` only backwards, through a trait: the duplicate finder
+declares what a hash cache has to do and `store` implements it, so the crate
+that reads bytes never learns about SQLite. That dependency is behind a
+`store` feature the CLI turns on, because `store` is also what the agent is
+built from and the agent has to stay a single static binary — a cache for a
+command the agent does not have is not worth the bytes.
 
 ## Tree model: why an arena
 
