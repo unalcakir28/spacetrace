@@ -110,6 +110,9 @@ spacetrace export --scan 3 --out scan.json && ncdu -f scan.json
 # no longer exists to be rescanned
 ncdu -o old.json /var && spacetrace import old.json --host retired-nas
 
+# A spreadsheet for someone who does not have this installed
+spacetrace export --scan 3 --format csv --depth 3 --out report.csv
+
 # Check stored snapshots against the digest saved with them
 spacetrace verify
 ```
@@ -174,7 +177,7 @@ Default database: `~/Library/Application Support/spacetrace/` on macOS,
 ```
 crates/
 ├── scan-core/   Parallel scanner + arena tree model (platform-specific backends)
-├── store/       SQLite snapshot store + ncdu-compatible export and import
+├── store/       SQLite snapshot store + ncdu import/export + CSV export
 ├── diff/        Snapshot comparison, "culprit folder" detection
 ├── cli/         the spacetrace binary
 ├── agent/       the spacetrace-agent binary: scheduler + HTTP service

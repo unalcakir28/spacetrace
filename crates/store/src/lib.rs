@@ -5,6 +5,7 @@
 //! written verbatim, which makes loading a snapshot a single ordered query with
 //! no tree rebuilding.
 
+mod csv;
 mod digest;
 mod ncdu;
 mod ncdu_import;
@@ -16,6 +17,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use spacetrace_scan_core::{EntryKind, ScanStats, StoredNode, Tree, TreeAssembler};
 
+pub use csv::export_csv;
 pub use ncdu::export_ncdu;
 pub use ncdu_import::import_ncdu;
 

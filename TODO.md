@@ -474,8 +474,15 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
       **Doğrulanmayan tek şey:** gerçek bir `ncdu` çıktısı. ncdu bu makinede
       kurulu değil (kurmak izin isterdi), fixture spec'ten yazıldı.
-- [ ] **C9 CSV dışa aktarma** — kurumsal kullanıcının Excel'e attığı format.
-      *Rakip:* WizTree.
+- [x] **C9 CSV dışa aktarma** — yapıldı *(11 Eylül 2026)*.
+      `spacetrace export --format csv`, `--depth` ile üst katmanlarda durma.
+      **İki ölçü de sütun, ayar değil** — dosyada sıralama ve yanındaki etiket
+      olmadığı için değişmez 6'nın gerekçesi burada geçmiyor; okuyan seçsin.
+      Alt ağaç toplamlarının yanında `own_*` sütunları var, yoksa bütün
+      satırların toplamı bir dosyayı üstündeki her klasör için tekrar sayar.
+      RFC 4180 kaçırma elle yazıldı ve testi bir CSV *okuyucusuyla* yapılıyor:
+      altın dize karşılaştırması, tutarlı biçimde yanlış üreten bir hatayı da
+      geçerdi.
 
 ### D. Sağlamlık
 
@@ -579,7 +586,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | ~~6~~ | ~~C3, D1~~ | İkisi de yapıldı |
 | 7 | B4, ~~B5~~ ✅, B6 | Platforma özel hızlı yollar — B5 bitti (11 Eylül 2026); B4 Windows, B6 Linux makinesi istiyor |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
-| 9 | C1, C2, C4–C9 | Özellik paritesi |
+| 9 | C1, C2, C4–C7, ~~C8, C9~~ ✅ | Özellik paritesi — C8 ve C9 bitti (11 Eylül 2026) |
 | 10 | E3–E5, D2, D3 | Yayın hazırlığı |
 | **son** | **B1-K** | Çift depolama. Sıradan optimizasyon değil, mimari karar — **ayrı oturumda Fable modeliyle derin araştırma**, önce benchmark altyapısı |
 

@@ -15,11 +15,11 @@ use spacetrace_scan_core::{
     scan, EntryKind, Phase, ScanOptions, ScanProgress, ScanStats, SizeBasis, StallWatch, Tree,
     STALL_GRACE,
 };
-use spacetrace_store::{export_ncdu, import_ncdu, Integrity, ScanMeta, Store};
+use spacetrace_store::{export_csv, export_ncdu, import_ncdu, Integrity, ScanMeta, Store};
 
 use crate::args::{
-    parse_size, Cli, Command, DiffArgs, ExportArgs, ImportArgs, LsArgs, PruneArgs, PullArgs,
-    RmArgs, ScanArgs, VerifyArgs,
+    parse_size, Cli, Command, DiffArgs, ExportArgs, ExportFormat, ImportArgs, LsArgs, PruneArgs,
+    PullArgs, RmArgs, ScanArgs, VerifyArgs,
 };
 use crate::remote::Remote;
 
@@ -476,8 +476,35 @@ fn cmd_export(a: &ExportArgs, db_path: &Path, remote: Option<&Remote>) -> Result
         }
         None => open_store(db_path)?,
     };
+    // Refused rather than ignored: a flag that does nothing is a worse
+    // answer than an error, because the person who passed it goes on
+    // believing the output is limited when it is not.
+    if a.depth.is_some() && a.format != ExportFormat::Csv {
+        anyhow::bail!("--depth applies to --format csv; the ncdu format has no depth limit");
+    }
+
     let (tree, _) = store.load(a.scan)?;
-    write_ncdu(&tree, &a.out)
+    match a.format {
+        ExportFormat::Ncdu => write_ncdu(&tree, &a.out),
+        ExportFormat::Csv => write_csv(&tree, &a.out, a.depth),
+    }
+}
+
+/// CSV to a file or to stdout, the same two cases `write_ncdu` handles.
+fn write_csv(tree: &Tree, out: &Path, depth: Option<usize>) -> Result<()> {
+    if out == Path::new("-") {
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        export_csv(tree, &mut lock, depth)?;
+        return Ok(());
+    }
+    let file =
+        std::fs::File::create(out).with_context(|| format!("cannot write: {}", out.display()))?;
+    let mut w = std::io::BufWriter::new(file);
+    export_csv(tree, &mut w, depth)?;
+    w.flush()?;
+    eprintln!("CSV written: {}", out.display());
+    Ok(())
 }
 
 /// Copy a remote snapshot into the local database so it can be compared later

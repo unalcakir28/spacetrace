@@ -212,6 +212,22 @@ pub struct ExportArgs {
     /// Destination file ("-" = stdout)
     #[arg(long, default_value = "-", value_name = "FILE")]
     pub out: PathBuf,
+
+    /// Output format
+    #[arg(long, value_enum, default_value_t = ExportFormat::Ncdu)]
+    pub format: ExportFormat,
+
+    /// CSV only: stop at this depth below the root (0 = the root alone)
+    #[arg(long, value_name = "N")]
+    pub depth: Option<usize>,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub enum ExportFormat {
+    /// ncdu-compatible JSON, readable by `ncdu -f` and by gdu
+    Ncdu,
+    /// One row per entry, for a spreadsheet
+    Csv,
 }
 
 #[derive(Args, Debug)]

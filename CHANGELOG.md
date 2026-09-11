@@ -17,6 +17,7 @@ because anyone can install them.
 - `--threads N` chooses how wide a scan runs, and the agent takes the same setting per root. There is no best number: the optimum moves with the size of the tree, and someone who knows their disk will choose better than any built-in default.
 - When a scan stops making progress, the progress line now says so and names the directory it is waiting on, instead of going on claiming to be scanning. A network share that has stopped answering blocks in the kernel and no timeout in this program can lift that — but knowing what it is waiting on is what lets you decide whether to wait or quit.
 - `spacetrace import` reads an ncdu or gdu JSON export and stores it as a snapshot, so scans you already have become something to compare against — including scans of a machine that no longer exists to be rescanned. A directory's own apparent size is dropped on the way in: counting it is what makes `du --apparent-size` disagree with the figure this tool reports.
+- `spacetrace export --format csv` writes one row per entry for a spreadsheet, with `--depth` to stop at the top few levels of a tree no spreadsheet would open whole. Both measures are columns rather than a setting — what files claim and what the disk holds — alongside each entry's own cost, so a total can be rebuilt without counting a file once for every folder above it. Commas, quotes and newlines in names are quoted properly; they are legal in a filename and a naive export turns them into silently wrong rows.
 
 ### Changed
 
