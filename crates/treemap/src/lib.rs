@@ -303,7 +303,16 @@ fn sorted_children(tree: &Tree, node: NodeId, basis: SizeBasis) -> Vec<(NodeId, 
 }
 
 /// The squarified pass: fill `rect` with `items`, proportionally by value.
-fn squarify(items: &[(NodeId, f64)], rect: Rect, min_area: f64) -> Vec<(NodeId, Rect)> {
+///
+/// Public because a tree is not the only thing worth laying out. A scan in
+/// flight has no tree yet — only running totals for the root's children — and
+/// drawing those with a second algorithm would mean the picture rearranges
+/// itself the moment the scan finishes and the real map takes over. One
+/// routine, one arrangement, and the handover is invisible.
+///
+/// `items` are `(id, weight)` and the ids are handed back untouched: what they
+/// mean is the caller's business. Weights at or below zero contribute nothing.
+pub fn squarify(items: &[(NodeId, f64)], rect: Rect, min_area: f64) -> Vec<(NodeId, Rect)> {
     let total: f64 = items.iter().map(|(_, v)| v).sum();
     if total <= 0.0 || rect.area() <= 0.0 {
         return Vec::new();
@@ -419,5 +428,50 @@ fn place_row(
             free.w,
             (free.h - thickness).max(0.0),
         )
+    }
+}
+
+#[cfg(test)]
+mod squarify_tests {
+    use super::*;
+
+    /// The live preview during a scan calls this directly, with running
+    /// totals instead of a tree. It has to behave for a caller that has no
+    /// tree at all.
+    #[test]
+    fn weights_alone_fill_the_rectangle() {
+        let items = [(0u32, 50.0), (1, 30.0), (2, 20.0)];
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let tiles = squarify(&items, rect, 0.0);
+
+        assert_eq!(tiles.len(), 3);
+        let area: f64 = tiles.iter().map(|(_, r)| r.area()).sum();
+        assert!(
+            (area - rect.area()).abs() < 1.0,
+            "the tiles should cover the rectangle, covered {area}"
+        );
+        // Proportional: the first is half the area.
+        let first = tiles.iter().find(|(id, _)| *id == 0).unwrap().1;
+        assert!((first.area() - 5000.0).abs() < 50.0, "{first:?}");
+    }
+
+    /// A scan that has just started has found nothing, and that must draw an
+    /// empty map rather than divide by zero.
+    #[test]
+    fn nothing_found_yet_lays_out_nothing() {
+        let items = [(0u32, 0.0), (1, 0.0)];
+        assert!(squarify(&items, Rect::new(0.0, 0.0, 100.0, 100.0), 0.0).is_empty());
+        assert!(squarify(&[], Rect::new(0.0, 0.0, 100.0, 100.0), 0.0).is_empty());
+    }
+
+    /// Ids are the caller's, not the tree's, and must come back untouched —
+    /// the live preview uses them as indices into its own list.
+    #[test]
+    fn the_ids_are_handed_back_as_given() {
+        let items = [(77u32, 10.0), (3, 90.0)];
+        let tiles = squarify(&items, Rect::new(0.0, 0.0, 40.0, 25.0), 0.0);
+        let mut ids: Vec<u32> = tiles.iter().map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![3, 77]);
     }
 }
