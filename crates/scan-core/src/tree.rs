@@ -240,6 +240,18 @@ impl Tree {
 
     /// Path relative to the scan root, using `/` separators. The root itself is
     /// the empty string. This is the key used to match nodes across snapshots.
+    ///
+    /// **One node's worth of work, and it walks to the root to do it.** That is
+    /// the right shape for answering a question about one entry and the wrong
+    /// one for every entry: over a whole tree it repeats each ancestor's name
+    /// once per descendant, and its cost is the sum of every node's depth
+    /// rather than the size of the tree. Worse, depth is not bounded by
+    /// anything this crate controls — a snapshot arriving from another machine
+    /// can be as deep as it likes — so a loop over this is quadratic in the
+    /// worst case on input the tool does not choose.
+    ///
+    /// Use [`Tree::for_each_path`] when the answer is wanted for more than a
+    /// handful of entries.
     pub fn rel_path(&self, id: NodeId) -> String {
         let mut parts: Vec<&str> = Vec::new();
         let mut cur = id;
@@ -249,6 +261,79 @@ impl Tree {
         }
         parts.reverse();
         parts.join("/")
+    }
+
+    /// Visit every node with its path relative to the root, depth first.
+    ///
+    /// The path is built on the way **down**: descending into a directory
+    /// appends one segment to a buffer and leaving it cuts the segment off
+    /// again, so each name is written once no matter how many entries sit
+    /// below it. [`Tree::rel_path`] climbs to the root for every entry
+    /// instead, which costs the sum of every node's depth and allocates twice
+    /// per call; this allocates nothing per node and hands out a borrow of the
+    /// buffer.
+    ///
+    /// The root is visited first, with the empty string. Children are visited
+    /// in arena order — the order the directory listed them in — and a node's
+    /// whole subtree is finished before its next sibling begins.
+    ///
+    /// `max_depth` counts the root as 0 and stops the descent rather than
+    /// filtering what it produced, so a shallow limit does not pay for the
+    /// depths it discards.
+    ///
+    /// **Iterative, not recursive**, for the reason `from_nested` is: the
+    /// depth here comes from the tree, a tree can be loaded from a file this
+    /// crate did not write, and recursion would turn a deep one into a stack
+    /// overflow.
+    pub fn for_each_path(&self, max_depth: Option<usize>, mut visit: impl FnMut(NodeId, &str)) {
+        visit(ROOT, "");
+        if max_depth == Some(0) {
+            return;
+        }
+
+        let mut path = String::new();
+        // Each frame is the children still to visit under one directory, and
+        // the length to cut the buffer back to once they are done.
+        let mut stack: Vec<(std::ops::Range<NodeId>, usize)> = Vec::new();
+        let root = self.node(ROOT);
+        if root.children_len > 0 {
+            stack.push((
+                root.children_start..root.children_start + root.children_len,
+                0,
+            ));
+        }
+        // Depth is the stack's own height, so a limit is a refusal to push
+        // rather than a test on every entry. A report of the top three levels
+        // of a ten-million-entry tree then costs the top three levels.
+        let can_descend = |stack: &Vec<(std::ops::Range<NodeId>, usize)>| {
+            max_depth.is_none_or(|m| stack.len() < m)
+        };
+
+        while let Some((range, cut)) = stack.last_mut() {
+            let cut = *cut;
+            let Some(id) = range.next() else {
+                path.truncate(cut);
+                stack.pop();
+                continue;
+            };
+
+            let mark = path.len();
+            if !path.is_empty() {
+                path.push('/');
+            }
+            path.push_str(self.name(id));
+            visit(id, &path);
+
+            let node = self.node(id);
+            if node.children_len > 0 && can_descend(&stack) {
+                stack.push((
+                    node.children_start..node.children_start + node.children_len,
+                    mark,
+                ));
+            } else {
+                path.truncate(mark);
+            }
+        }
     }
 
     /// Every node, root first.
@@ -949,6 +1034,106 @@ mod tests {
         assert_eq!(tree.node(root).children_start, 0);
         assert_eq!(tree.children(root).count(), 0);
         assert_eq!(Tree::check(tree.nodes()), Ok(()));
+    }
+
+    /// The whole point of `for_each_path` is to give the same answer more
+    /// cheaply, so the test is differential: every node, both ways.
+    #[test]
+    fn every_path_agrees_with_the_one_rel_path_builds() {
+        let mut builder = TreeBuilder::with_capacity(16);
+        let root = builder.push_root(dir("root"));
+        let top = builder.push_block(root, [dir("a b"), file("c,d", 1), dir("empty")].into_iter());
+        let inner = builder.push_block(top, [dir("deep"), file("leaf", 2)].into_iter());
+        builder.push_block(inner, [file("bottom", 3)].into_iter());
+        builder.push_block(top + 2, [].into_iter());
+        let tree = builder.finish(PathBuf::from("/synthetic"));
+
+        let mut seen: Vec<(NodeId, String)> = Vec::new();
+        tree.for_each_path(None, |id, path| seen.push((id, path.to_string())));
+
+        assert_eq!(
+            seen.len(),
+            tree.len(),
+            "every node is visited exactly once, the root included"
+        );
+        for (id, path) in &seen {
+            assert_eq!(path, &tree.rel_path(*id), "entry {id}");
+        }
+        // And the names that need quoting elsewhere are carried through as they
+        // are: the separator is this function's business, escaping is not.
+        assert!(seen.iter().any(|(_, p)| p == "a b/deep/bottom"));
+        assert!(seen.iter().any(|(_, p)| p == "c,d"));
+    }
+
+    /// Depth first, and a subtree is finished before its next sibling starts.
+    /// The CSV export's row order depends on this, and a reader diffing two
+    /// exports depends on the row order.
+    #[test]
+    fn a_subtree_is_finished_before_the_next_sibling() {
+        let mut builder = TreeBuilder::with_capacity(8);
+        let root = builder.push_root(dir("root"));
+        let top = builder.push_block(root, [dir("first"), file("second", 1)].into_iter());
+        builder.push_block(top, [file("under", 2)].into_iter());
+        let tree = builder.finish(PathBuf::from("/synthetic"));
+
+        let mut order: Vec<String> = Vec::new();
+        tree.for_each_path(None, |_, path| order.push(path.to_string()));
+        assert_eq!(order, vec!["", "first", "first/under", "second"]);
+    }
+
+    /// A depth limit stops the descent instead of filtering afterwards, so it
+    /// has to cut at the right level and not one either side of it.
+    #[test]
+    fn a_depth_limit_stops_the_descent() {
+        let mut builder = TreeBuilder::with_capacity(8);
+        let root = builder.push_root(dir("root"));
+        let top = builder.push_block(root, [dir("one"), file("flat", 1)].into_iter());
+        let mid = builder.push_block(top, [dir("two")].into_iter());
+        builder.push_block(mid, [file("three", 2)].into_iter());
+        let tree = builder.finish(PathBuf::from("/synthetic"));
+
+        let at = |max: Option<usize>| {
+            let mut seen: Vec<String> = Vec::new();
+            tree.for_each_path(max, |_, p| seen.push(p.to_string()));
+            seen
+        };
+        assert_eq!(at(Some(0)), vec![""], "the root alone");
+        assert_eq!(at(Some(1)), vec!["", "one", "flat"]);
+        assert_eq!(at(Some(2)), vec!["", "one", "one/two", "flat"]);
+        assert_eq!(
+            at(Some(3)),
+            vec!["", "one", "one/two", "one/two/three", "flat"]
+        );
+        assert_eq!(at(None), at(Some(3)), "no limit reaches the bottom");
+        assert_eq!(
+            at(Some(99)),
+            at(None),
+            "a limit past the bottom changes nothing"
+        );
+    }
+
+    /// A snapshot can be loaded from a file this crate did not write, so the
+    /// depth is not something the scanner's `PATH_MAX` bounds. Recursing would
+    /// abort the process here rather than return an answer.
+    #[test]
+    fn a_very_deep_tree_does_not_overflow_the_stack() {
+        const DEPTH: usize = 50_000;
+        let mut builder = TreeBuilder::with_capacity(DEPTH + 1);
+        let mut parent = builder.push_root(dir("root"));
+        for _ in 0..DEPTH {
+            parent = builder.push_block(parent, [dir("d")].into_iter());
+        }
+        let tree = builder.finish(PathBuf::from("/synthetic"));
+
+        let mut deepest = 0usize;
+        let mut count = 0usize;
+        tree.for_each_path(None, |_, path| {
+            count += 1;
+            deepest = deepest.max(path.len());
+        });
+        assert_eq!(count, DEPTH + 1);
+        // "d" plus a separator for every level below the first.
+        assert_eq!(deepest, DEPTH * 2 - 1);
     }
 
     /// `children_len` is counted from what was pushed, not taken from the

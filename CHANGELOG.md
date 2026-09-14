@@ -10,6 +10,16 @@ Versions marked *development milestone* were never tagged and have no
 downloadable files. They are recorded because the work happened, not
 because anyone can install them.
 
+## Unreleased
+
+### Changed
+
+- The CSV export now lists each folder immediately followed by what is inside it. It used to write a whole set of siblings together and their contents further down, which put a folder and its files pages apart in the spreadsheet. The columns and the rows themselves are unchanged.
+
+### Fixed
+
+- `spacetrace dupes` listed the same duplicates in a different order every time it ran, so comparing two reports showed differences that were not there. The order now follows the paths, which do not change between runs.
+
 ## 0.7.0 — 2026-09-14
 
 ### Added

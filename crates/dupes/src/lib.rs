@@ -248,10 +248,11 @@ pub fn find(tree: &Tree, options: &Options, cache: &(dyn HashCache + Sync)) -> R
         b.reclaimable()
             .cmp(&a.reclaimable())
             .then(b.size.cmp(&a.size))
-            // A stable last resort so two runs over one tree agree. Without
-            // it the order of equal groups follows whichever thread finished
-            // first, and a diff of two reports becomes unreadable noise.
-            .then(a.copies[0].node.cmp(&b.copies[0].node))
+            // A stable last resort so two runs agree. By path, not by node
+            // id: an id is only meaningful inside the tree that produced it,
+            // and two scans of an unchanged disk do not agree on one. Without
+            // this a diff of two reports is unreadable noise.
+            .then(a.copies[0].path.cmp(&b.copies[0].path))
     });
     report
 }
@@ -280,8 +281,16 @@ struct Live<'a> {
 }
 
 impl Live<'_> {
-    fn node(&self) -> NodeId {
-        self.candidate.node
+    /// The stable identity across runs.
+    ///
+    /// **Not the node id.** An id addresses an entry inside one tree and
+    /// nothing beyond it: the scanner writes each directory into the arena as
+    /// soon as it has been listed, so two scans of an unchanged disk number
+    /// the same file differently. Every ordering in this file exists so that
+    /// two runs produce the same report, which means every one of them has to
+    /// key on the path.
+    fn path(&self) -> &Path {
+        &self.candidate.path
     }
 
     fn inode(&self) -> (u64, u64) {
@@ -324,27 +333,33 @@ fn look_again(candidate: &Candidate) -> Result<Option<Live<'_>>, io::Error> {
 fn by_size(tree: &Tree, options: &Options) -> Vec<Vec<Candidate>> {
     let mut by_size: HashMap<u64, Vec<Candidate>> = HashMap::new();
 
-    for id in tree.iter() {
+    // Paths built by descending rather than by climbing from each file: this
+    // touches every entry in the tree, and `Tree::path` walks to the root
+    // every time it is called (13x slower over one real tree — debt D6). The
+    // order entries arrive in changes with this, which costs nothing here
+    // because every group is sorted by node id before it is used.
+    let root = tree.root_path();
+    tree.for_each_path(None, |id, rel| {
         let node = tree.node(id);
         // Files only. A directory has no contents of its own to compare, and a
         // symlink's "contents" are a path — following it would count the
         // target twice and report a link as a copy of the thing it points at.
         if node.kind != EntryKind::File {
-            continue;
+            return;
         }
-        let path = tree.path(id);
+        let path = root.join(rel);
         let Some(size) = effective_size(node, &path) else {
-            continue;
+            return;
         };
         if size < options.min_size {
-            continue;
+            return;
         }
         by_size.entry(size).or_default().push(Candidate {
             node: id,
             path,
             size,
         });
-    }
+    });
 
     by_size
         .into_values()
@@ -352,7 +367,7 @@ fn by_size(tree: &Tree, options: &Options) -> Vec<Vec<Candidate>> {
         .map(|mut group| {
             // Tree order within a group, so the output does not depend on how
             // a hash map happened to iterate.
-            group.sort_by_key(|c| c.node);
+            group.sort_by(|a, b| a.path.cmp(&b.path));
             group
         })
         .collect()
@@ -465,7 +480,7 @@ fn resolve(tree: &Tree, group: &[Candidate], cache: &(dyn HashCache + Sync)) -> 
         }
 
         for mut same in split.into_values().filter(|b| b.len() > 1) {
-            same.sort_by_key(|l| l.node());
+            same.sort_by_key(|l| l.path());
             result.groups.push(Group {
                 size: same[0].key.size,
                 copies: same.iter().map(|l| copy_of(l.candidate)).collect(),
@@ -499,14 +514,14 @@ fn split_hardlinks<'a>(group: &'a [Live<'a>]) -> (Vec<Vec<&'a Live<'a>>>, Vec<&'
     let mut linked = Vec::new();
     let mut representatives = Vec::new();
     for (_, mut names) in by_inode {
-        names.sort_by_key(|l| l.node());
+        names.sort_by_key(|l| l.path());
         representatives.push(names[0]);
         if names.len() > 1 {
             linked.push(names);
         }
     }
-    representatives.sort_by_key(|l| l.node());
-    linked.sort_by_key(|names| names[0].node());
+    representatives.sort_by_key(|l| l.path());
+    linked.sort_by_key(|names| names[0].path());
     (linked, representatives)
 }
 

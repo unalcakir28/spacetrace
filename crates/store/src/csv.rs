@@ -51,41 +51,49 @@ const HEADER: &str = "path,type,size,alloc,own_size,own_alloc,files,dirs,mtime\n
 /// open, and a report is usually about the top few levels.
 pub fn export_csv(tree: &Tree, out: &mut impl Write, max_depth: Option<usize>) -> io::Result<()> {
     out.write_all(HEADER.as_bytes())?;
-    write_row(tree, tree.root(), out)?;
-    let mut stack = vec![(tree.root(), 1usize)];
-    while let Some((id, depth)) = stack.pop() {
-        if max_depth.is_some_and(|max| depth > max) {
-            continue;
+    // Depth first, so a folder is immediately followed by what is inside it —
+    // which is how somebody reads a spreadsheet, and how a diff between two
+    // exports lines up. The traversal also hands each row its path already
+    // built, which is where the time used to go: see `write_row`.
+    let mut failed = None;
+    tree.for_each_path(max_depth, |id, path| {
+        if failed.is_some() {
+            return;
         }
-        // Pushed in reverse so the file reads in the same order the tree does;
-        // a diff between two exports is worth more when the rows line up.
-        let children: Vec<NodeId> = tree.children(id).collect();
-        for child in children.iter().rev() {
-            stack.push((*child, depth + 1));
+        // `for_each_path` cannot stop, and a write to a pipe can fail at any
+        // row. The first error is kept and the rest of the traversal turns
+        // into a walk over memory — cheap next to having no way to report it.
+        if let Err(e) = write_row(tree, id, path, out) {
+            failed = Some(e);
         }
-        for child in &children {
-            write_row(tree, *child, out)?;
-        }
+    });
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// One row.
 ///
-/// `rel_path` walks to the root for every entry, which the tree's own notes
-/// warn against in a hot loop (debt D6). Measured here rather than assumed:
-/// 412,380 rows of `/Applications` take 0.28 s against 0.16 s for the ncdu
-/// export, which does not build paths at all. The extra is the path building
-/// and it is linear in depth, not in the tree — acceptable for a file
-/// somebody is about to open in a spreadsheet, and not worth a second
-/// traversal to precompute. If this ever reads a tree deep enough to matter,
-/// the fix is to carry the parent's path down rather than to cache.
-fn write_row(tree: &Tree, id: NodeId, out: &mut impl Write) -> io::Result<()> {
+/// The path arrives already built. This used to call `rel_path`, which climbs
+/// to the root for every entry — measured at **61 ms** across the 412,983
+/// entries of `/Applications` against **4.5 ms** for the descending traversal
+/// that replaced it, a 13x difference on the same tree (debt D6). The saving
+/// is not the arithmetic: it is that a descent writes each ancestor's name
+/// once instead of once per descendant below it.
+fn write_row(tree: &Tree, id: NodeId, rel: &str, out: &mut impl Write) -> io::Result<()> {
     let node = tree.node(id);
-    let path = if id == tree.root() {
-        tree.root_path().to_string_lossy().into_owned()
+    // The root carries its absolute path, because a report has to say which
+    // machine and which folder it is about; everything below it is relative to
+    // that, which is what makes the column readable. Only the root allocates:
+    // copying `rel` for every one of four hundred thousand rows would hand
+    // back a good part of what the descending traversal just saved.
+    let absolute;
+    let path: &str = if id == tree.root() {
+        absolute = tree.root_path().to_string_lossy().into_owned();
+        &absolute
     } else {
-        tree.rel_path(id)
+        rel
     };
     let kind = match node.kind {
         EntryKind::Dir => "dir",
@@ -96,7 +104,7 @@ fn write_row(tree: &Tree, id: NodeId, out: &mut impl Write) -> io::Result<()> {
     writeln!(
         out,
         "{},{},{},{},{},{},{},{},{}",
-        quote(&path),
+        quote(path),
         kind,
         node.size,
         node.alloc,

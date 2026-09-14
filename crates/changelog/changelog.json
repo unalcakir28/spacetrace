@@ -2,7 +2,28 @@
   "schema": 1,
   "components": {
     "cli": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "`spacetrace dupes` listete dieselben Duplikate bei jedem Lauf in anderer Reihenfolge auf, sodass ein Vergleich zweier Berichte Unterschiede zeigte, die es nicht gab. Die Reihenfolge richtet sich jetzt nach den Pfaden, die sich zwischen Läufen nicht ändern.",
+            "en": "`spacetrace dupes` listed the same duplicates in a different order every time it ran, so comparing two reports showed differences that were not there. The order now follows the paths, which do not change between runs.",
+            "fr": "`spacetrace dupes` listait les mêmes doublons dans un ordre différent à chaque exécution, si bien que comparer deux rapports faisait apparaître des différences inexistantes. L'ordre suit désormais les chemins, qui ne changent pas d'une exécution à l'autre.",
+            "it": "`spacetrace dupes` elencava gli stessi duplicati in un ordine diverso a ogni esecuzione, così il confronto fra due report mostrava differenze inesistenti. L'ordine ora segue i percorsi, che non cambiano da un'esecuzione all'altra.",
+            "tr": "`spacetrace dupes` aynı kopyaları her koşuda başka sırada listeliyordu, yani iki raporu karşılaştırmak olmayan farklar gösteriyordu. Sıra artık koşular arasında değişmeyen yolları izliyor."
+          }
+        },
+        {
+          "kind": "changed",
+          "text": {
+            "de": "Der CSV-Export listet jeden Ordner jetzt unmittelbar gefolgt von seinem Inhalt. Zuvor wurden alle Einträge einer Ebene zusammen geschrieben und ihr Inhalt weit darunter, was Ordner und Dateien in der Tabelle um Seiten trennte. Spalten und Zeilen selbst bleiben unverändert.",
+            "en": "The CSV export now lists each folder immediately followed by what is inside it. It used to write a whole set of siblings together and their contents further down, which put a folder and its files pages apart in the spreadsheet. The columns and the rows themselves are unchanged.",
+            "fr": "L'export CSV place désormais chaque dossier immédiatement suivi de son contenu. Auparavant il écrivait tous les éléments d'un même niveau ensemble et leur contenu bien plus bas, séparant un dossier de ses fichiers de plusieurs pages dans le tableur. Les colonnes et les lignes elles-mêmes sont inchangées.",
+            "it": "L'esportazione CSV elenca ora ogni cartella seguita subito dal suo contenuto. Prima scriveva insieme tutte le voci allo stesso livello e i loro contenuti molto più in basso, separando una cartella dai suoi file di intere pagine nel foglio di calcolo. Le colonne e le righe stesse non cambiano.",
+            "tr": "CSV dışa aktarımı artık her klasörü hemen içeriğiyle birlikte yazıyor. Önceden bütün kardeşleri bir arada, içeriklerini çok aşağıda yazıyordu; bu da hesap tablosunda bir klasörle dosyalarını sayfalarca ayırıyordu. Sütunlar ve satırların kendisi değişmedi."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.7.0",

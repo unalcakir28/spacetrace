@@ -760,8 +760,36 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       çıktı da var, yani bu bir üst sınır). 10M girdiye doğrusal
       ekstrapolasyon ~7 s: fark edilir ama "dondu" değil. Öncelik buna göre
       düştü; B1 sonrası yeniden ölçülmeli.
-- [ ] **D6 `Tree::rel_path` her çağrıda kökten yürüyor** — sıcak döngüde
-      kullanılmamalı; ya belgelensin ya önbelleklensin.
+- [x] **D6 `Tree::rel_path` her çağrıda kökten yürüyor** — yapıldı
+      *(14 Eylül 2026)*. Ne belgelendi ne önbelleklendi: **yönü çevrildi.**
+      `Tree::for_each_path` yolu inerken kuruyor — bir dizine girmek tampona
+      bir parça ekliyor, çıkmak onu kesiyor — yani her ad altındaki girdi
+      sayısı kadar değil, bir kez yazılıyor. Önbellek düşünülmedi bile: bellek
+      B1-K'de zorlukla kazanılmıştı.
+
+      **Ölçüldü:** `/Applications`'ın 412.983 girdisinde `rel_path` ile
+      **61 ms**, inerek **4,5 ms** — **13,6×**, beş turda dağılımlar hiç
+      örtüşmüyor. Uçtan uca CSV dışa aktarımı 449 → **400 ms** (medyan,
+      serpiştirilmiş 7 tur; OLD min 445 > NEW medyan). Kontrol olarak yol
+      kurmayan ncdu dışa aktarımı 182 → 183 ms, yani değişiklik tam beklenen
+      yerde.
+
+      **`dupes`'ta ölçülebilir fark yok** (2970 → 2909 ms, dağılımlar
+      örtüşüyor) çünkü komutun süresini tarama ve `stat` belirliyor. Oradaki
+      gerekçe hız değil en kötü durum: `Tree::path` derinlikle doğrusal ve
+      derinliği bu crate belirlemiyor — başka makineden gelen bir snapshot
+      istediği kadar derin olabilir, yani her dosya için çağırmak kötü girdide
+      karesel.
+
+      **Yan bulgu ve gerçek bir hata:** `dupes` altı yerde düğüm id'siyle
+      sıralıyordu ve her birinin yorumu "iki koşu aynı sonucu versin"
+      diyordu — ama B1-K'den beri id'ler iki tarama arasında değişiyor.
+      Yayınlanmış 0.7.0 sabit bir fikstürde her koşuda farklı sıra veriyor
+      (ölçüldü). Altısı da yola çevrildi. Mevcut test bunu göremezdi: `find`'ı
+      **tek bir ağaç** üzerinde beş kez çağırıyordu, yani id'ler zaten aynıydı.
+
+      CSV satır sırası da değişti (artık katı DFS: klasör, hemen ardından
+      içeriği) — changelog'da yazılı.
 
 ### E. Dağıtım ve belge
 
@@ -794,8 +822,11 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       damgası yazmadığı için uyarı hiç tetiklenmiyor. Ödeme yapıldığında
       silinecekler docs/RELEASING.md'de madde madde yazılı.
 - [ ] **E4 Homebrew / AUR / Microsoft Store.**
-- [ ] **E5 Geçiş rehberleri** — "ncdu'dan geçiş", "TreeSize'dan geçiş"
-      (ROADMAP'te 1.0 zorunlusu).
+- [x] ~~**E5 Geçiş rehberleri**~~ — **kapsam dışı** *(14 Eylül 2026, kullanıcı
+      kararı)*. ROADMAP 1.0 zorunlusu diye listelemişti; öyle değil. Ürünün
+      kendisi zaten ncdu çıktısını içeri alıyor (C8) ve `--help` ile README
+      İngilizce, yani "nasıl geçerim" sorusunun cevabı araçta duruyor. Bir
+      rehber yazmak mühendislik değil pazarlama, ve bu sıraya ait değil.
 
 ### Sıra
 
@@ -810,7 +841,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | 7 | B4, ~~B5~~ ✅, B6 | Platforma özel hızlı yollar — B5 bitti (11 Eylül 2026); B4 Windows, B6 Linux makinesi istiyor |
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
 | 9 | ~~C1–C9~~ ✅ | Özellik paritesi tamamlandı *(11 Eylül 2026)* |
-| 10 | E3–E5, D2, D3 | Yayın hazırlığı |
+| 10 | E3, E4, D2, D3 | Yayın hazırlığı (E5 kapsam dışı bırakıldı) |
 | ~~son~~ ✅ | ~~B1-K~~ | Çift depolama. Araştırma yapıldı ve **sorun yanlış kurulmuştu**: arena BFS istemiyormuş, iki özellik istiyormuş. Ara ağaç kalktı, hız aynı, tepe bellek `/Applications`'ta -%37. **Bitti (14 Eylül 2026)** |
 
 ---
@@ -837,11 +868,9 @@ orada, burada yalnızca borç kaydı olarak duruyorlar.
       14 Eylül 2026'da tepe `/Applications`'ta **125 B/girdi** (ipuçlu).
       Ölçüm aracı artık depoda: `examples/memprobe.rs`. Kalan → **D4**
       (macOS libmalloc birikmesi, kod değil)
-- [ ] `Tree::rel_path` her çağrıda kökten yürüyor — sıcak döngüde kullanılmamalı
-      (**D6**; ölçüldü 11 Eylül 2026: CSV dışa aktarımında 412.380 satır için
-      0,28 s, yol kurmayan ncdu dışa aktarımı 0,16 s. Derinlikte doğrusal,
-      ağaçta değil.)
-      → **D6**
+- [x] ~~`Tree::rel_path` her çağrıda kökten yürüyor~~ → **D6 yapıldı**
+      (14 Eylül 2026): `Tree::for_each_path` yolu inerken kuruyor, 13,6× hızlı,
+      ve `dupes`'un id'ye dayalı sıralaması yola çevrildi.
 - ~~Arayüz dizeleri koda gömülü, i18n yok~~ → borç değil, karar
       ([DECISIONS.md](docs/DECISIONS.md) K1). Dizeler İngilizce ve gömülü kalır.
 - [ ] Büyük ağaçlarda `store::save` tek transaction — ilerleme geri bildirimi yok

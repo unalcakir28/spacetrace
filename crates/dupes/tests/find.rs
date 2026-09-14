@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use spacetrace_dupes::{find, CacheKey, Group, Hash, HashCache, NoCache, Options, Sharing};
-use spacetrace_scan_core::{scan, ScanOptions, ScanProgress, Tree};
+use spacetrace_scan_core::{scan, ImportedNode, ScanOptions, ScanProgress, Tree};
 
 const MIB: usize = 1024 * 1024;
 
@@ -273,8 +273,13 @@ fn a_file_that_vanished_is_reported_and_not_fatal() {
     assert!(report.unreadable[0].0.ends_with("c.bin"));
 }
 
-/// Two runs over one tree must produce the same list in the same order, or a
-/// diff between two reports is unreadable.
+/// Reporting on **one** tree twice must give the same list in the same order.
+///
+/// Narrower than it looks, and the narrowness cost something: one tree means
+/// one set of node ids, so this passes whatever the orderings are keyed on. It
+/// cannot see the thing that actually broke — two *scans* numbering the same
+/// file differently — and did not. That is
+/// `two_layouts_of_one_tree_produce_the_same_report`, below.
 #[test]
 fn the_order_is_the_same_every_run() {
     let dir = tempfile::tempdir().unwrap();
@@ -292,4 +297,95 @@ fn the_order_is_the_same_every_run() {
             first.groups
         );
     }
+}
+
+/// Two scans of the same disk have to produce the same report, and after
+/// B1-K that is a claim about **paths**: the scanner writes each directory
+/// into the arena as soon as it has been listed, so two scans of an unchanged
+/// tree number the same file differently. An ordering keyed on the node id
+/// looks stable when one tree is reported on twice — which is all
+/// `the_order_is_the_same_every_run` above can show — and shuffles in the
+/// field. Released 0.7.0 reorders `spacetrace dupes` output between two runs
+/// over one static fixture.
+///
+/// **The two layouts are built rather than raced for.** Asking for a 1-thread
+/// and an 8-thread scan would leave the test hoping the schedulers disagree,
+/// and on a small fixture they do not. `Tree::from_nested` lays the same paths
+/// out in whatever order it is given, so reversing the sibling order numbers
+/// every file differently with nothing left to chance.
+#[test]
+fn two_layouts_of_one_tree_produce_the_same_report() {
+    let dir = tempfile::tempdir().unwrap();
+    // Two groups of two copies, equal in size and in what deleting them gives
+    // back — so their order is decided purely by the tie-break — and living in
+    // different directories, so reversing the sibling order flips which one
+    // holds the lower node id while leaving the path order alone.
+    let layout = [
+        ("alpha", "x.bin", 1u8),
+        ("bravo", "x.bin", 1),
+        ("charlie", "y.bin", 2),
+        ("delta", "y.bin", 2),
+    ];
+    for (folder, file, seed) in layout {
+        fs::create_dir(dir.path().join(folder)).unwrap();
+        fs::write(dir.path().join(folder).join(file), blob(seed)).unwrap();
+    }
+
+    let describe = |reversed: bool| {
+        let mut dirs: Vec<ImportedNode> = layout
+            .iter()
+            .map(|(folder, file, _)| {
+                let mut d = ImportedNode::dir(*folder);
+                d.children
+                    .push(ImportedNode::file(*file, 3 * MIB as u64, 3 * MIB as u64));
+                d
+            })
+            .collect();
+        if reversed {
+            dirs.reverse();
+        }
+        let mut root = ImportedNode::dir("root");
+        root.children = dirs;
+        Tree::from_nested(dir.path().to_path_buf(), root)
+    };
+
+    let report_of = |tree: &Tree| {
+        find(tree, &Options::default(), &NoCache)
+            .groups
+            .iter()
+            .map(|g| g.copies.iter().map(|c| c.path.clone()).collect::<Vec<_>>())
+            .collect::<Vec<Vec<_>>>()
+    };
+
+    let forward = describe(false);
+    let reversed = describe(true);
+    // The premise: the two trees really do number the same path differently,
+    // and in a way that reverses which group's first copy comes first.
+    assert!(
+        forward.find("alpha/x.bin") < forward.find("charlie/y.bin"),
+        "forward layout numbers alpha before charlie"
+    );
+    assert!(
+        reversed.find("alpha/x.bin") > reversed.find("charlie/y.bin"),
+        "reversed layout numbers charlie before alpha"
+    );
+
+    let a = report_of(&forward);
+    assert_eq!(a.len(), 2, "two groups, equal in size and in reclaim");
+    assert_eq!(a[0].len(), 2);
+    assert_eq!(
+        report_of(&reversed),
+        a,
+        "the report followed the node ids instead of the paths"
+    );
+
+    // And the properties that make it so, stated directly.
+    assert!(
+        a[0][0].ends_with("alpha/x.bin"),
+        "groups tied on size and reclaim go in path order, got {:?}",
+        a[0][0]
+    );
+    let mut sorted = a[0].clone();
+    sorted.sort();
+    assert_eq!(a[0], sorted, "copies inside a group are in path order");
 }
