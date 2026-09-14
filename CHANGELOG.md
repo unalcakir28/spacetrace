@@ -12,6 +12,10 @@ because anyone can install them.
 
 ## Unreleased
 
+### Added
+
+- The agent now limits how many requests one client address may make, answering 429 with a `Retry-After` above the limit. It counts before checking the bearer token, because the two things a token cannot bound are exactly the ones that need it: `/health` needs no token by design, and a wrong token still costs a reply. The default of 120 a minute is far above ordinary use; what it stops is a client stuck in a retry loop spending the disk the agent exists to measure. Behind a reverse proxy every request arrives from the proxy, so the limit becomes one shared allowance — set `rate_limit_per_minute = 0` and limit in the proxy where that matters.
+
 ### Changed
 
 - The CSV export now lists each folder immediately followed by what is inside it. It used to write a whole set of siblings together and their contents further down, which put a folder and its files pages apart in the spreadsheet. The columns and the rows themselves are unchanged.

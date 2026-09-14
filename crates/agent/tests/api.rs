@@ -42,6 +42,12 @@ fn scannable_dir() -> TempDir {
 
 /// Start an agent whose single configured root is a temporary directory.
 async fn start_agent(allow_adhoc: bool) -> Agent {
+    // The shipped rate limit, which no test here comes close to.
+    start_agent_limited(allow_adhoc, 120, 60).await
+}
+
+/// `start_agent`, with the request limit chosen.
+async fn start_agent_limited(allow_adhoc: bool, per_minute: u32, burst: u32) -> Agent {
     let home = tempfile::tempdir().unwrap();
     let scanned = scannable_dir();
 
@@ -50,11 +56,15 @@ async fn start_agent(allow_adhoc: bool) -> Agent {
          [server]\n\
          token = {:?}\n\
          allow_adhoc_scans = {}\n\
+         rate_limit_per_minute = {}\n\
+         rate_limit_burst = {}\n\
          [[roots]]\n\
          path = {:?}\n",
         home.path().join("snapshots.sqlite").to_string_lossy(),
         TOKEN,
         allow_adhoc,
+        per_minute,
+        burst,
         scanned.path().to_string_lossy(),
     );
     let config: Config = toml::from_str(&toml).unwrap();
@@ -65,7 +75,16 @@ async fn start_agent(allow_adhoc: bool) -> Agent {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        // The same form `serve::serve` uses in production. Without the
+        // connect-info the rate limiter has no peer address to key on, and a
+        // test server that skipped it would be exercising a different router
+        // from the one that ships.
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
     });
 
     Agent {
@@ -501,4 +520,77 @@ async fn pushing_requires_a_token_on_the_receiver() {
         .await
         .unwrap();
     assert_eq!(response.status(), 401);
+}
+
+// ------------------------------------------------------------ rate limiting
+
+/// The limit has to cover `/health`, which is the one route that needs no
+/// token — so it is the one an unauthenticated caller can hammer, and the
+/// reason the limiter sits above the auth layer rather than under it.
+#[tokio::test]
+async fn an_unauthenticated_flood_is_refused_with_a_retry_after() {
+    let agent = start_agent_limited(false, 60, 3).await;
+
+    for i in 0..3 {
+        let response = client().get(agent.url("/health")).send().await.unwrap();
+        assert_eq!(response.status(), 200, "request {i} is within the burst");
+    }
+
+    let response = client().get(agent.url("/health")).send().await.unwrap();
+    assert_eq!(response.status(), 429, "the fourth is over it");
+    let retry = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .expect("a 429 has to say when to come back")
+        .to_str()
+        .unwrap()
+        .parse::<u64>()
+        .expect("in seconds");
+    assert!((1..=60).contains(&retry), "a plausible wait, got {retry}s");
+    // The body says the same thing, for a person reading a terminal.
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("too many requests"),
+        "got {body}"
+    );
+}
+
+/// A wrong token still costs the agent a reply, so the limit has to apply
+/// before the token is checked. If it ran after, the traffic that needs
+/// bounding most — unauthenticated retries — would be the only traffic exempt.
+#[tokio::test]
+async fn a_flood_of_wrong_tokens_is_limited_too() {
+    let agent = start_agent_limited(false, 60, 2).await;
+
+    let mut statuses = Vec::new();
+    for _ in 0..4 {
+        let response = client()
+            .get(agent.url("/status"))
+            .bearer_auth("not-the-token")
+            .send()
+            .await
+            .unwrap();
+        statuses.push(response.status().as_u16());
+    }
+    assert_eq!(
+        statuses,
+        vec![401, 401, 429, 429],
+        "the first two are rejected on the token, the rest on the rate"
+    );
+}
+
+/// Zero means off, for an agent on a trusted network or behind something that
+/// already limits. A default that could not be switched off would be a policy
+/// rather than a protection.
+#[tokio::test]
+async fn a_rate_of_zero_switches_the_limit_off() {
+    let agent = start_agent_limited(false, 0, 0).await;
+
+    for i in 0..30 {
+        let response = client().get(agent.url("/health")).send().await.unwrap();
+        assert_eq!(response.status(), 200, "request {i} with no limit set");
+    }
 }

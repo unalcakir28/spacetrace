@@ -4,12 +4,13 @@
 //! put it behind Caddy or Traefik and debug it with `curl`. Snapshot bodies are
 //! the raw SQLite file (K4), optionally zstd-compressed when the client asks.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use axum::body::{Body, Bytes};
-use axum::extract::{DefaultBodyLimit, Path as AxumPath, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -33,6 +34,8 @@ pub struct AppState {
     allow_adhoc_scans: bool,
     max_upload_bytes: usize,
     started: Instant,
+    /// `None` when the configuration switched limiting off.
+    rate_limit: Option<crate::ratelimit::RateLimit>,
 }
 
 pub fn router(runner: Arc<Runner>, config: &Config, token: String) -> Router {
@@ -43,6 +46,10 @@ pub fn router(runner: Arc<Runner>, config: &Config, token: String) -> Router {
         allow_adhoc_scans: config.server.allow_adhoc_scans,
         max_upload_bytes: config.server.max_upload_bytes,
         started: Instant::now(),
+        rate_limit: crate::ratelimit::RateLimit::new(
+            config.server.rate_limit_per_minute,
+            config.server.rate_limit_burst,
+        ),
     });
 
     // /health stays outside the auth layer so an uptime check or a container
@@ -59,7 +66,14 @@ pub fn router(runner: Arc<Runner>, config: &Config, token: String) -> Router {
         .route("/status", get(status))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
 
-    public.merge(private).with_state(state)
+    // Outside the auth layer and above both halves, because the two things a
+    // limit is for are outside authentication: `/health` needs no token by
+    // design, and a wrong token still costs a reply. Putting it inside would
+    // leave exactly the traffic it exists to bound unbounded.
+    public
+        .merge(private)
+        .layer(middleware::from_fn_with_state(state.clone(), rate_limit))
+        .with_state(state)
 }
 
 pub async fn serve(runner: Arc<Runner>, config: &Config, token: String) -> Result<()> {
@@ -70,10 +84,16 @@ pub async fn serve(runner: Arc<Runner>, config: &Config, token: String) -> Resul
     let addr = listener.local_addr()?;
     eprintln!("spacetrace-agent listening on http://{addr}");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("http server failed")?;
+    // `into_make_service_with_connect_info` rather than the plain form: the
+    // rate limiter keys on the peer address, and without this axum has no
+    // address to hand it.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("http server failed")?;
     Ok(())
 }
 
@@ -101,6 +121,32 @@ async fn shutdown_signal() {
         _ = terminate => {}
     }
     eprintln!("shutting down");
+}
+
+// ------------------------------------------------------------ rate limiting
+
+async fn rate_limit(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(limit) = &state.rate_limit else {
+        return next.run(request).await;
+    };
+    match limit.check(peer.ip()) {
+        crate::ratelimit::Decision::Allow => next.run(request).await,
+        crate::ratelimit::Decision::Refuse { retry_after } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            // Seconds, the form every client understands; the header is the
+            // only part of a 429 an automated caller is likely to read.
+            [(header::RETRY_AFTER, retry_after.as_secs().to_string())],
+            Json(ApiError {
+                error: format!("too many requests; try again in {}s", retry_after.as_secs()),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 // ------------------------------------------------------------------ auth

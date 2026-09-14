@@ -99,6 +99,8 @@ failing silently.
 | `server.token` / `server.token_file` | — | Bearer token, inline or from a file |
 | `server.allow_adhoc_scans` | `false` | Let `POST /scans` name a path outside `[[roots]]` |
 | `server.max_upload_bytes` | 512 MiB | Largest snapshot `POST /snapshots` accepts |
+| `server.rate_limit_per_minute` | `120` | Requests per minute one client address may make; `0` switches it off |
+| `server.rate_limit_burst` | `60` | Requests allowed at once before the rate applies |
 | `roots[].path` | required | Absolute path to scan |
 | `roots[].schedule` | — | Five-field cron; omit to scan only on request |
 | `roots[].label` | — | Free text stored with the snapshot |
@@ -242,6 +244,28 @@ spacetrace --db snap.sqlite scans
 root takes minutes, well past any sensible HTTP timeout. Watch `GET /scans` for
 the new snapshot. A root already being scanned returns **409** rather than
 starting a second walk over the same tree.
+
+### Rate limiting
+
+Every request is counted against the address it came from, and one that is over
+the limit gets **429** with a `Retry-After` in seconds. The count happens
+**before** the token is checked, which is the only position that bounds the two
+things the token cannot: `/health` needs no token by design, and a wrong token
+still costs the agent a reply.
+
+The default — 120 a minute with 60 allowed at once — is far above anything
+ordinary use produces; a CLI command makes a handful of requests and the hub
+polls on a schedule. What it stops is a client stuck in a retry loop, which on
+a NAS means a process spending the one disk this agent exists to measure.
+
+**Behind a reverse proxy every request arrives from the proxy's address**, so
+the per-client limit becomes one limit shared by everyone. It still stops a
+single runaway client from saturating the machine, but it no longer keeps
+clients from affecting each other. Where that matters, set
+`rate_limit_per_minute = 0` and limit in the proxy, which is the only component
+that can still tell the callers apart. The agent deliberately does **not** read
+`X-Forwarded-For`: a header anybody can set would be a way to get a fresh
+allowance by typing one.
 
 A path that is not in `[[roots]]` returns **403** unless
 `server.allow_adhoc_scans` is on.

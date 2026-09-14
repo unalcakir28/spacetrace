@@ -82,6 +82,31 @@ pub struct ServerConfig {
     /// still bounding what an authenticated client can make the agent buffer.
     #[serde(default = "default_max_upload")]
     pub max_upload_bytes: usize,
+
+    /// Requests per minute one client address may make, `0` to switch it off.
+    ///
+    /// Applied before the token is checked, because the two things it bounds
+    /// are outside authentication: `/health` needs no token by design, and a
+    /// wrong token still costs a reply. See `ratelimit`.
+    ///
+    /// The default is generous enough that no ordinary use meets it — a CLI
+    /// run makes a handful of requests and the hub polls on a schedule — and
+    /// tight enough to stop a retry loop from spending the disk this agent
+    /// exists to measure.
+    ///
+    /// **Behind a reverse proxy every request arrives from the proxy**, so
+    /// this becomes one shared limit rather than a per-client one. Raise it
+    /// there, or switch it off and limit in the proxy, which is the only place
+    /// that can still tell the callers apart.
+    #[serde(default = "default_rate_limit")]
+    pub rate_limit_per_minute: u32,
+
+    /// How many requests may arrive at once before the rate applies.
+    ///
+    /// A client that has been quiet should not be refused for opening several
+    /// connections together; what the limit is for is a sustained stream.
+    #[serde(default = "default_rate_burst")]
+    pub rate_limit_burst: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -146,6 +171,8 @@ impl Default for ServerConfig {
             token_file: None,
             allow_adhoc_scans: false,
             max_upload_bytes: default_max_upload(),
+            rate_limit_per_minute: default_rate_limit(),
+            rate_limit_burst: default_rate_burst(),
         }
     }
 }
@@ -153,6 +180,16 @@ impl Default for ServerConfig {
 fn default_listen() -> SocketAddr {
     // Loopback, not 0.0.0.0: see ServerConfig::listen.
     SocketAddr::from(([127, 0, 0, 1], 7878))
+}
+
+/// 120 a minute: two a second sustained, which no ordinary caller approaches.
+fn default_rate_limit() -> u32 {
+    120
+}
+
+/// Room for a burst without letting a quiet hour buy an hour's worth.
+fn default_rate_burst() -> u32 {
+    60
 }
 
 fn default_max_upload() -> usize {
@@ -451,6 +488,8 @@ mod tests {
                 token_file: Some(path),
                 allow_adhoc_scans: false,
                 max_upload_bytes: default_max_upload(),
+                rate_limit_per_minute: default_rate_limit(),
+                rate_limit_burst: default_rate_burst(),
             },
             roots: vec![],
         };
@@ -472,6 +511,8 @@ mod tests {
                 token_file: Some(path),
                 allow_adhoc_scans: false,
                 max_upload_bytes: default_max_upload(),
+                rate_limit_per_minute: default_rate_limit(),
+                rate_limit_burst: default_rate_burst(),
             },
             roots: vec![],
         };

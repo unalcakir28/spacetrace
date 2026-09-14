@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 385 test, hepsi geçmeli
+cargo test --workspace                   # 402 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -324,8 +324,12 @@ Bunlara denk gelirsen bug değil, bilinen borç (tam liste TODO.md'de):
   Sızıntı değil; `malloc_zone_pressure_relief` hiçbir şey değiştirmiyor.
   Ajan etkilenmiyor (Linux). Masaüstünde "Yeniden tara" etkileniyor, ama
   artık `expected_entries` ipucunu geçiyor. Tam ölçüm TODO.md D4.
-- Ajanda yerleşik TLS yok; ters vekil öneriliyor. Hız sınırlama da yok (token
-  zaten gerekli olduğu için ertelendi).
+- Ajanda yerleşik TLS yok; ters vekil öneriliyor. **Hız sınırlama var**
+  (14 Eylül 2026, `ratelimit.rs`): istemci adresi başına token bucket,
+  auth'tan **önce** — `/health` tokensiz ve yanlış bir token da cevaba mal
+  oluyor, yani sınırlanması gereken trafik tam olarak tokenin dışında kalanı.
+  Ters vekil arkasında her istek vekilin adresinden geldiği için tek ortak
+  sınıra dönüşüyor; `X-Forwarded-For` bilinçli olarak okunmuyor.
 
 ## Bu depo dışındaki bağlam
 

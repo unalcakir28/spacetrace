@@ -75,10 +75,11 @@ Beşi de 7 Eylül 2026'da karara bağlandı. Gerekçeler ve ölçümler
   - [x] `POST /scans` (202 + arka planda tarama), `POST /snapshots` (alıcı uç)
   - [x] Bearer token doğrulama (sabit zamanlı karşılaştırma), dosya/env/config
   - [x] Gövde boyutu sınırı, SIGTERM ile temiz kapanma
-  - [ ] Opsiyonel yerleşik TLS — şimdilik ters vekil öneriliyor
+  - [ ] Opsiyonel yerleşik TLS — şimdilik ters vekil öneriliyor (→ **D2**)
 - [x] `agent push <url>` — snapshot'ı merkeze/başka ajana gönder (zstd)
 - [x] Eşzamanlı tarama kilidi (aynı kök iki kez taranmıyor → 409)
-- [ ] Hız sınırlama — token zaten gerekli olduğu için ertelendi (→ **D3**)
+- [x] Hız sınırlama — **D3 yapıldı** (14 Eylül 2026); ertelenme gerekçesi
+      yanlıştı, ayrıntısı orada
 
 ### İstemci tarafı
 - [x] CLI'da uzak kaynak: `--remote <url|ad>` (scans / ls / diff / export)
@@ -696,7 +697,37 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       ama asılan mount'u üretmek için ikinci bir makine gerekiyor.
 
 - [ ] **D2 Ajanda yerleşik TLS** — şu an ters vekil öneriliyor (Faz 2'de de var).
-- [ ] **D3 Ajanda hız sınırlama** (Faz 2'de de var).
+- [x] **D3 Ajanda hız sınırlama** — yapıldı *(14 Eylül 2026)*.
+      `crates/agent/src/ratelimit.rs`, elle yazılmış token bucket, yeni
+      bağımlılık yok (cron ayrıştırıcısıyla aynı gerekçe).
+
+      **Ertelenme gerekçesi yanlıştı.** "Token zaten gerekli" başka bir soruyu
+      cevaplıyor: token *kimin* okuyabileceğine karar veriyor, *ne sıklıkla*
+      okuyabileceğine değil. İki şey tokenin tamamen dışında: `/health`
+      bilinçli olarak tokensiz, ve yanlış bir token da bir başlık ayrıştırma,
+      bir karşılaştırma ve bir cevaba mal oluyor. Sınırlayıcı bu yüzden
+      **auth'tan önce** çalışıyor — bunları sınırlayabileceği tek konum orası,
+      ve mutasyonla doğrulandı (`/health`'i muaf tutunca test düşüyor).
+
+      Pencere değil kova: pencere sınırında sınırın iki katı geçebiliyor
+      (bir pencerenin son anı + sonrakinin ilk anı), ve "ani yoğunluk olur,
+      sürekli akış olmaz" ancak kovayla ifade edilebiliyor.
+
+      **Ters vekil uyarısı belgede yazılı.** Proje ters vekil öneriyor ve orada
+      her istek vekilin adresinden geliyor, yani istemci başına sınır herkesin
+      paylaştığı tek sınıra dönüşüyor. `X-Forwarded-For` **okunmuyor**:
+      herkesin yazabildiği bir başlık, yazarak yeni bir hak almanın yolu olurdu.
+
+      Tablo sert sınırlı (4096 adres). Dolduğunda ve herkes hâlâ borçluyken
+      yeni adresler reddediliyor — akış hâlindeki birini unutmak ona dolu bir
+      hak geri verir, yani tablo sınırın etrafından dolaşmanın yolu olurdu.
+      Bunu kendi testim yakaladı: ilk hâlimde yalnızca "dolu" kovalar
+      atılıyordu ve her yeni istemci hemen jetonunu harcadığı için hiçbiri dolu
+      olmuyordu, yani tablo sınırsız büyüyordu.
+
+      Varsayılan 120/dakika + 60 ani; `0` kapatıyor. Sekiz birim testi (saat
+      testin elinde, yoksa her iddia bir `sleep` ve bir tahmin olurdu) ve üç
+      entegrasyon testi gerçek sokette.
 - [~] **D4 10M+ dosyada bellek profili** — **ölçüldü** *(11 Eylül 2026)*.
       Eskiden burada tek noktadan bir ekstrapolasyon vardı (~2,8 GB); gerçek
       cevap ondan hem daha iyi hem daha ilginç.
