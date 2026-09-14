@@ -205,6 +205,9 @@ impl RootConfig {
                 Some(secs) => Some(std::time::Duration::from_secs(secs)),
                 None => Some(spacetrace_scan_core::MOUNT_TIMEOUT),
             },
+            // Not a config key. It is a memory hint whose only honest source
+            // is the previous scan of this root, which the runner looks up.
+            expected_entries: None,
         }
     }
 }

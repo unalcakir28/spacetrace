@@ -112,7 +112,9 @@ fn staging() -> Result<tempfile::TempDir> {
 // ---------------------------------------------------------------- scan
 
 fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
-    let (tree, stats) = scan_with_progress(&a.path, a.walk.to_options(), !json)?;
+    let mut options = a.walk.to_options();
+    options.expected_entries = entry_count_hint(db_path, &a.path);
+    let (tree, stats) = scan_with_progress(&a.path, options, !json)?;
 
     let mut saved_id = None;
     if a.save {
@@ -661,6 +663,23 @@ fn cmd_verify(a: &VerifyArgs, db_path: &Path, json: bool) -> Result<()> {
 }
 
 // ---------------------------------------------------------------- helpers
+
+/// How many entries the last scan of this root found, if there was one.
+///
+/// A memory hint and nothing else: the arena is filled during the walk, so
+/// without a figure to start from it doubles its way up and holds two buffers
+/// at once during the last move. Being wrong costs one reallocation, so every
+/// failure here — no database yet, an unreadable one, a root never scanned —
+/// is simply `None` rather than something to report. Opening the database
+/// read-only for this takes no write lock (invariant #0).
+fn entry_count_hint(db_path: &Path, root: &Path) -> Option<usize> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let store = Store::open(db_path).ok()?;
+    let previous = store
+        .latest_for(&root.to_string_lossy(), Some(&Store::local_host()))
+        .ok()??;
+    usize::try_from(previous.files + previous.dirs).ok()
+}
 
 fn open_store(path: &Path) -> Result<Store> {
     if let Some(parent) = path.parent() {

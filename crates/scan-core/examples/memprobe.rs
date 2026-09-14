@@ -11,7 +11,7 @@
 //!
 //! ```text
 //!   memprobe <dirs> <files>        synthetic tree, built through TreeAssembler
-//!   memprobe scan <root> [threads] one real walk: peak, holding, and the gap
+//!   memprobe scan <root> [t] [hint] one real walk: peak, holding, and the gap
 //!   memprobe repeat <root> <n>     n walks in one process: does RSS settle?
 //! ```
 //!
@@ -173,9 +173,14 @@ fn synthetic(dirs: usize, files: usize) -> Tree {
         .expect("a valid arena")
 }
 
-fn walk(root: &str, threads: Option<usize>) -> (Tree, spacetrace_scan_core::ScanStats) {
+fn walk(
+    root: &str,
+    threads: Option<usize>,
+    expected_entries: Option<usize>,
+) -> (Tree, spacetrace_scan_core::ScanStats) {
     let options = ScanOptions {
         threads,
+        expected_entries,
         ..Default::default()
     };
     spacetrace_scan_core::scan(
@@ -188,9 +193,9 @@ fn walk(root: &str, threads: Option<usize>) -> (Tree, spacetrace_scan_core::Scan
 
 /// One real walk: what it peaked at, what it settled at, and how much of that
 /// is the tree rather than whatever the walk held on the way there.
-fn scan_mode(root: &str, threads: Option<usize>) {
+fn scan_mode(root: &str, threads: Option<usize>, expected_entries: Option<usize>) {
     let before = current_rss();
-    let (tree, stats) = walk(root, threads);
+    let (tree, stats) = walk(root, threads, expected_entries);
     let holding = current_rss();
     let peak = peak_rss();
 
@@ -245,9 +250,13 @@ fn scan_mode(root: &str, threads: Option<usize>) {
 /// every scan adds to them, a NAS runs out of memory in a fortnight and the
 /// tool looks like it leaks. Same question for the desktop's "Rescan".
 fn repeat_mode(root: &str, rounds: usize) {
+    let mut hint = None;
     for round in 1..=rounds {
-        let (tree, _) = walk(root, None);
+        // The second round onwards has a figure to go on, which is exactly
+        // what a scheduled agent and the desktop's "Rescan" have.
+        let (tree, _) = walk(root, None, hint);
         let entries = tree.len();
+        hint = Some(entries);
         let holding = current_rss();
         drop(tree);
         println!(
@@ -265,9 +274,12 @@ fn main() {
 
     match mode {
         "scan" => {
-            let root = args.get(1).expect("usage: memprobe scan <root> [threads]");
+            let root = args
+                .get(1)
+                .expect("usage: memprobe scan <root> [threads] [expected-entries]");
             let threads = args.get(2).and_then(|t| t.parse().ok());
-            scan_mode(root, threads);
+            let expected = args.get(3).and_then(|e| e.parse().ok());
+            scan_mode(root, threads, expected);
         }
         "repeat" => {
             let root = args.get(1).expect("usage: memprobe repeat <root> [rounds]");

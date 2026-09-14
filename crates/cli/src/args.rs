@@ -347,6 +347,10 @@ impl WalkArgs {
                 Some(secs) => Some(std::time::Duration::from_secs(secs)),
                 None => Some(spacetrace_scan_core::MOUNT_TIMEOUT),
             },
+            // Not a flag. It is a memory hint and the only honest source for
+            // it is the previous scan of this root, which the caller looks up
+            // — see `entry_count_hint` in main.rs.
+            expected_entries: None,
         }
     }
 }

@@ -158,6 +158,21 @@ impl Runner {
         Store::open(&self.db)
     }
 
+    /// How many entries the last scan of this root found, if there was one.
+    ///
+    /// Only ever a memory hint for the arena, so every way this can fail —
+    /// no database yet, a root scanned for the first time — is `None` rather
+    /// than an error the scan should care about.
+    fn entry_count_hint(&self, root: &Path) -> Option<usize> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let previous = self
+            .open_store()
+            .ok()?
+            .latest_for(&root.to_string_lossy(), Some(&self.host))
+            .ok()??;
+        usize::try_from(previous.files + previous.dirs).ok()
+    }
+
     /// Scan one root, store it, and apply that root's retention policy.
     ///
     /// Blocking: this walks the filesystem and writes SQLite. Callers on an
@@ -173,7 +188,14 @@ impl Runner {
                 root: root.path.clone(),
             })?;
 
-        let (tree, stats) = scan(&root.path, root.scan_options(), Arc::clone(&progress))
+        // A scheduled agent scans the same roots for months, so the previous
+        // scan is a good estimate of the next one's size and the arena can be
+        // allocated once instead of doubling its way up. A wrong guess costs a
+        // reallocation and changes no result, so a failure here is `None`.
+        let mut options = root.scan_options();
+        options.expected_entries = self.entry_count_hint(&root.path);
+
+        let (tree, stats) = scan(&root.path, options, Arc::clone(&progress))
             .with_context(|| format!("scanning {}", root.path.display()))?;
 
         let mut store = self.open_store()?;
