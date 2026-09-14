@@ -372,7 +372,12 @@ pub(crate) struct NewNode<'a> {
     pub(crate) nlink: u32,
 }
 
-/// Builder used by the scanner to flatten its recursive result into the arena.
+/// Builds the arena, one directory's worth of children at a time.
+///
+/// Every node except the root arrives through [`TreeBuilder::push_block`],
+/// which is what makes the arena invariants structural rather than remembered:
+/// a caller cannot push a child without saying whose child it is, and cannot
+/// push a directory's children in two pieces.
 pub(crate) struct TreeBuilder {
     pub(crate) nodes: Vec<Node>,
     names: String,
@@ -389,7 +394,7 @@ impl TreeBuilder {
         }
     }
 
-    pub(crate) fn push(&mut self, parent: NodeId, entry: NewNode<'_>) -> NodeId {
+    fn push_one(&mut self, parent: NodeId, entry: NewNode<'_>) -> NodeId {
         let id = self.nodes.len() as NodeId;
         let (name_off, name_len) = intern(&mut self.names, entry.name);
         self.nodes.push(Node {
@@ -409,6 +414,50 @@ impl TreeBuilder {
             children_len: 0,
         });
         id
+    }
+
+    /// Add one directory's children as a single uninterrupted run, and point
+    /// the parent at it. Returns the first child's id; child `i` is `start + i`.
+    ///
+    /// **This is the only way to add a child, and that is the point.** The two
+    /// arena invariants — children contiguous, every child after its parent —
+    /// are properties of *how nodes are added*, not things a reader can check
+    /// cheaply at the far end. Writing `children_start` and `children_len` here
+    /// rather than at the call site is what stops them being forgotten: the
+    /// ncdu importer forgot exactly that (C8) and produced a tree whose totals
+    /// were right and whose every `children()` call was empty.
+    ///
+    /// **The order blocks arrive in does not matter.** A parent is always
+    /// already in the arena when its children are added — it has to be, to be
+    /// named here — so a child's index exceeds its parent's whatever order the
+    /// directories finish in. That is what lets the walk write straight into
+    /// the arena from whichever thread listed a directory first, instead of
+    /// building a second tree in breadth-first order and copying it across.
+    ///
+    /// The length is counted from what was actually pushed rather than taken
+    /// from the iterator, so an `ExactSizeIterator` that lies produces a short
+    /// block rather than a `children_len` pointing past it.
+    pub(crate) fn push_block<'a>(
+        &mut self,
+        parent: NodeId,
+        children: impl ExactSizeIterator<Item = NewNode<'a>>,
+    ) -> NodeId {
+        let start = self.nodes.len() as NodeId;
+        self.nodes.reserve(children.len());
+        for entry in children {
+            self.push_one(parent, entry);
+        }
+        let len = self.nodes.len() as NodeId - start;
+        // An empty block leaves the parent alone: `children_start` stays 0,
+        // which is what an unreadable or empty directory has always stored and
+        // what `Tree::check` accepts only while `children_len` is 0 too.
+        if len == 0 {
+            return start;
+        }
+        let p = &mut self.nodes[parent as usize];
+        p.children_start = start;
+        p.children_len = len;
+        start
     }
 
     /// Absolute path of a node, for the passes that run before the tree exists.
@@ -446,11 +495,16 @@ impl TreeBuilder {
     }
 
     pub(crate) fn push_root(&mut self, entry: NewNode<'_>) -> NodeId {
-        self.push(NO_PARENT, entry)
+        debug_assert!(
+            self.nodes.is_empty(),
+            "the root is entry 0 or the arena has no root at all"
+        );
+        self.push_one(NO_PARENT, entry)
     }
 
-    /// Roll subtree totals up from the leaves. Relies on the BFS layout: every
-    /// child has a higher index than its parent, so one reverse pass is enough.
+    /// Roll subtree totals up from the leaves. Relies on the arena layout:
+    /// every child has a higher index than its parent, so one reverse pass
+    /// reaches a node only after everything below it has been added in.
     pub(crate) fn aggregate(&mut self) {
         for i in (1..self.nodes.len()).rev() {
             let (size, alloc, files, dirs, is_dir) = {
@@ -468,6 +522,20 @@ impl TreeBuilder {
 
     pub(crate) fn finish(mut self, root_path: PathBuf) -> Tree {
         self.aggregate();
+        // A scanned tree never passes through `Tree::check` — that runs on
+        // stored rows, where the bytes are not trusted. So nothing verified
+        // the walk's own output, and the layout it produces is now decided by
+        // the order directories happen to finish in rather than by a single
+        // flatten pass. In a debug build every scan test becomes a check of
+        // that layout, which is a great deal more evidence than the handful of
+        // unit tests below could be on their own. Debug only: this is a linear
+        // pass over the whole arena, and in release the same check still
+        // guards the path that matters (`TreeAssembler::finish`).
+        debug_assert_eq!(
+            Tree::check(&self.nodes),
+            Ok(()),
+            "the walk produced an arena that loading would reject"
+        );
         Tree::new(self.nodes, self.names, root_path)
     }
 }
@@ -544,54 +612,43 @@ impl Tree {
         // claims a parent"), so an imported scan could be stored and never
         // read again. `remove_subtree` walks ancestors to the sentinel too,
         // and would have spun forever on entry 0.
-        let root_id = builder.push(
-            Tree::NO_PARENT,
-            NewNode {
-                name: &root.name,
-                kind: root.kind,
-                size: root.size,
-                alloc: root.alloc,
-                mtime: root.mtime,
-                nlink: root.nlink,
-            },
-        );
+        let root_id = builder.push_root(NewNode {
+            name: &root.name,
+            kind: root.kind,
+            size: root.size,
+            alloc: root.alloc,
+            mtime: root.mtime,
+            nlink: root.nlink,
+        });
 
-        // Breadth-first with an explicit queue: a recursive descent would lay
-        // the children out depth-first and break invariant #2, and it would
-        // also blow the stack on a deep tree read off an untrusted file.
+        // An explicit queue rather than a recursive descent, because a nested
+        // file read off disk can be arbitrarily deep and recursing on it would
+        // blow the stack. The order it visits parents in is not itself a
+        // requirement — `push_block` keeps the invariants whatever order
+        // blocks arrive in — so this only has to be some order that reaches
+        // every parent before its children.
         let mut queue: VecDeque<(NodeId, Vec<ImportedNode>)> = VecDeque::new();
         queue.push_back((root_id, root.children));
         while let Some((parent, children)) = queue.pop_front() {
             if children.is_empty() {
                 continue;
             }
-            // Recorded before pushing anything: the children of one parent go
-            // in as one uninterrupted run, and that run's start and length are
-            // what every later reader addresses them by. `push` does not do
-            // this — the scanner fills these in during its own flatten pass —
-            // and leaving them at zero produces a tree whose totals are right
-            // and whose every `children()` call is empty.
-            let start = builder.nodes.len() as NodeId;
-            let len = children.len() as u32;
-            for child in children {
-                let id = builder.push(
-                    parent,
-                    NewNode {
-                        name: &child.name,
-                        kind: child.kind,
-                        size: child.size,
-                        alloc: child.alloc,
-                        mtime: child.mtime,
-                        nlink: child.nlink,
-                    },
-                );
+            let start = builder.push_block(
+                parent,
+                children.iter().map(|child| NewNode {
+                    name: &child.name,
+                    kind: child.kind,
+                    size: child.size,
+                    alloc: child.alloc,
+                    mtime: child.mtime,
+                    nlink: child.nlink,
+                }),
+            );
+            for (index, child) in children.into_iter().enumerate() {
                 if !child.children.is_empty() {
-                    queue.push_back((id, child.children));
+                    queue.push_back((start + index as NodeId, child.children));
                 }
             }
-            let p = &mut builder.nodes[parent as usize];
-            p.children_start = start;
-            p.children_len = len;
         }
 
         builder.finish(root_path)
@@ -762,3 +819,157 @@ impl std::fmt::Display for TreeError {
 }
 
 impl std::error::Error for TreeError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(name: &str, size: u64) -> NewNode<'_> {
+        NewNode {
+            name,
+            kind: EntryKind::File,
+            size,
+            alloc: size,
+            mtime: 0,
+            nlink: 1,
+        }
+    }
+
+    fn dir(name: &str) -> NewNode<'_> {
+        NewNode {
+            name,
+            kind: EntryKind::Dir,
+            size: 0,
+            alloc: 0,
+            mtime: 0,
+            nlink: 1,
+        }
+    }
+
+    /// The claim B1-K rests on: the arena does not need breadth-first order,
+    /// it needs children contiguous and every child after its parent. This
+    /// pushes the blocks in the order a parallel walk produces them — one
+    /// branch followed all the way down before its sibling is listed at all —
+    /// and asks for everything the layout is supposed to guarantee.
+    ///
+    /// In breadth-first order the ids would be a=1 b=2 deep=3 x=4 leaf=5.
+    /// Here they are a=1 b=2 deep=3 leaf=4 x=5, which is a layout the old
+    /// flatten pass could not produce.
+    #[test]
+    fn blocks_may_arrive_in_any_order_the_walk_finishes_them_in() {
+        let mut builder = TreeBuilder::with_capacity(6);
+        let root = builder.push_root(dir("root"));
+
+        let top = builder.push_block(root, [dir("a"), dir("b")].into_iter());
+        let (a, b) = (top, top + 1);
+        // `a`'s whole subtree, before `b` has been looked at.
+        let deep = builder.push_block(a, [dir("deep")].into_iter());
+        builder.push_block(deep, [file("leaf", 10)].into_iter());
+        // Only now the sibling, so its child lands after `a`'s grandchild.
+        builder.push_block(b, [file("x", 30)].into_iter());
+
+        let tree = builder.finish(PathBuf::from("/synthetic"));
+
+        assert_eq!(
+            Tree::check(tree.nodes()),
+            Ok(()),
+            "a tree loaded back from this layout must be accepted"
+        );
+        assert_eq!(tree.name(deep + 1), "leaf", "depth-first id assignment");
+        assert_eq!(tree.name(deep + 2), "x", "the sibling came last");
+
+        // The reverse pass is the thing that depends on the ordering property,
+        // so the totals are the real test of it.
+        assert_eq!(tree.total_size(), 40);
+        assert_eq!(tree.node(a).size, 10);
+        assert_eq!(tree.node(b).size, 30);
+        assert_eq!(tree.node(deep).size, 10);
+        assert_eq!(tree.node(root).files, 2);
+        assert_eq!(tree.node(root).dirs, 3, "a, b and deep");
+
+        // And the structure is navigable, which is what C8's bug broke while
+        // leaving every total correct.
+        assert_eq!(
+            tree.find("a/deep/leaf").map(|id| tree.name(id)),
+            Some("leaf")
+        );
+        assert_eq!(tree.find("b/x").map(|id| tree.name(id)), Some("x"));
+        assert_eq!(tree.children(a).count(), 1);
+        assert_eq!(tree.children(b).count(), 1);
+        assert_eq!(
+            tree.rel_path(tree.find("a/deep/leaf").unwrap()),
+            "a/deep/leaf"
+        );
+    }
+
+    /// Every node's subtree total is its own cost plus its children's totals.
+    /// Stated here as arithmetic rather than as expected numbers, because it
+    /// has to hold for a layout nobody wrote down in advance.
+    #[test]
+    fn every_subtree_total_is_its_own_cost_plus_its_children() {
+        let mut builder = TreeBuilder::with_capacity(8);
+        let root = builder.push_root(dir("root"));
+        let top = builder.push_block(root, [dir("one"), file("loose", 7)].into_iter());
+        let inner = builder.push_block(top, [file("p", 3), file("q", 5)].into_iter());
+        builder.push_block(inner, [].into_iter());
+
+        let tree = builder.finish(PathBuf::from("/synthetic"));
+
+        for id in tree.iter() {
+            let node = tree.node(id);
+            let children: u64 = tree.children(id).map(|c| tree.node(c).size).sum();
+            assert_eq!(
+                node.size,
+                node.own_size + children,
+                "entry {id} ({})",
+                tree.name(id)
+            );
+        }
+        assert_eq!(tree.total_size(), 15);
+    }
+
+    /// An unreadable or empty directory must look exactly like one that was
+    /// never given a block: `children_start` at 0 is only legal while
+    /// `children_len` is 0, and a block that wrote the start without any
+    /// children would fail the structural check on load.
+    #[test]
+    fn an_empty_block_leaves_the_parent_childless() {
+        let mut builder = TreeBuilder::with_capacity(2);
+        let root = builder.push_root(dir("root"));
+        let start = builder.push_block(root, [].into_iter());
+
+        assert_eq!(start, 1, "where the block would have begun");
+        let tree = builder.finish(PathBuf::from("/synthetic"));
+        assert_eq!(tree.node(root).children_len, 0);
+        assert_eq!(tree.node(root).children_start, 0);
+        assert_eq!(tree.children(root).count(), 0);
+        assert_eq!(Tree::check(tree.nodes()), Ok(()));
+    }
+
+    /// `children_len` is counted from what was pushed, not taken from the
+    /// iterator's own claim, so a wrong `len()` cannot produce a block that
+    /// points past the end of the arena.
+    #[test]
+    fn the_block_length_comes_from_what_was_actually_pushed() {
+        struct Liar(std::vec::IntoIter<NewNode<'static>>);
+        impl Iterator for Liar {
+            type Item = NewNode<'static>;
+            fn next(&mut self) -> Option<Self::Item> {
+                self.0.next()
+            }
+        }
+        impl ExactSizeIterator for Liar {
+            fn len(&self) -> usize {
+                99
+            }
+        }
+
+        let mut builder = TreeBuilder::with_capacity(4);
+        let root = builder.push_root(dir("root"));
+        builder.push_block(root, Liar(vec![file("only", 1)].into_iter()));
+
+        let tree = builder.finish(PathBuf::from("/synthetic"));
+        assert_eq!(tree.node(root).children_len, 1);
+        assert_eq!(Tree::check(tree.nodes()), Ok(()));
+    }
+}

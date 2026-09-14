@@ -959,39 +959,30 @@ fn flatten(builder: &mut TreeBuilder, root_id: NodeId, root_children: Children) 
         if entries.is_empty() {
             continue;
         }
-        let start = builder.nodes.len() as NodeId;
-        let len = entries.len() as u32;
-
-        let mut grandchildren: Vec<(NodeId, Children)> = Vec::new();
-        for (i, entry) in entries.into_iter().enumerate() {
-            let from = entry.name_off as usize;
-            let name = names
-                .get(from..from + entry.name_len as usize)
-                .unwrap_or_default();
-            let id = builder.push(
-                parent_id,
+        let start = builder.push_block(
+            parent_id,
+            entries.iter().map(|entry| {
+                let from = entry.name_off as usize;
                 NewNode {
-                    name,
+                    name: names
+                        .get(from..from + entry.name_len as usize)
+                        .unwrap_or_default(),
                     kind: entry.kind,
                     size: entry.size,
                     alloc: entry.alloc,
                     mtime: entry.mtime,
                     nlink: entry.nlink,
-                },
-            );
-            debug_assert_eq!(id, start + i as NodeId);
+                }
+            }),
+        );
+
+        for (index, entry) in entries.into_iter().enumerate() {
             if let Some(kids) = entry.children {
                 if !kids.entries.is_empty() {
-                    grandchildren.push((id, *kids));
+                    queue.push_back((start + index as NodeId, *kids));
                 }
             }
         }
-
-        let parent = &mut builder.nodes[parent_id as usize];
-        parent.children_start = start;
-        parent.children_len = len;
-
-        queue.extend(grandchildren);
     }
 }
 
