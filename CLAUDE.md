@@ -18,6 +18,7 @@ cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
 cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc --all-targets
+cargo run -q -p spacetrace-changelog -- markdown --component cli > CHANGELOG.md
 ```
 
 **`--all-targets` şart:** onsuz test kodu hiç derlenmiyor ve `#[cfg(test)]`
@@ -167,6 +168,9 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
   düzenleme; bayat kalırsa CI kırılıyor. Kurallar
   [crates/changelog/README.md](crates/changelog/README.md).
 - `cargo clippy` uyarısı bırakma; CI `-D warnings` ile çalışıyor.
+- **İki ayrı liste var ve biri geçici.** Kökteki `TODO.md` gerçek liste, depoda.
+  `tasks/` (`todo.md`, `lessons.md`) gitignore'da — oturum çalışma notları,
+  otorite değil. Bir işi "kapandı" diye işaretlerken `TODO.md`'ye yaz.
 
 ## Crate'ler
 
@@ -182,8 +186,8 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 | `changelog` | Üç bileşenin changelog'u, beş dilde; üreteç aynı crate'in ikilisi |
 | `buildinfo` | İkiliye commit, derleme tarihi ve kanal damgası (`build.rs`) |
 
-Bağımlılık yönü tek yönlü. Ajan (Faz 2) bu üçünü kullanır, `cli`'ye
-bağlanmaz.
+Bağımlılık yönü tek yönlü. Ajan `scan-core`, `store` ve `buildinfo`'ya
+bağlanır; `cli`'ye ve `diff`'e bağlanmaz.
 
 ## Depolar
 
@@ -191,7 +195,7 @@ Dört fazın hepsi çalışıyor. K2 gereği kod üç depoda:
 
 | Depo | İçerik | Görünürlük |
 |------|--------|------------|
-| bu depo | scan-core, store, diff, treemap, cli, agent | public, Apache-2.0 |
+| bu depo | yukarıdaki dokuz crate'in hepsi | public, Apache-2.0 |
 | [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) | Tauri v2 + React masaüstü | private, ticari |
 | [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) | Filo panosu, trend, uyarılar | private, ticari |
 
