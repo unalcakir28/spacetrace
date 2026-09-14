@@ -107,7 +107,7 @@ fn children_are_contiguous_and_sorted_by_size_on_demand() {
         let n = tree.node(id);
         for child in tree.children(id) {
             assert_eq!(tree.node(child).parent, id);
-            assert!(child > id, "BFS layout puts children after their parent");
+            assert!(child > id, "the arena puts children after their parent");
         }
         assert_eq!(tree.children(id).count(), n.children_len as usize);
     }

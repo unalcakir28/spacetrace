@@ -36,7 +36,8 @@ Beşi de 7 Eylül 2026'da karara bağlandı. Gerekçeler ve ölçümler
 ## Faz 1 — Çekirdek ve CLI ✅
 
 - [x] Workspace iskeleti, CI (ubuntu/macos/windows), Apache-2.0
-- [x] `scan-core`: paralel DFS, arena ağaç (BFS düzeni, bitişik çocuklar)
+- [x] `scan-core`: paralel DFS, arena ağaç (bitişik çocuklar, çocuk indeksi
+      ebeveyninden büyük — başlangıçta BFS düzenindeydi, B1-K'den beri değil)
 - [x] Hardlink tekilleştirme `(dev, ino)`, `--no-dedupe` ile kapatılabilir
 - [x] Sembolik bağlantılar izlenmiyor, kendi boyutlarıyla sayılıyor
 - [x] `alloc` = `st_blocks * 512`; `size` = yalnızca dosya baytları

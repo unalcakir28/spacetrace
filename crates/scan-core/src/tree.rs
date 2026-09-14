@@ -549,9 +549,9 @@ impl TreeBuilder {
 ///
 /// Foreign formats — ncdu's JSON today, whatever comes next — are nested and
 /// carry only each entry's own cost. Turning that into this crate's arena
-/// means laying the nodes out in BFS order and summing the subtree totals
-/// upward, which is exactly what the scanner already does at the end of a
-/// walk. An importer that did its own version of that would be a second
+/// means placing each directory's children as one contiguous run after their
+/// parent and summing the subtree totals upward, which is exactly what the
+/// scanner already does. An importer that did its own version of that would be a second
 /// implementation of the arena invariants (#2) and of aggregation, free to
 /// drift; `Tree::from_nested` exists so there is only ever one.
 #[derive(Debug, Clone)]
@@ -604,9 +604,9 @@ impl Tree {
     /// Build a tree from a nested description, through the same layout and
     /// aggregation the scanner uses.
     ///
-    /// Children are laid out breadth-first and contiguously, so the arena
-    /// invariants hold by construction rather than by an importer remembering
-    /// them.
+    /// Every directory's children go in as one contiguous run after their
+    /// parent ([`TreeBuilder::push_block`]), so the arena invariants hold by
+    /// construction rather than by an importer remembering them.
     pub fn from_nested(root_path: PathBuf, root: ImportedNode) -> Tree {
         let mut builder = TreeBuilder::with_capacity(root.count());
         // `NO_PARENT`, not `0`. A root that names itself as its parent looks
