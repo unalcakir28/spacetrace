@@ -1,6 +1,6 @@
 //! A snapshot that changed on the way here must be refused, not believed.
 //!
-//! The structural check (`Tree::from_parts_checked`) already stops a snapshot
+//! The structural check (`TreeAssembler::finish`) already stops a snapshot
 //! that would panic or loop. These tests are about the other kind of damage:
 //! a single value that changed and left a perfectly valid tree behind. That
 //! one is worse, because it produces a number instead of an error.

@@ -13,7 +13,7 @@ listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye ba
 ## Komutlar
 
 ```bash
-cargo test --workspace                   # 381 test, hepsi geçmeli
+cargo test --workspace                   # 385 test, hepsi geçmeli
 cargo clippy --workspace --all-targets   # uyarısız olmalı
 cargo fmt --all
 cargo build --release                    # ikili: target/release/spacetrace
@@ -62,11 +62,29 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
    için oracle aynı dosyadaki naif seri yürüyüş, çünkü `du` mantıksal boyutu
    veremiyor (BSD `-A` bloğa yuvarlıyor, GNU `--apparent-size` dizin inode'unu
    ekliyor). Tarama davranışını değiştirirken bu dosyayı genişlet.
-2. **Arena düzeni.** Düğümler BFS sırasında; bir düğümün çocukları bitişik
-   (`children_start .. +children_len`) ve her çocuğun indeksi ebeveyninden
-   **büyük**. `TreeBuilder::aggregate` tek ters geçişte topluyor ve `store`
-   düzeni olduğu gibi saklıyor — sıra bozulursa ikisi de sessizce yanlış sonuç
-   verir.
+2. **Arena düzeni: iki özellik, ve yalnızca iki.** Bir düğümün çocukları
+   bitişik (`children_start .. +children_len`), ve her çocuğun indeksi
+   ebeveynininkinden **büyük**. `TreeBuilder::aggregate` tek ters geçişte
+   topluyor (ikinci özellik bunun için), `store` düzeni olduğu gibi saklıyor,
+   `Tree::check` tam olarak bu ikisini denetliyor.
+
+   **BFS değil, ve bu 14 Eylül 2026'da değişti.** Yıllarca "BFS sırasında"
+   yazdı çünkü öyleydi: yürüyüş ayrı bir ara ağaç kuruyor, `flatten` onu
+   seviye seviye kopyalıyordu. Artık her dizin listelenir listelenmez arenaya
+   yazılıyor (B1-K, çift depolama kalktı), yani **düzen dizinlerin bitiş
+   sırası**. İki özellik yapı gereği tutuyor — ebeveyn adlandırılabilmek için
+   zaten arenada olmak zorunda. Çocuk eklemenin tek yolu
+   `TreeBuilder::push_block`.
+
+   **Sonuç: iki tarama aynı düzeni vermez.** Aynı diskin iki taraması aynı
+   cevapları verir (test: `the_thread_count_does_not_change_the_answer`, yol
+   yol karşılaştırıyor) ama aynı id'leri vermez. Zaten hiçbir tüketici
+   vermesine güvenmiyordu — `diff` ada göre eşliyor, masaüstü id'leri
+   generation'a bağlıyor — ama **id sırasına dayanan yeni bir şey yazma.**
+   Fark eden tek yer `dupes`: grup temsilcisi en düşük id ve bu tarama içinde
+   deterministik, ama iki tarama arasında "ilk kopya" yer değiştirebilir.
+   Tarayıcının kendi clone tekilleştirmesi bu yüzden `(derinlik, yol)` ile
+   sıralıyor, id ile değil.
 3. **Sembolik bağlantılar izlenmez** (kendi boyutlarıyla sayılır), **sabit
    bağlantılar bir kez sayılır** (`(dev, ino)`; her iki ad da ağaçta görünür,
    biri 0 bayt katkı yapar). **Hangi adın baytları taşıdığı belirsizdir** —
@@ -225,7 +243,8 @@ Kodda dikkat edilecekler:
   döngüye sokuyor. İki ağacı bellekte karşılaştıran bir test bunu göremez —
   11 Eylül 2026'da göremedi ve kırık `import` yayınlandı.
 - **`store::load` bir güven sınırı.** Uzaktan indirilen snapshot da bu yoldan
-  geçiyor, bu yüzden `Tree::from_parts_checked` arena değişmezlerini doğruluyor.
+  geçiyor, bu yüzden `TreeAssembler::finish` arena değişmezlerini doğruluyor
+  (`Tree::check`).
   Doğrulamayı atlayan bir yol ekleme: bozuk `children_start` indeks panic'i,
   geriye dönük bir çocuk işaretçisi sonsuz döngü demek.
 - **macOS'ta listeleme iki yoldan geçiyor, ve ikisi aynı rakamı vermek
@@ -240,7 +259,7 @@ Kodda dikkat edilecekler:
   `lstat` ödeniyor (ölçüldü: maliyeti yok).
 - **Yapı doğrulaması değer doğrulaması değil, ve ikincisi `content_hash`.**
   Bir `size` alanındaki bit dönmesi kusursuz bir ağaç bırakır ve yanlış rakam
-  raporlar — `from_parts_checked` bunu göremez. Şema v3'ten beri her tarama
+  raporlar — `Tree::check` bunu göremez. Şema v3'ten beri her tarama
   kendi mantıksal içeriğinin SHA-256'sını taşıyor
   (`crates/store/src/digest.rs`); `import_snapshot` gelen satırlardan yeniden
   hesaplayıp tutmazsa **hiçbir şeyi** içe aktarmıyor, `export_snapshot`
@@ -281,15 +300,23 @@ Bunlara denk gelirsen bug değil, bilinen borç (tam liste TODO.md'de):
   9 Eylül 2026, `fcntl(F_LOG2PHYS_EXT)`, varsayılan açık) — bu satır 11 Eylül'e
   kadar tersini söylüyordu ve yukarıdaki değişmez 1 ile çelişiyordu; ikisi
   aynı dosyada.
-- Tarama tüm ağacı bellekte tutuyor. **Ölçüldü (11 Eylül 2026):** ağaç
-  **96 bayt/girdi**, 100k–10M arası doğrusal ve iki platformda aynı (10M =
-  916 MiB). RSS bundan fazlası ve fark platforma bağlı: Linux'ta ağacın
-  ~1,2 katı ve tekrarlı taramalarda düz; **macOS'ta ~4 katı ve her taramada
-  +42 MiB büyüyor** (250k girdilik ağaçta 20 taramada 125 → 941 MiB). Aynı
-  kod — bulk yolu kapatılarak ölçüldü, macOS'ta o da büyüyor — yani sebep
-  libmalloc, sızıntı değil; `malloc_zone_pressure_relief` hiçbir şey
-  değiştirmiyor. Ajan etkilenmiyor (Linux). Masaüstünde "Yeniden tara"
-  etkileniyor. Tam ölçüm TODO.md D4.
+- Tarama tüm ağacı bellekte tutuyor. Ağacın kendisi **96 bayt/girdi**,
+  100k–10M arası doğrusal ve iki platformda aynı (10M = 916 MiB).
+
+  **Çift depolama 14 Eylül 2026'da kalktı (B1-K)** ve ölçüm o gün yeniden
+  yapıldı: `/Applications` tepe 91,5 → 57,6 MB, ipucu verilince 221 → **125
+  bayt/girdi**; Linux'ta "ağaç olmayan" kısım yarıya indi. Ölçüm aracı depoda:
+  `cargo run --release -p spacetrace-scan-core --example memprobe -- scan <kök>`
+  ve karşılaştırma için `scripts/bench-walk.sh`.
+
+  **Kalan fark platforma bağlı ve macOS'ta hâlâ birikiyor.** Linux'ta tepe
+  ağacın ~1,5 katı ve tekrarlı taramalarda neredeyse düz; macOS'ta libmalloc
+  parçalanmış span'ları geri vermiyor, o yüzden tepe ayırma trafiğiyle
+  büyüyor — ve trafik korpusa bağlı: `/Applications` 8 taramada +7 MiB,
+  `~/github` (aynı girdi sayısı, üç katı ad baytı) 8 taramada 205 → 445 MiB.
+  Sızıntı değil; `malloc_zone_pressure_relief` hiçbir şey değiştirmiyor.
+  Ajan etkilenmiyor (Linux). Masaüstünde "Yeniden tara" etkileniyor, ama
+  artık `expected_entries` ipucunu geçiyor. Tam ölçüm TODO.md D4.
 - Ajanda yerleşik TLS yok; ters vekil öneriliyor. Hız sınırlama da yok (token
   zaten gerekli olduğu için ertelendi).
 

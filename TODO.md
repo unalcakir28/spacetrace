@@ -4,9 +4,9 @@ Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
 rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 10 Eylül 2026 (**Sıra 1–4 kapandı** — E1, E2, A4, A1, A2,
-A4w, B1, A3, A5. Üç platformda CI yeşil. B1'in kalan maddesi **B1-K** ayrı
-bir oturumda Fable modeliyle derin araştırmaya ertelendi. 10 Eylül ayrıca
+Son güncelleme: 14 Eylül 2026 (**B1-K bitti** — çift depolama kalktı, ölçüm
+altyapısı depoda. Öncesi: **Sıra 1–4 kapandı** — E1, E2, A4, A1, A2,
+A4w, B1, A3, A5. Üç platformda CI yeşil. 10 Eylül ayrıca
 yayın günüydü: masaüstü 0.4.0 → 0.4.2, sonra A5 ile birlikte masaüstü 0.5.0,
 hub 0.4.0 ve CLI 0.5.0. Şema atlaması olduğu için sıra zorunluydu: önce
 masaüstü ve hub, sonra CLI (gerekçe docs/RELEASING.md). Ayrıca macOS FDA
@@ -250,8 +250,8 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 
 ### B. Hız — ölçülmüş açıklar
 
-- [ ] **B1 Bellek** — *(9 Eylül 2026: ölçüldü, parçalandı, dördü yapıldı.
-      Kalan tek madde **B1-K**, derin araştırmaya ertelendi.)*
+- [x] **B1 Bellek** — *(9 Eylül 2026: ölçüldü, parçalandı, dördü yapıldı.
+      Beşincisi ve asıl olanı, **B1-K**, 14 Eylül 2026'da bitti.)*
 
       **Dağılım — düzeltme öncesi** (`/Applications`, 412.232 girdi, tepe RSS
       119 MB = **290 B/girdi**), faz faz RSS probuyla ölçüldü:
@@ -294,8 +294,9 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
             (`Children { names, entries }`), çocuklar `Option<Box<Children>>`.
             `to_string_lossy()` geçerli UTF-8'de ödünç döndürdüğü için girdi
             başına `String` tahsisi tamamen kalktı: **412k → 35k tahsis.**
-      - [ ] **B1-K Çift depolamayı kaldır** — kalan asıl kazanç, **derin
-            araştırmaya ertelendi** (bkz. aşağıdaki not).
+      - [x] **B1-K Çift depolamayı kaldır** — yapıldı *(14 Eylül 2026)*,
+            aşağıdaki notta tarif edilen araştırma yapılıp **sorunun kendisi
+            yanlış kurulmuş bulundu**.
 
       **Hedef düzeltmesi:** RESEARCH.md'deki **~25 B/dosya** hedefi bizim alan
       kümemizle **ulaşılabilir değil** ve karşılaştırma elmayla armut. ncdu 2
@@ -306,41 +307,77 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       *Rakip:* dua-cli 64 B arena düğümü + paylaşılan ad deposu, RSS %49 aşağı;
       ncdu 2 dosyada 25 B, dizinde 56 B.
 
-      ### B1-K — çift depolama, derin araştırmaya ertelendi
+      ### B1-K — çift depolama ✅ *(14 Eylül 2026)*
 
-      **Karar (9 Eylül 2026):** kalan iş sıradan bir optimizasyon değil, bir
-      mimari karar. Ayrı bir oturumda **Fable modeliyle** derinlemesine
-      araştırılacak; o araştırma bitmeden kod yazılmayacak.
+      **Cevap: ikilem yoktu.** Aşağıdaki dört soru araştırmanın çıkış
+      noktasıydı ve birincisi ötekileri gereksiz kıldı.
 
-      **Problem tanımı.** Tepe bellek 231 B/girdi ve bunun **192'si çift
-      depolama**: yürüyüşün ürettiği `RawEntry` ara ağacı (48 B) ile arena
-      (`Node` 72 B) aynı anda yaşıyor, üstüne serbest bırakılan ara ağaç
-      belleği işletim sistemine geri dönmüyor (arena tek parça büyük bir
-      tahsis istiyor, boşalan 48 baytlık parçalar ona yaramıyor).
+      *"Çift depolama, değişmez #2 korunarak kaldırılabilir mi?"* — Evet, ve
+      değişmez #2 sanıldığından zayıfmış. Arenanın istediği şey BFS değil, iki
+      özellik: çocuklar bitişik, her çocuğun indeksi ebeveyninden büyük.
+      Depodaki her tüketici tek tek denetlendi ve **hiçbiri seviye sırası
+      istemiyor**: `aggregate` ve `median_bands` yalnızca ikinci özelliğe
+      dayanan ters geçişler, `Tree::check` tam olarak o iki özelliği
+      denetliyor, `store` düzeni olduğu gibi saklıyor, `diff` çocukları **ada
+      göre** eşliyor, masaüstü id'leri generation'a bağlıyor. Kodda "BFS"
+      yalnızca yorumlarda ve belgelerde geçiyordu.
 
-      **Neden kolay değil.** Yürüyüş paralel DFS üretiyor, arena BFS düzeni
-      istiyor (değişmez #2: çocuklar bitişik, her çocuğun indeksi
-      ebeveyninden büyük). İki düzen arasında bir ara yapı kaçınılmaz
-      görünüyor. Bilinen tek kökten çözüm seviye-senkron BFS ve o da
-      iş-çalan DFS'in **ölçülmüş 5.2× kazancını** riske atıyor — yani
-      savunabildiğimiz tek hız iddiasını.
+      Bir dizinin listesi zaten tek thread'de tamamlandığı için, o an arenada
+      bitişik bir blok açılıp yazılabiliyor (`TreeBuilder::push_block`).
+      Ebeveyn adlandırılabilmek için arenada zaten olmak zorunda, yani ikinci
+      özellik yapı gereği tutuyor. Ara ağaç tamamen kalktı.
 
-      **Araştırmanın cevaplaması gerekenler:**
-      - Çift depolama, değişmez #2 korunarak kaldırılabilir mi?
-      - Seviye-senkron BFS derin ve dar ağaçlarda paralelliği ne kadar
-        kaybediyor? (Derin/dar en kötü durum; `/Applications` gibi geniş
-        ağaçlar iyimser örnek.)
-      - Ara yapı kaldırılamıyorsa, arena'nın tahsisini ara yapının boşalttığı
-        belleği kullanacak biçimde kurmak mümkün mü (arena chunk'lı olsun,
-        tek parça olmasın)? Bu, değişmez #2'yi bozmadan çift depolamanın
-        yarısını geri kazanabilir.
-      - dua-cli 64 B'a nasıl indi ve ara yapı sorununu nasıl çözdü?
-        (Kaynak kodu MIT, okunabilir — `[bulunamadı]` değil, okunmadı.)
+      Seviye-senkron BFS'e, iş-çalan DFS'i riske atmaya, chunk'lı arenaya
+      **gerek olmadı** — üçü de yanlış kurulmuş bir kısıtın çözümleriydi.
+      dua-cli'nin yolu da okundu (`traverse.rs`): onlar da ara ağaç tutmuyor,
+      girdileri akarken arenaya ekliyorlar; farkları tek tüketici thread +
+      sınırlı kanal. Bize uymadı, çünkü listeleyen thread çocukların id'lerini
+      recursion'dan **önce** bilmek zorunda.
 
-      **Araştırma öncesi zorunlu:** tekrarlanabilir bir benchmark koşumu.
-      Bugün ardışık ölçüm %12'lik **sahte** bir gerileme gösterdi; iki ikiliyi
-      dönüşümlü koşturunca tersi çıktı. Bellek **ve** hız birlikte, dönüşümlü
-      ve medyanlı ölçülmeden hiçbir tasarım kabul edilmeyecek.
+      **Ölçüm** (`examples/memprobe.rs`, `scripts/bench-walk.sh`;
+      serpiştirilmiş 9 tur, medyan, M3 Max):
+
+      | | taban | sonra |
+      |---|---|---|
+      | `/Applications` tepe | 91,5 MB | **57,6 MB** (-%37) |
+      | `/Applications` B/girdi, ipuçlu | 221 | **125** (-%43) |
+      | `~/github` tepe | 234,6 MB | **201,6 MB** (-%14) |
+      | Linux 75k, tepe | 15,0 MiB | **10,7 MiB** (-%29) |
+      | Linux 75k, "ağaç olmayan" | 8,4 MiB | **4,1 MiB** (-%51) |
+
+      Dört dağılımın hiçbiri örtüşmüyor. **Hız iki korpusta da aynı**:
+      2022'ye karşı 1956 ms ve 739'a karşı 750 ms, ikisinde de aralıklar iç
+      içe — yani söylenecek şey "aynı", iki medyanın farkı değil.
+
+      **`~/github`'da kazancın küçük kalması B1-K'nin işi değil.** Orada
+      tepenin ~140 MiB'ı canlı veri değil: taban ikili de ağacı düşürdükten
+      sonra 201 MiB'da kalıyor. macOS libmalloc'un geri vermediği sayfalar,
+      yani D4. Linux'ta aynı kod "ağaç olmayan" kısmı yarıya indiriyor ve
+      yapısal sonuç o.
+
+      **`ScanOptions::expected_entries`** eklendi: arena artık yürüyüş
+      sırasında dolduğu için son boyutu baştan bilinmiyor, ve ikiye katlanan
+      bir `Vec` son taşımada iki tamponu birden tutuyor (412k'da 57 MB; N =
+      2^k+1'de arenanın iki katı). Bayrak değil — tek dürüst kaynağı aynı
+      kökün önceki taraması. CLI ve ajan store'dan soruyor, masaüstü zaten
+      ilerleme çubuğu için tuttuğu rakamı veriyor.
+
+      **Gözlemlenebilir değişiklik:** iki tarama artık aynı id'leri vermiyor
+      (aynı cevapları veriyor). `dupes`'un grup temsilcisi tarama içinde
+      deterministik, iki tarama arasında yer değiştirebilir. Tarayıcının kendi
+      clone tekilleştirmesi bu yüzden `(derinlik, yol)` ile sıralıyor.
+
+      **Doğrulama:** `/Applications`'ın 412.983 satırı CSV dışa aktarımında
+      birebir aynı. `/usr`'da ağacın şekli aynı, yalnızca hangi hardlink
+      adının baytları taşıdığı değişiyor — değişmez 3 bunu zaten belirsiz
+      ilan ediyor ve **eski ikili de kendi iki koşusu arasında 245 satırda
+      değişiyor** (ölçüldü).
+
+      **Hedef düzeltmesi hâlâ geçerli:** RESEARCH.md'deki ~25 B/dosya bizim
+      alan kümemizle ulaşılabilir değil (ncdu 2 düğüm başına `own_size`/
+      `own_alloc`/`files`/`dirs` tutmuyor). Taban aritmetiğimiz `Node` 72 B +
+      ad ~21 B = ~93 B/girdi, ve ipuçlu ölçüm artık **125 B/girdi**, yani
+      dua-cli mertebesinde.
 
 - [x] **B2 Thread sayısı ayarı** — yapıldı *(10 Eylül 2026)*. `--threads N`,
       ajanda kök başına `threads`, ve yürüyüş artık rayon'un global havuzunda
@@ -689,6 +726,27 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       aynı süreçte tekrar tarıyor ve macOS'ta her seferinde büyüyor; uzun bir
       oturumda görünür. Ucuz bir çare yok (relief işe yaramıyor), gerçek çare
       yürüyüşteki ayırma trafiğini azaltmak — yani B1.
+
+      **Düzeltme (14 Eylül 2026): "tarama başına +42 MiB" korpusa bağlıymış
+      ve bu satır onu söylemiyordu.** B1-K'nin taban ölçümü aynı prob'u iki
+      ağaçta koşturdu, 8 tur, tek süreçte:
+
+      | | `/Applications` | `~/github` |
+      |---|---|---|
+      | girdi | 412.983 | 428.731 |
+      | 1. tur | 87,4 MiB | 204,8 MiB |
+      | 8. tur | 94,8 MiB | 445,0 MiB |
+      | tarama başına | +1,0 MiB (düzleşiyor) | +34 MiB (düzleşmiyor) |
+
+      Neredeyse aynı girdi sayısı, tamamen farklı davranış. Ayırt eden şey
+      ayırma trafiği: `~/github`'ın adları 21,7 MiB, `/Applications`'ınki
+      8,2 MiB. Yani "macOS'ta her tarama +42 MiB" bir üst sınır, kural değil.
+
+      **B1-K sonrası (14 Eylül 2026):** ayırma trafiği düştüğü için tepe de
+      düştü — `/Applications` 91,5 → 57,6 MB, Linux'ta "ağaç olmayan" kısım
+      yarıya indi. Birikme macOS'ta duruyor (sebep libmalloc, kod değil) ama
+      daha düşük bir tabandan başlıyor, ve masaüstü artık `expected_entries`
+      ipucunu geçiyor.
 - [ ] **D5 `store::save` ilerleme geri bildirimi** — büyük ağaçlarda tek
       transaction, kullanıcı donmuş sanıyor.
       *Ölçüldü (11 Eylül 2026) ve sanıldığı kadar acil değil:*
@@ -740,7 +798,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 |------|-----|--------------|
 | ~~1~~ ✅ | ~~E1, E2~~ | Yarım saat, ve diğer her kararın girdisi — yanlış rekabet haritası üstüne plan yapılmasın. **Bitti (9 Eylül 2026)**, README düzeltmesi de dâhil |
 | ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Doğruluk iddiamız Windows'ta karşılanmıyordu. A4 (Unix) önce yapıldı çünkü test hiç yoktu. **Bitti (9 Eylül 2026), Windows CI yeşil** |
-| ~~3~~ ✅ | ~~B1~~ | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar. **Dördü bitti (9 Eylül 2026); kalan tek madde B1-K, en altta** |
+| ~~3~~ ✅ | ~~B1~~ | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar. **Dördü bitti (9 Eylül 2026), B1-K 14 Eylül'de** |
 | ~~4~~ ✅ | ~~A3, A5~~ | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma artık sessiz değil. **Bitti (10 Eylül 2026)** |
 | 5 | ~~B2~~ ✅, **B3 ← sıradaki** | Ucuz ve ölçülmüş — B2 bitti (10 Eylül 2026); B3 gerçek bir HDD ya da ağ sürücüsü istiyor |
 | ~~6~~ | ~~C3, D1~~ | İkisi de yapıldı |
@@ -748,7 +806,7 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
 | 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
 | 9 | ~~C1–C9~~ ✅ | Özellik paritesi tamamlandı *(11 Eylül 2026)* |
 | 10 | E3–E5, D2, D3 | Yayın hazırlığı |
-| **son** | **B1-K** | Çift depolama. Sıradan optimizasyon değil, mimari karar — **ayrı oturumda Fable modeliyle derin araştırma**, önce benchmark altyapısı |
+| ~~son~~ ✅ | ~~B1-K~~ | Çift depolama. Araştırma yapıldı ve **sorun yanlış kurulmuştu**: arena BFS istemiyormuş, iki özellik istiyormuş. Ara ağaç kalktı, hız aynı, tepe bellek `/Applications`'ta -%37. **Bitti (14 Eylül 2026)** |
 
 ---
 
@@ -769,9 +827,11 @@ orada, burada yalnızca borç kaydı olarak duruyorlar.
 - [ ] btrfs/ZFS: reflink ve sıkıştırma yüzünden ağaç yürüyüşü yanlış;
       "dosya sistemi farkında mod" gerekiyor → **A6**
 - [x] ~~10M+ dosyalı köklerde bellek profili ölçülmedi~~ → **ölçüldü**
-      (9 Eylül 2026): `Node` 104 B, gerçek tepe **276–437 B/girdi**
-      (412k girdi = 122 MB RSS). Hedef ~25 B/dosya, yani **11–17 kat üstünde**;
-      10M dosyaya ekstrapole ~2,8 GB. Düzeltme işi → **B1**, yeniden ölçüm → **D4**
+      (9 Eylül 2026): `Node` 104 B, gerçek tepe **276–437 B/girdi**.
+      Sonra düzeltildi: `Node` **72 B** (B1), çift depolama kalktı (B1-K), ve
+      14 Eylül 2026'da tepe `/Applications`'ta **125 B/girdi** (ipuçlu).
+      Ölçüm aracı artık depoda: `examples/memprobe.rs`. Kalan → **D4**
+      (macOS libmalloc birikmesi, kod değil)
 - [ ] `Tree::rel_path` her çağrıda kökten yürüyor — sıcak döngüde kullanılmamalı
       (**D6**; ölçüldü 11 Eylül 2026: CSV dışa aktarımında 412.380 satır için
       0,28 s, yol kurmayan ncdu dışa aktarımı 0,16 s. Derinlikte doğrusal,

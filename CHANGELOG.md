@@ -16,6 +16,10 @@ because anyone can install them.
 
 - `spacetrace dupes` finds files holding identical contents and says what deleting the extras would give back. It reads as little as it can: files of different lengths cannot match and the scan already knows every length, files that share a length are separated by their first 16 KiB, and only what survives both is read in full. On a 33.8 GiB tree of 375,585 files that came to 2.6 GiB of reading — 7.7% — and a second run read 30 MiB, because whole-file hashes are remembered between runs. Hardlinked names are listed separately and counted as reclaiming nothing, since they already share their bytes. Nothing is deleted; which copy to keep is not a decision this tool has the context to make.
 
+### Performance
+
+- Scanning uses markedly less memory. The walk used to build a tree of its own and copy it into the final one, so both were in memory at the peak; it now writes entries into the final tree as each directory is read. On a 412,983-entry folder the peak fell from 91.5 MB to 57.6 MB, and to 49.3 MB when a previous scan of the same folder is on record to size the structure from. Scanning takes the same time as before, and every figure it reports is unchanged.
+
 ## 0.6.1 — 2026-09-11
 
 ### Fixed

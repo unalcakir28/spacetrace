@@ -1,9 +1,15 @@
 //! Parallel filesystem scanner producing a compact arena tree.
 //!
-//! The tree is laid out in BFS order so that every node's children occupy a
-//! contiguous index range. That keeps per-node overhead low (no `Vec` per
-//! node), makes aggregation a single reverse pass, and gives cache-friendly
-//! traversal for the treemap layout.
+//! Every node's children occupy a contiguous index range and every child sits
+//! at a higher index than its parent. That keeps per-node overhead low (no
+//! `Vec` per node), makes aggregation a single reverse pass, and gives
+//! cache-friendly traversal for the treemap layout.
+//!
+//! Those two properties are the whole promise; the order is not breadth-first
+//! and is not stable between scans. The walk writes each directory into the
+//! arena as soon as it has been listed, so a node id identifies an entry
+//! within one tree and nothing beyond it — across snapshots the path is the
+//! identity.
 
 mod age;
 #[cfg(target_os = "macos")]

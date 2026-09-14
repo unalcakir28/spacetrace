@@ -53,7 +53,7 @@ command the agent does not have is not worth the bytes.
 
 A tree that keeps a `Vec<Child>` per node is expensive at millions of files,
 both in memory and in pointer chasing. Instead, a single `Vec<Node>` is used,
-with nodes laid out in **BFS order**. This has three consequences:
+and the layout guarantees exactly two things:
 
 1. A node's children occupy a **contiguous** index range
    (`children_start .. children_start + children_len`), so there is no need
@@ -61,7 +61,19 @@ with nodes laid out in **BFS order**. This has three consequences:
 2. Every child has a **larger** index than its parent. Computing subtree
    totals is therefore a single reverse pass (`aggregate`), with no
    recursion.
-3. Treemap layout and rendering scan the array in order — cache-friendly.
+
+Nothing more is promised, and in particular the order is **not** breadth-first.
+It used to be, because the walk built its own tree and a flatten pass copied it
+in level by level. Each directory is now written into the arena as soon as it
+has been listed, so the order is the order listings finish in — which varies
+with the thread count and between two scans of the same disk. Both properties
+above still hold by construction: a parent has to be in the arena already to be
+named as one, so its children land after it. `TreeBuilder::push_block` is the
+only way to add a child, and it writes `children_start`/`children_len` itself.
+
+Traversal is still cache-friendly — a directory's children are one run — and a
+consumer that needs a stable identity across scans uses the path, as `diff`
+does.
 
 Names are not stored per node. They are concatenated into one buffer on the
 tree, and a node holds a `(u32, u16)` range into it — a `String` per node cost
@@ -77,9 +89,11 @@ offset is not something a caller can produce.
 Reference points: ncdu 2 holds 3.8M files in 162 MB (~25 B/file), and dua-cli
 uses a 64-byte arena node. ncdu's figure is not a fair target for us — it does
 not keep `own_size`, `own_alloc`, `files` and `dirs` per node — so **dua-cli's
-64 bytes is the number to aim at**. Measured peak is 231 B/entry all in, and
-the remaining gap is not the arena: the walk's intermediate tree and the arena
-are alive at the same time (see TODO B1).
+64 bytes is the number to aim at**. Measured peak was 231 B/entry all in while
+the walk's intermediate tree and the arena were alive at the same time; that
+double storage was removed on 14 September 2026 and the same measurement is now
+**125 B/entry** on `/Applications` with an entry-count hint, 142 without one
+(`examples/memprobe.rs`; see TODO B1-K).
 
 ## Scan
 
@@ -87,6 +101,11 @@ The tree walk is **parallel DFS**: a directory's contents are read on a
 single thread (the kernel is fastest for sequential `readdir`), then
 subdirectories are dispatched to the rayon pool. This keeps the SSD busy
 without the memory bloat of a BFS queue.
+
+The entries a listing produced are accounted for and written into the arena on
+that same thread, and only the subdirectories among them become rayon tasks —
+about a tenth of the entries on a real disk. Nothing about a scan's result
+depends on where that work runs, so it runs where the data already is.
 
 Decisions:
 
@@ -210,7 +229,7 @@ none, because the first false alarm teaches everyone to ignore it.
 It is checked where a snapshot crosses a boundary — `import_snapshot` refuses
 a body that does not match, `export_snapshot` refuses to send one — and on
 demand with `spacetrace verify`. A flipped bit leaves a *structurally
-perfect* tree, so `Tree::from_parts_checked` cannot see it; that check is
+perfect* tree, so the structural check cannot see it; that check is
 about arena invariants, this one is about values.
 
 **It is not authentication.** Whoever can change the body can recompute the

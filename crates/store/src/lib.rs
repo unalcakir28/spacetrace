@@ -448,7 +448,7 @@ impl Store {
             }
 
             // The one place a body that crossed a network is opened. A flipped
-            // bit leaves a perfectly valid tree — `from_parts_checked` is
+            // bit leaves a perfectly valid tree — `TreeAssembler::finish` is
             // about structure, not values — so without this the scan imports
             // and reports a wrong number with full confidence.
             //

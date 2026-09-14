@@ -251,7 +251,12 @@ impl Tree {
         parts.join("/")
     }
 
-    /// Depth-first iteration over every node, root first.
+    /// Every node, root first.
+    ///
+    /// Arena order, which is neither depth-first nor breadth-first — it is the
+    /// order the walk happened to finish directories in. A parent always
+    /// precedes its children, and that is the only ordering to rely on; for a
+    /// particular traversal use [`Tree::children`] from the root.
     pub fn iter(&self) -> impl Iterator<Item = NodeId> + '_ {
         0..self.nodes.len() as NodeId
     }
