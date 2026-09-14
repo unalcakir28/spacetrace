@@ -3,5 +3,30 @@
     "additionalDirectories": [
       "/Users/unalcakir/github/spacetrace-desktop/src"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-changelog-edit.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/changelog-reminder.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
   }
 }
