@@ -4,7 +4,9 @@ Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
 [docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
 rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 14 Eylül 2026 (**B1-K bitti** — çift depolama kalktı, ölçüm
+Son güncelleme: 14 Eylül 2026 (**Sürüm kesildi: CLI 0.7.0, masaüstü 0.7.0,
+hub 0.5.0.** Şema v3'te sabit kaldığı için sıra zorunluluğu yoktu. Ayrıca
+**B1-K bitti** — çift depolama kalktı, ölçüm
 altyapısı depoda. Öncesi: **Sıra 1–4 kapandı** — E1, E2, A4, A1, A2,
 A4w, B1, A3, A5. Üç platformda CI yeşil. 10 Eylül ayrıca
 yayın günüydü: masaüstü 0.4.0 → 0.4.2, sonra A5 ile birlikte masaüstü 0.5.0,
@@ -76,7 +78,7 @@ Beşi de 7 Eylül 2026'da karara bağlandı. Gerekçeler ve ölçümler
   - [ ] Opsiyonel yerleşik TLS — şimdilik ters vekil öneriliyor
 - [x] `agent push <url>` — snapshot'ı merkeze/başka ajana gönder (zstd)
 - [x] Eşzamanlı tarama kilidi (aynı kök iki kez taranmıyor → 409)
-- [ ] Hız sınırlama — token zaten gerekli olduğu için ertelendi
+- [ ] Hız sınırlama — token zaten gerekli olduğu için ertelendi (→ **D3**)
 
 ### İstemci tarafı
 - [x] CLI'da uzak kaynak: `--remote <url|ad>` (scans / ls / diff / export)
@@ -116,10 +118,11 @@ Yerleşim motoru burada kaldı (`crates/treemap`), çünkü çekirdek ve test ed
 - [x] Uzak kaynak akışı: ajandan snapshot indir, yerelmiş gibi gez
 - [x] Diff görünümü (iki snapshot karşılaştırma tablosu)
 - [x] Düğüm kimlikleri generation'a bağlı — eski ağaca ait id reddediliyor
-- [ ] **Windows MFT hızlı yolu** (`usn-journal-rs`) — yönetici arkasında
+- [ ] **Windows MFT hızlı yolu** (`usn-journal-rs`) — yönetici arkasında (→ **B4**)
 - [x] macOS Full Disk Access onboarding ekranı — karşılama ekranında bant,
       ayar paneline düğme, `Info.plist`'te altı kullanım açıklaması
-- [ ] Zaman çizelgesi görünümü (bir hedefin tüm geçmişi)
+- [x] Zaman çizelgesi görünümü (bir hedefin tüm geçmişi) — **C3**, masaüstü
+      0.6.0'da yayınlandı
 - [ ] Üç WebView'da treemap performans testi (WebKitGTK dâhil) — yalnızca
       macOS'ta doğrulandı
 
@@ -139,8 +142,9 @@ Ayrı depo: [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) (K2)
       edilebilir; ajan token'ı panoyu okuyamaz, admin token'ı push edemez
 - [x] docker-compose ile tek komut kurulum
 - [x] Kapasite ölçümü çekirdeğe eklendi (şema v2) — tahminin ön koşulu
-- [ ] E-posta ile uyarı (şimdilik yalnızca webhook)
-- [ ] Kişi başına hesap (şimdilik tek admin kimliği)
+- [x] E-posta ile uyarı — **C1**, hub 0.5.0'da yayınlandı (`mailto:` hedefi,
+      `[smtp]` config bölümü)
+- [x] Kişi başına hesap — **C2**, hub 0.5.0'da yayınlandı (viewer/admin)
 
 ---
 
