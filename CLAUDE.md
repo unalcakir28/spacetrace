@@ -128,6 +128,13 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
    asılmış görünür. Clone sondası tam bunu yapıyordu: `~/github`'da 1989 ms'lik
    taramanın 1193 ms'i, tek bir sayaç kımıldamadan (ölçüldü, 10 Eylül 2026).
    `clones_probed` bu yüzden var; yeni bir aşama eklerken aynısını yap.
+   **Kaydetme de bir aşama** (14 Eylül 2026): 412.983 girdide yürüyüş 753 ms,
+   veritabanına yazmak 571 ms — 10M girdiye ≈ 14 saniye. `Phase::Saving` ve
+   `Phase::Checksumming` (iki ayrı geçiş: 273 ms yazma, 208 ms özet) ile
+   `ScanProgress::rows_done`/`rows_total` bunun için var, ve CLI ilerleme
+   satırı artık taramayla birlikte kaydetmeyi de kapsıyor. **`StallWatch`
+   sayaçları `ScanProgress`'ten kendi okuyor**, tam da yeni bir sayaç
+   eklendiğinde her izleyicinin onu değiştirilmeden görmesi için.
 9. **Ajan hiçbir şeyi silmez.** Sunucuya kurulacak yazılımın güven kazanması için
    verilmiş bilinçli bir karar, eksik özellik değil.
 

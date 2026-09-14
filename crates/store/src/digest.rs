@@ -20,6 +20,8 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
+use spacetrace_scan_core::ScanProgress;
+
 use crate::ScanId;
 
 /// Prefixed to every digest. If the encoding below ever changes, this changes
@@ -107,6 +109,21 @@ impl Encoder {
 /// `schema` is interpolated into the SQL and must never come from user input;
 /// the callers pass string literals.
 pub fn of(conn: &Connection, schema: &str, scan_id: ScanId) -> Result<String> {
+    of_reporting(conn, schema, scan_id, None)
+}
+
+/// `of`, ticking a counter as it goes.
+///
+/// This reads every row of the scan a second time, which on a real tree is
+/// 208 ms against the 273 ms the writing took — near enough half the cost of
+/// saving, and invisible without this (invariant 8). `None` is for the callers
+/// where nobody is watching: verifying one snapshot on request, and exporting.
+pub fn of_reporting(
+    conn: &Connection,
+    schema: &str,
+    scan_id: ScanId,
+    progress: Option<&ScanProgress>,
+) -> Result<String> {
     let mut encoder = Encoder::new();
 
     // `id` is deliberately absent: it is reassigned on import, so including it
@@ -152,6 +169,9 @@ pub fn of(conn: &Connection, schema: &str, scan_id: ScanId) -> Result<String> {
     let mut count: i64 = 0;
     while let Some(row) = rows.next()? {
         count += 1;
+        if let Some(progress) = progress {
+            progress.row_done();
+        }
         encoder
             .int(row.get(0)?)
             .opt_int(row.get(1)?)

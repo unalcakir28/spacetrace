@@ -114,14 +114,23 @@ fn staging() -> Result<tempfile::TempDir> {
 fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
     let mut options = a.walk.to_options();
     options.expected_entries = entry_count_hint(db_path, &a.path);
-    let (tree, stats) = scan_with_progress(&a.path, options, !json)?;
+
+    // One progress line for the whole command, not one for the walk. Saving is
+    // the same order of work as scanning — 571 ms against 753 ms on a 412,983
+    // entry tree — and it used to happen after the line was cleared.
+    let progress = Arc::new(ScanProgress::default());
+    let ticker = Ticker::start(Arc::clone(&progress), !json);
+    let (tree, stats) = scan(&a.path, options, Arc::clone(&progress))
+        .with_context(|| format!("cannot scan: {}", a.path.display()))?;
 
     let mut saved_id = None;
     if a.save {
         let mut store = open_store(db_path)?;
         let host = Store::local_host();
-        saved_id = Some(store.save(&tree, &stats, &host, a.label.as_deref())?);
+        saved_id =
+            Some(store.save_reporting(&tree, &stats, &host, a.label.as_deref(), &progress)?);
     }
+    drop(ticker);
 
     if let Some(out) = &a.ncdu {
         write_ncdu(&tree, out)?;
@@ -765,83 +774,127 @@ fn waiting_on(paths: &[PathBuf]) -> String {
     }
 }
 
+/// "saving… 41% (170 000 of 412 983 entries)".
+///
+/// A share as well as a count, because the count alone says nothing about how
+/// much is left — and the total is known here, unlike during the walk.
+fn rows_line(what: &str, progress: &ScanProgress) -> String {
+    match progress.rows() {
+        Some((done, total)) => format!(
+            "  {what}… {}% ({} of {} entries)",
+            done * 100 / total.max(1),
+            fmt::count(done),
+            fmt::count(total),
+        ),
+        None => format!("  {what}…"),
+    }
+}
+
 fn scan_with_progress(
     path: &Path,
     opts: ScanOptions,
     show_progress: bool,
 ) -> Result<(Tree, ScanStats)> {
     let progress = Arc::new(ScanProgress::default());
-    let done = Arc::new(AtomicBool::new(false));
-
-    let ticker = if show_progress && std::io::stderr().is_terminal() {
-        let progress = Arc::clone(&progress);
-        let done = Arc::clone(&done);
-        Some(std::thread::spawn(move || {
-            let mut stderr = std::io::stderr();
-            let mut stall = StallWatch::new(std::time::Instant::now(), STALL_GRACE);
-            let mut widest = 0;
-            while !done.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(120));
-                if done.load(Ordering::Relaxed) {
-                    break;
-                }
-                let counts = (
-                    progress.files.load(Ordering::Relaxed),
-                    progress.dirs.load(Ordering::Relaxed),
-                    progress.bytes.load(Ordering::Relaxed),
-                    progress.clones_probed.load(Ordering::Relaxed),
-                );
-                // Detected here rather than timestamped in the scanner: this
-                // thread is already polling the counters, and a clock read per
-                // entry in the walk would cost something for a case that
-                // almost never happens.
-                let line = match stall.observe(&progress, std::time::Instant::now()) {
-                    // Not "scanning…" any more, because it is not. A mount
-                    // that stopped answering blocks the thread in the kernel
-                    // and no timeout in this process can lift it — so the one
-                    // useful thing is to say which path it is, and let the
-                    // reader decide whether to wait or to quit.
-                    Some(waited) => format!(
-                        "  no progress for {}s — waiting on {}",
-                        waited.as_secs(),
-                        waiting_on(&progress.reading_now())
-                    ),
-                    // The label follows the phase, because after the walk
-                    // "scanning…" is simply not true any more and the file
-                    // count has stopped for good.
-                    None => match progress.phase() {
-                        Phase::Walking => format!(
-                            "  scanning… {} files, {} dirs, {}",
-                            fmt::count(counts.0),
-                            fmt::count(counts.1),
-                            fmt::size(counts.2),
-                        ),
-                        Phase::Finishing => format!(
-                            "  finishing… {} files, {} clone candidates checked",
-                            fmt::count(counts.0),
-                            fmt::count(counts.3),
-                        ),
-                    },
-                };
-                widest = widest.max(line.chars().count());
-                let _ = write!(stderr, "\r{line}   ");
-                let _ = stderr.flush();
-            }
-            let _ = write!(stderr, "\r{:width$}\r", "", width = widest + 3);
-            let _ = stderr.flush();
-        }))
-    } else {
-        None
-    };
-
-    let result = scan(path, opts, Arc::clone(&progress))
-        .with_context(|| format!("cannot scan: {}", path.display()));
-
-    done.store(true, Ordering::Relaxed);
-    if let Some(t) = ticker {
-        let _ = t.join();
-    }
+    let ticker = Ticker::start(Arc::clone(&progress), show_progress);
+    let result =
+        scan(path, opts, progress).with_context(|| format!("cannot scan: {}", path.display()));
+    drop(ticker);
     result
+}
+
+/// The progress line, and the thread that redraws it.
+///
+/// A guard rather than a function around the scan, because the scan is not the
+/// only long phase: writing the tree to the database takes about as long again
+/// (invariant 8, `Store::save_reporting`). Before this the line was cleared the
+/// moment the walk returned and the command then sat silent for the write,
+/// which is the exact appearance of a hang.
+struct Ticker {
+    done: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Ticker {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Ticker {
+    fn start(progress: Arc<ScanProgress>, show_progress: bool) -> Ticker {
+        let done = Arc::new(AtomicBool::new(false));
+        let thread = if show_progress && std::io::stderr().is_terminal() {
+            let progress = Arc::clone(&progress);
+            let done = Arc::clone(&done);
+            Some(std::thread::spawn(move || {
+                let mut stderr = std::io::stderr();
+                let mut stall = StallWatch::new(std::time::Instant::now(), STALL_GRACE);
+                let mut widest = 0;
+                while !done.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    if done.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let counts = (
+                        progress.files.load(Ordering::Relaxed),
+                        progress.dirs.load(Ordering::Relaxed),
+                        progress.bytes.load(Ordering::Relaxed),
+                        progress.clones_probed.load(Ordering::Relaxed),
+                    );
+                    // Detected here rather than timestamped in the scanner: this
+                    // thread is already polling the counters, and a clock read per
+                    // entry in the walk would cost something for a case that
+                    // almost never happens.
+                    let line = match stall.observe(&progress, std::time::Instant::now()) {
+                        // Not "scanning…" any more, because it is not. A mount
+                        // that stopped answering blocks the thread in the kernel
+                        // and no timeout in this process can lift it — so the one
+                        // useful thing is to say which path it is, and let the
+                        // reader decide whether to wait or to quit.
+                        Some(waited) => format!(
+                            "  no progress for {}s — waiting on {}",
+                            waited.as_secs(),
+                            waiting_on(&progress.reading_now())
+                        ),
+                        // The label follows the phase, because after the walk
+                        // "scanning…" is simply not true any more and the file
+                        // count has stopped for good.
+                        None => match progress.phase() {
+                            Phase::Walking => format!(
+                                "  scanning… {} files, {} dirs, {}",
+                                fmt::count(counts.0),
+                                fmt::count(counts.1),
+                                fmt::size(counts.2),
+                            ),
+                            Phase::Finishing => format!(
+                                "  finishing… {} files, {} clone candidates checked",
+                                fmt::count(counts.0),
+                                fmt::count(counts.3),
+                            ),
+                            // The walk is over and the database write is not; its
+                            // own counter, because "scanning…" would be a lie and
+                            // a blank line reads as a hang (invariant 8).
+                            Phase::Saving => rows_line("saving", &progress),
+                            Phase::Checksumming => rows_line("checksumming", &progress),
+                        },
+                    };
+                    widest = widest.max(line.chars().count());
+                    let _ = write!(stderr, "\r{line}   ");
+                    let _ = stderr.flush();
+                }
+                let _ = write!(stderr, "\r{:width$}\r", "", width = widest + 3);
+                let _ = stderr.flush();
+            }))
+        } else {
+            None
+        };
+
+        Ticker { done, thread }
+    }
 }
 
 fn print_scan_summary(tree: &Tree, stats: &ScanStats) {

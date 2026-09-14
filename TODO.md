@@ -752,14 +752,29 @@ dezavantaj; yanlış rakam ürünün kendisini çürütür.
       yarıya indi. Birikme macOS'ta duruyor (sebep libmalloc, kod değil) ama
       daha düşük bir tabandan başlıyor, ve masaüstü artık `expected_entries`
       ipucunu geçiyor.
-- [ ] **D5 `store::save` ilerleme geri bildirimi** — büyük ağaçlarda tek
-      transaction, kullanıcı donmuş sanıyor.
-      *Ölçüldü (11 Eylül 2026) ve sanıldığı kadar acil değil:*
-      `/Applications` (412.380 girdi) taraması 856 ms, süreç baştan sona
-      1,15 s — yani kaydetme **en çok ~290 ms** (içinde süreç başlatma ve
-      çıktı da var, yani bu bir üst sınır). 10M girdiye doğrusal
-      ekstrapolasyon ~7 s: fark edilir ama "dondu" değil. Öncelik buna göre
-      düştü; B1 sonrası yeniden ölçülmeli.
+- [x] **D5 `store::save` ilerleme geri bildirimi** — yapıldı
+      *(14 Eylül 2026)*. **Ve önce yeniden ölçüldü, çünkü eski rakam yanlıştı.**
+      11 Eylül'deki "en çok ~290 ms" dolaylı bir üst sınırdı (toplam süreden
+      tarama çıkarılarak). Doğrudan A/B: `/Applications`'ta kaydetmeden 753 ms,
+      kaydederek 1324 ms → **571 ms**, yani tahminin iki katı. 10M girdiye
+      ≈ **14 saniye**. "Acil değil" değerlendirmesi bu rakamla ayakta durmuyor.
+
+      İçi de ölçüldü: satır yazma **273 ms**, `digest` **208 ms**, commit
+      18 ms. İki geçiş de aynı mertebede olduğu için iki ayrı faz:
+      `Phase::Saving` ve `Phase::Checksumming`. Tek faz olsaydı çubuk sonuna
+      varıp baştan başlardı.
+
+      `ScanProgress`'e `rows_done`/`rows_total` eklendi ve `StallWatch`'ın
+      sayaç dizisine girdi — o dizinin `ScanProgress`'ten kendi okuması tam
+      olarak bunun için tasarlanmıştı, yani her izleyici değiştirilmeden
+      kapsadı. CLI'ın ilerleme satırı artık RAII bir muhafız: eskiden yürüyüş
+      biter bitmez temizleniyordu ve komut yarım saniye sessiz kalıyordu.
+      Ajanın `/status`'u da kaydetme boyunca cevap veriyor (`rows_done`,
+      `rows_total`, `phase: "saving"`).
+
+      Testi kaydetmeyi **yan thread'den izliyor**: "doğru sayıda bitti" bir
+      sayacın en sonda tek adımda zıplamasıyla da doğru olurdu, ve öyle bir
+      sayaç bütün faz boyunca donmuş görünür. İki mutasyonla doğrulandı.
 - [x] **D6 `Tree::rel_path` her çağrıda kökten yürüyor** — yapıldı
       *(14 Eylül 2026)*. Ne belgelendi ne önbelleklendi: **yönü çevrildi.**
       `Tree::for_each_path` yolu inerken kuruyor — bir dizine girmek tampona
@@ -873,10 +888,10 @@ orada, burada yalnızca borç kaydı olarak duruyorlar.
       ve `dupes`'un id'ye dayalı sıralaması yola çevrildi.
 - ~~Arayüz dizeleri koda gömülü, i18n yok~~ → borç değil, karar
       ([DECISIONS.md](docs/DECISIONS.md) K1). Dizeler İngilizce ve gömülü kalır.
-- [ ] Büyük ağaçlarda `store::save` tek transaction — ilerleme geri bildirimi yok
-      (**D5**; ölçüldü 11 Eylül 2026 ve sanıldığı kadar acil değil: 412.380
-      girdi için üst sınır ~290 ms, 10M'e ekstrapolasyon ~7 s.)
-      → **D5**
+- [x] ~~Büyük ağaçlarda `store::save` tek transaction — ilerleme geri bildirimi
+      yok~~ → **D5 yapıldı** (14 Eylül 2026). Tek transaction duruyor; eksik
+      olan sayaçtı. Gerçek maliyet 571 ms/412k (eski "≤290 ms" tahmininin iki
+      katı), 10M'e ≈ 14 s.
 
 ---
 

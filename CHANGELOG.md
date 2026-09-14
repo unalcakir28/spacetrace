@@ -15,6 +15,7 @@ because anyone can install them.
 ### Changed
 
 - The CSV export now lists each folder immediately followed by what is inside it. It used to write a whole set of siblings together and their contents further down, which put a folder and its files pages apart in the spreadsheet. The columns and the rows themselves are unchanged.
+- `spacetrace scan --save` now says what it is doing while it writes the snapshot to the database. That write is not a quick tail on the end of a scan — on a folder of 412,983 entries the walk takes 0.8 seconds and the write another 0.6, and at ten million entries it is about fourteen seconds — and until now the progress line was cleared the moment the walk ended, leaving the command apparently frozen. The agent reports the same two stages on `/status`.
 
 ### Fixed
 

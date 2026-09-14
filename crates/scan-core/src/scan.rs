@@ -102,21 +102,39 @@ fn arena_capacity(hint: Option<usize>) -> usize {
 
 /// The stages of a scan, in order.
 ///
-/// Only two do enough work to be worth naming, and the reason to name them is
-/// honesty in a progress line: after the walk finishes, "scanning…" is no
-/// longer true and the file counter has stopped for good.
+/// Named because a progress line has to stay true: after the walk finishes,
+/// "scanning…" is no longer what is happening and the file counter has stopped
+/// for good. Invariant 8 is the rule these serve — a phase without a moving
+/// counter looks hung while it is working.
+///
+/// The last two belong to `store`, not to the walk. A scan a person asked for
+/// is not over when the tree is built: on 412,983 entries the walk takes
+/// 753 ms and writing that tree to the database takes another 571 ms, which is
+/// most of a second with nothing on screen. Extrapolated to ten million
+/// entries it is about fourteen seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     /// Reading directories.
     Walking,
     /// Walk done; deduplicating copy-on-write clones and building the tree.
     Finishing,
+    /// Writing the tree into a snapshot database, one row per entry.
+    Saving,
+    /// Reading those rows back to compute the snapshot's content hash.
+    ///
+    /// A second pass over the same rows, and a deliberate one: the stored
+    /// digest has to come from the same function every reader uses, or it
+    /// eventually disagrees with them about some field and a healthy snapshot
+    /// reports itself corrupt.
+    Checksumming,
 }
 
 impl Phase {
     fn from_u8(value: u8) -> Phase {
         match value {
             1 => Phase::Finishing,
+            2 => Phase::Saving,
+            3 => Phase::Checksumming,
             // Anything else is the initial zero, which is where a scan starts.
             _ => Phase::Walking,
         }
@@ -142,7 +160,7 @@ pub const STALL_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 /// that assembled its own tuple would go on ignoring the new one and report a
 /// healthy phase as a stall.
 pub struct StallWatch {
-    counters: [u64; 5],
+    counters: [u64; 6],
     /// When these values were **first** seen — not the second sighting. The
     /// counters stopped somewhere between the two, and the first is the
     /// earliest moment they are known to have been still already.
@@ -155,7 +173,7 @@ impl StallWatch {
     /// blocked on its own root — is still reported.
     pub fn new(now: std::time::Instant, grace: std::time::Duration) -> Self {
         StallWatch {
-            counters: [0; 5],
+            counters: [0; 6],
             since: now,
             grace,
         }
@@ -174,6 +192,7 @@ impl StallWatch {
             progress.bytes.load(Ordering::Relaxed),
             progress.errors.load(Ordering::Relaxed),
             progress.clones_probed.load(Ordering::Relaxed),
+            progress.rows_done.load(Ordering::Relaxed),
         ];
         if counters != self.counters {
             self.counters = counters;
@@ -202,6 +221,14 @@ pub struct ScanProgress {
     /// so a phase with no counter would look frozen for most of the run — and
     /// on a disk ten times the size it would trip any stall warning.
     pub clones_probed: AtomicU64,
+    /// Rows written or checked in the phase that is running, if it counts rows.
+    ///
+    /// Reset when a row-counting phase begins, because a bar that ran to the
+    /// end and then started again from there would be reporting one number for
+    /// two different jobs. Read together with [`ScanProgress::rows_total`].
+    pub rows_done: AtomicU64,
+    /// How many rows that phase will get through, or 0 when it is not running.
+    pub rows_total: AtomicU64,
     /// Which phase the scan is in, for a caller that wants to say so. Written
     /// once per phase; read as [`ScanProgress::phase`].
     phase: AtomicU8,
@@ -254,6 +281,38 @@ impl ScanProgress {
 
     fn enter_phase(&self, phase: Phase) {
         self.phase.store(phase as u8, Ordering::Relaxed);
+    }
+
+    /// Announce a phase that works through a known number of rows.
+    ///
+    /// Public because the phase that needs it lives in `store`: a scan is not
+    /// over for the person who asked for it when the tree exists, and the
+    /// database write is long enough to need a counter of its own (invariant
+    /// 8). Resets the counter, so each phase reports its own progress rather
+    /// than continuing the last one's.
+    pub fn begin_rows(&self, phase: Phase, total: u64) {
+        self.rows_done.store(0, Ordering::Relaxed);
+        self.rows_total.store(total, Ordering::Relaxed);
+        self.enter_phase(phase);
+    }
+
+    /// One more row done.
+    ///
+    /// Per row rather than batched, unlike the walk's counters: this runs on
+    /// the single thread doing the writing, so the atomic is uncontended and
+    /// costs nothing next to the `INSERT` beside it. The walk batches because
+    /// eight threads share its counters.
+    pub fn row_done(&self) {
+        self.rows_done.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// How far through a row-counting phase, as done and total.
+    ///
+    /// `None` when no such phase is running, which is what a caller should
+    /// show rather than "0 of 0".
+    pub fn rows(&self) -> Option<(u64, u64)> {
+        let total = self.rows_total.load(Ordering::Relaxed);
+        (total > 0).then(|| (self.rows_done.load(Ordering::Relaxed), total))
     }
 
     /// Directories being listed right now, in no particular order.

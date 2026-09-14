@@ -1,7 +1,7 @@
 use std::fs;
 use std::sync::Arc;
 
-use spacetrace_scan_core::{scan, ScanOptions, ScanProgress, Tree};
+use spacetrace_scan_core::{scan, ImportedNode, ScanOptions, ScanProgress, ScanStats, Tree};
 use spacetrace_store::{export_ncdu, import_ncdu, Integrity, Store};
 
 fn fixture() -> tempfile::TempDir {
@@ -900,4 +900,105 @@ fn moving_an_entry_out_of_an_imported_tree_terminates() {
         .expect("the entry is there to remove");
 
     assert_eq!(imported.total_alloc(), before - removed.alloc);
+}
+
+/// Invariant 8: a phase this long needs a counter that moves.
+///
+/// Saving a tree is not a tail on the end of a scan — measured at 571 ms
+/// against the walk's 753 ms on 412,983 entries, and about fourteen seconds at
+/// ten million. Before this the CLI cleared its progress line when the walk
+/// returned and then sat silent through the write.
+///
+/// The test watches from another thread rather than checking the totals
+/// afterwards, because "it ended at the right number" is also true of a
+/// counter that jumped there in one step at the very end, and a counter like
+/// that reports a hang for the whole phase.
+#[test]
+fn saving_reports_which_phase_it_is_in_and_how_far_along() {
+    use spacetrace_scan_core::Phase;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    // Enough entries that the watcher below gets to look more than once.
+    let mut root = ImportedNode::dir("root");
+    for d in 0..40 {
+        let mut sub = ImportedNode::dir(format!("d{d}"));
+        for f in 0..500 {
+            sub.children
+                .push(ImportedNode::file(format!("f{f}"), 1024, 4096));
+        }
+        root.children.push(sub);
+    }
+    let tree = Tree::from_nested(dir.path().to_path_buf(), root);
+    let entries = tree.len() as u64;
+    assert!(entries > 20_000, "big enough to be observed mid-flight");
+
+    let progress = Arc::new(ScanProgress::default());
+    let done = Arc::new(AtomicBool::new(false));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<(Phase, u64, u64)>::new()));
+
+    let watcher = {
+        let (progress, done, seen) = (Arc::clone(&progress), Arc::clone(&done), Arc::clone(&seen));
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                if let Some((rows, total)) = progress.rows() {
+                    seen.lock().unwrap().push((progress.phase(), rows, total));
+                }
+                std::thread::yield_now();
+            }
+        })
+    };
+
+    let mut store = Store::open(dir.path().join("snap.sqlite")).unwrap();
+    let stats = ScanStats::default();
+    let id = store
+        .save_reporting(&tree, &stats, "host", None, &progress)
+        .unwrap();
+    done.store(true, Ordering::Relaxed);
+    watcher.join().unwrap();
+
+    let seen = seen.lock().unwrap();
+    let saving: Vec<u64> = seen
+        .iter()
+        .filter(|(p, _, _)| *p == Phase::Saving)
+        .map(|(_, rows, _)| *rows)
+        .collect();
+    let checksumming: Vec<u64> = seen
+        .iter()
+        .filter(|(p, _, _)| *p == Phase::Checksumming)
+        .map(|(_, rows, _)| *rows)
+        .collect();
+
+    assert!(
+        !saving.is_empty() && !checksumming.is_empty(),
+        "both passes have to announce themselves; saw {:?}",
+        seen.iter().map(|(p, _, _)| *p).collect::<Vec<_>>()
+    );
+    // Moving, not merely arriving: the smallest and largest readings taken
+    // during a pass must differ, or the counter jumped at the end.
+    assert!(
+        saving.iter().max() > saving.iter().min(),
+        "the saving counter never moved while it was watched"
+    );
+    assert!(
+        checksumming.iter().max() > checksumming.iter().min(),
+        "the checksumming counter never moved while it was watched"
+    );
+    // Each pass counts its own rows, out of the same total, and starts again
+    // from zero rather than carrying on from the last one's figure.
+    for (phase, rows, total) in seen.iter() {
+        assert_eq!(*total, entries, "total for {phase:?}");
+        assert!(rows <= total, "{rows} of {total} in {phase:?}");
+    }
+    assert_eq!(
+        progress.rows(),
+        None,
+        "no phase is running once saving has returned"
+    );
+
+    // And the snapshot is still the snapshot.
+    let (loaded, _) = store.load(id).unwrap();
+    assert_eq!(loaded.len(), tree.len());
+    assert_eq!(loaded.total_size(), tree.total_size());
 }

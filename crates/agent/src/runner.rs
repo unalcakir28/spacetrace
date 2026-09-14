@@ -68,8 +68,17 @@ pub struct InFlight {
     pub bytes: u64,
     pub errors: u64,
     pub clones_probed: u64,
-    /// `walking` or `finishing`. After the walk only `clones_probed` moves, so
-    /// a reader who does not know the phase reads a healthy scan as a stuck one.
+    /// Rows written or checked in the phase running now, and how many there
+    /// are. Absent outside the two phases that count rows, because "0 of 0"
+    /// reads as a stalled one rather than as an inapplicable one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows_done: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows_total: Option<u64>,
+    /// `walking`, `finishing`, `saving` or `checksumming`. Each phase moves a
+    /// different counter — after the walk only `clones_probed` does, and while
+    /// the snapshot is being written only `rows_done` does — so a reader who
+    /// does not know the phase reads a healthy scan as a stuck one.
     pub phase: &'static str,
     /// How long every counter has stood still, once that is worth mentioning.
     /// Absent while the scan is moving.
@@ -198,9 +207,13 @@ impl Runner {
         let (tree, stats) = scan(&root.path, options, Arc::clone(&progress))
             .with_context(|| format!("scanning {}", root.path.display()))?;
 
+        // The same progress object the claim registered, so `/status` keeps
+        // answering while the tree is being written. On a big root that is
+        // seconds of work, and without this the agent reports a scan with
+        // every counter stopped (invariant 8).
         let mut store = self.open_store()?;
         let scan_id = store
-            .save(&tree, &stats, &self.host, root.label.as_deref())
+            .save_reporting(&tree, &stats, &self.host, root.label.as_deref(), &progress)
             .with_context(|| format!("saving snapshot of {}", root.path.display()))?;
 
         // Retention runs against the canonical root the scanner recorded, not
@@ -303,6 +316,8 @@ fn phase_word(phase: Phase) -> &'static str {
     match phase {
         Phase::Walking => "walking",
         Phase::Finishing => "finishing",
+        Phase::Saving => "saving",
+        Phase::Checksumming => "checksumming",
     }
 }
 
@@ -328,6 +343,8 @@ fn render(root: &Path, tracked: &Tracked, now: Instant, reading: Vec<PathBuf>) -
         bytes: p.bytes.load(Ordering::Relaxed),
         errors: p.errors.load(Ordering::Relaxed),
         clones_probed: p.clones_probed.load(Ordering::Relaxed),
+        rows_done: p.rows().map(|(done, _)| done),
+        rows_total: p.rows().map(|(_, total)| total),
         phase: phase_word(p.phase()),
         stalled_ms: stalled,
         // Only while stalled. During a healthy scan the answer is already

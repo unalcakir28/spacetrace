@@ -22,6 +22,16 @@
             "it": "L'esportazione CSV elenca ora ogni cartella seguita subito dal suo contenuto. Prima scriveva insieme tutte le voci allo stesso livello e i loro contenuti molto più in basso, separando una cartella dai suoi file di intere pagine nel foglio di calcolo. Le colonne e le righe stesse non cambiano.",
             "tr": "CSV dışa aktarımı artık her klasörü hemen içeriğiyle birlikte yazıyor. Önceden bütün kardeşleri bir arada, içeriklerini çok aşağıda yazıyordu; bu da hesap tablosunda bir klasörle dosyalarını sayfalarca ayırıyordu. Sütunlar ve satırların kendisi değişmedi."
           }
+        },
+        {
+          "kind": "changed",
+          "text": {
+            "de": "`spacetrace scan --save` sagt jetzt, was es tut, während die Momentaufnahme in die Datenbank geschrieben wird. Dieses Schreiben ist kein kurzer Anhang an den Scan — bei einem Ordner mit 412.983 Einträgen dauert der Durchlauf 0,8 Sekunden und das Schreiben weitere 0,6, bei zehn Millionen Einträgen sind es rund vierzehn Sekunden — und bislang wurde die Fortschrittszeile gelöscht, sobald der Durchlauf endete, sodass der Befehl eingefroren wirkte. Der Agent meldet dieselben zwei Phasen über `/status`.",
+            "en": "`spacetrace scan --save` now says what it is doing while it writes the snapshot to the database. That write is not a quick tail on the end of a scan — on a folder of 412,983 entries the walk takes 0.8 seconds and the write another 0.6, and at ten million entries it is about fourteen seconds — and until now the progress line was cleared the moment the walk ended, leaving the command apparently frozen. The agent reports the same two stages on `/status`.",
+            "fr": "`spacetrace scan --save` indique désormais ce qu'il fait pendant l'écriture de l'instantané dans la base. Cette écriture n'est pas une courte formalité en fin d'analyse — sur un dossier de 412 983 entrées, le parcours prend 0,8 seconde et l'écriture 0,6 de plus, et à dix millions d'entrées cela représente une quinzaine de secondes — et jusqu'ici la ligne de progression était effacée dès la fin du parcours, la commande paraissant figée. L'agent signale les deux mêmes étapes sur `/status`.",
+            "it": "`spacetrace scan --save` ora dice cosa sta facendo mentre scrive l'istantanea nel database. Quella scrittura non è una breve coda in fondo alla scansione — su una cartella di 412.983 voci la scansione richiede 0,8 secondi e la scrittura altri 0,6, e con dieci milioni di voci sono circa quattordici secondi — e finora la riga di avanzamento veniva cancellata appena finita la scansione, lasciando il comando apparentemente bloccato. L'agente segnala le stesse due fasi su `/status`.",
+            "tr": "`spacetrace scan --save` artık anlık görüntüyü veritabanına yazarken ne yaptığını söylüyor. Bu yazma taramanın sonuna eklenmiş kısa bir iş değil — 412.983 girdilik bir klasörde yürüyüş 0,8 saniye, yazma 0,6 saniye sürüyor, on milyon girdide ise yaklaşık on dört saniye — ve şimdiye kadar ilerleme satırı yürüyüş biter bitmez temizleniyor, komut donmuş gibi görünüyordu. Ajan da aynı iki aşamayı `/status` üzerinden bildiriyor."
+          }
         }
       ],
       "releases": [
