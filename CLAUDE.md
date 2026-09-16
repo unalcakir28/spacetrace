@@ -9,6 +9,9 @@ Bağlam okuması (kodda görünmeyen kararlar): [docs/WHY.md](docs/WHY.md) neden
 gerekçeleri, [docs/ROADMAP.md](docs/ROADMAP.md) fazlar, [TODO.md](TODO.md)
 sıradaki iş. Bir özellik önerisini değerlendirirken WHY.md'deki **kapsam dışı**
 listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye bak.
+Ajanı kurmak ve yapılandırmak [docs/AGENT.md](docs/AGENT.md) (hazır systemd
+unit'i `deploy/systemd/spacetrace-agent.service`); "X aracı bunu nasıl yapıyor"
+sorusunun ölçümlü cevabı [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
 ## Komutlar
 
@@ -79,13 +82,22 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
 
    **Sonuç: iki tarama aynı düzeni vermez.** Aynı diskin iki taraması aynı
    cevapları verir (test: `the_thread_count_does_not_change_the_answer`, yol
-   yol karşılaştırıyor) ama aynı id'leri vermez. Zaten hiçbir tüketici
-   vermesine güvenmiyordu — `diff` ada göre eşliyor, masaüstü id'leri
-   generation'a bağlıyor — ama **id sırasına dayanan yeni bir şey yazma.**
-   Fark eden tek yer `dupes`: grup temsilcisi en düşük id ve bu tarama içinde
-   deterministik, ama iki tarama arasında "ilk kopya" yer değiştirebilir.
-   Tarayıcının kendi clone tekilleştirmesi bu yüzden `(derinlik, yol)` ile
-   sıralıyor, id ile değil.
+   yol karşılaştırıyor) ama aynı id'leri vermez. `diff` ada göre eşliyor,
+   masaüstü id'leri generation'a bağlıyor — ama **id sırasına dayanan yeni bir
+   şey yazma, ve bunu bir kez yayınlamış durumdayız.**
+
+   `dupes` altı yerde id'yle sıralıyordu, her birinin yorumu "iki koşu aynı
+   sonucu versin" diyerek. B1-K düzeni değiştirdiğinden beri o yorum yanlıştı:
+   yayınlanmış 0.7.0 sabit bir fikstürde üç koşuda üç farklı sıra verdi
+   (ölçüldü). Altısı da D6'da yola çevrildi; tarayıcının clone
+   tekilleştirmesi zaten `(derinlik, yol)` ile sıralıyordu. **Bunu bir kez
+   "bug değil" diye geçtim, değilmiş** — id düzenine dayanan bir yorum
+   gördüğünde ona inanma, ölç.
+
+   Bunun testi de zor: mevcut `the_order_is_the_same_every_run` göremezdi,
+   çünkü `find`'ı **tek** bir ağaç üzerinde beş kez çağırıyor — id'ler zaten
+   aynı. Yeni test iki farklı düzeni `from_nested` ile kuruyor; thread
+   sayısıyla kurmak küçük fikstürde aynı düzeni verip bahsi kaybediyor.
 3. **Sembolik bağlantılar izlenmez** (kendi boyutlarıyla sayılır), **sabit
    bağlantılar bir kez sayılır** (`(dev, ino)`; her iki ad da ağaçta görünür,
    biri 0 bayt katkı yapar). **Hangi adın baytları taşıdığı belirsizdir** —
@@ -186,9 +198,16 @@ Bu dosyadaki kuralların bir kısmı artık `.claude/` altında kendini uyguluyo
 | `changelog-entry` (beceri) | Kullanıcıya görünen değişiklik: beş dilde girdi, sonra `CHANGELOG.md` üretimi |
 | `release` (beceri) | Sürüm kesme; tam sıra [docs/RELEASING.md](docs/RELEASING.md) |
 | `preflight` (beceri) | Push öncesi CI'ın koştuğu her şey, ucuz olan önce |
+| `web-design-guidelines` (beceri) | UI gözden geçirme; dışarıdan vendor edilmiş, aşağı bak |
 
 **`preflight`'ı model kendi çağıramaz** (`disable-model-invocation`), kullanıcı
 `/preflight` yazar — o yüzden `main`'e push etmeden önce çalıştırılmasını öner.
+
+**`web-design-guidelines` bizim yazdığımız bir beceri değil.**
+`vercel-labs/agent-skills`'ten vendor edilmiş ve kökteki `skills-lock.json`
+kaynağını, yolunu ve içerik özetini tutuyor. Elle düzenleme — tazelemek
+kaynağı yeniden çekip lock'u güncellemek demek. Aynı beceri site deposunda da
+duruyor (`.agents/skills/` altında), oradaki kopya bağımsız.
 
 İki hook `.claude/settings.json` ile devrede: `CHANGELOG.md`'ye Edit/Write
 bloklanıyor (üretilen dosya; Bash yönlendirmesi bilerek serbest, sürüm
@@ -203,7 +222,7 @@ prosedürü onu kullanıyor), ve oturum sonunda `crates/*/src` değişmişken
 | Crate | Sorumluluk |
 |-------|------------|
 | `scan-core` | Tarama, ağaç modeli, platforma özel metadata. Hiçbir şeye bağlı değil. |
-| `store` | SQLite anlık görüntü deposu, ncdu uyumlu dışa aktarım |
+| `store` | SQLite anlık görüntü deposu, ncdu ve CSV dışa aktarımı, hash önbelleği |
 | `diff` | İki görüntüyü karşılaştırma, "suçlu klasör" tespiti |
 | `dupes` | Aynı içerikli dosyalar: boyut → ön-hash → blake3, önbellek trait'i |
 | `cli` | `spacetrace` ikilisi (uzak kaynaklar dâhil) |
@@ -214,6 +233,11 @@ prosedürü onu kullanıyor), ve oturum sonunda `crates/*/src` değişmişken
 
 Bağımlılık yönü tek yönlü. Ajan `scan-core`, `store` ve `buildinfo`'ya
 bağlanır; `cli`'ye ve `diff`'e bağlanmaz.
+
+**`store`'un `dupes` özelliği varsayılan kapalı** (`dupes = ["dep:spacetrace-dupes"]`).
+Kopya bulucunun hash önbelleği BLAKE3'ü içeri çekiyor ve ajan da bu crate'ten
+derleniyor — tek statik ikili kalması gereken o. CLI açıyor, başka kimse
+ihtiyaç duymuyor. `store`'a yeni bir ağır bağımlılık girerken aynı soruyu sor.
 
 ## Depolar
 
@@ -247,6 +271,12 @@ Tam anlatım [docs/RELEASING.md](docs/RELEASING.md); kolay bozulan kısımlar:
   (`.github/docker/Dockerfile.release`), kökteki `Dockerfile`'dan değil. QEMU
   altında Rust derlemek arm64 imajını dakikalar yerine on dakikalar sürdürüyor.
   Kökteki Dockerfile duruyor çünkü `docker build .` bir klonda çalışsın diye var.
+- **musl hedefleri `cross` ile derleniyor ve `Cross.toml` şart.** Sürüm damgası
+  (`SPACETRACE_GIT_SHA`, `SPACETRACE_BUILD_DATE`, `SPACETRACE_CHANNEL`) konteynere
+  ancak oradaki passthrough listesiyle giriyor; liste eksikse ikili sessizce
+  **damgasız** derleniyor ve `--version` bunu söyleyemez.
+- Üç kurulum script'i var: `install.sh` (CLI), `install-desktop.sh` ve
+  `install-desktop.ps1`. Varlık adlarını üçü de aynı sözleşmeden okuyor.
 - **Site bu depoda değil.**
   [unalcakir28/spacetrace-website](https://github.com/unalcakir28/spacetrace-website)
   — Astro, beş dil, `spacetrace.teknobakkall.com`. Nasıl çalıştığı o deponun
@@ -310,6 +340,19 @@ Kodda dikkat edilecekler:
   yalnızca sona ekleyebiliyor; sıralar ayrışırsa kopya her değeri yanlış
   sütuna yazar ve hiçbir şey söylemez. Testi
   `crates/store/tests/integrity.rs` içinde.
+- **Yol kurmak inerken yapılır, yukarı yürüyerek değil (D6).** `rel_path` tek
+  bir girdi için doğru, her girdi için yanlış: maliyeti ağacın büyüklüğü değil
+  **derinliklerin toplamı**, ve derinliği bu crate belirlemiyor — başka
+  makineden gelen bir snapshot istediği kadar derin olabilir, yani üstünde
+  döngü kurmak aracın seçmediği girdide karesel. Çok girdi için
+  `Tree::for_each_path`: inmek tampona parça ekliyor, çıkmak kesiyor, düğüm
+  başına tahsis yok. Ölçüldü: 412.983 girdide 61 ms → 4,5 ms; CSV dışa
+  aktarımı 449 → 400 ms, yol kurmayan ncdu dışa aktarımı 182 → 183 (kontrol).
+  Özyineleme değil yığın kullanıyor, `from_nested` ile aynı sebeple —
+  derinlik dosyadan geliyor; testi 50.000 seviye iniyor.
+- **CSV satır sırası katı DFS**: klasör, hemen ardından içeriği. Eskiden
+  kardeşler bir aradaydı ve içerikleri sayfalarca aşağıdaydı; D6 ile değişti
+  ve changelog'da yazılı.
 - Bir kök aynı anda yalnızca bir kez taranır (`Runner::try_claim`, HTTP'de 409).
 - Zamanlayıcı UTC + sabit offset ile çalışır; saat dilimi veritabanı yok.
 - Kapasite **boş/toplam** olarak raporlanır, "% dolu" olarak değil (K6).

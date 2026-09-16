@@ -22,13 +22,16 @@ at their next `cargo update`, far from the commit that caused it.
 `cli`, `agent` and `dupes` are not consumed by either. A change confined to those
 is safe by construction — say so and stop.
 
-Both checkouts are available as working directories:
+Both checkouts sit next to this one, so address them relative to this repo's
+root rather than by an absolute path — an absolute path went stale once and the
+agent then reported nothing at all:
 
-- `/Users/unalcakir/github/spacetrace-desktop`
-- `/Users/unalcakir/github/spacetrace-hub`
+- `../spacetrace-desktop`
+- `../spacetrace-hub`
 
 If a path is missing, say so rather than guessing; a silent skip is worse than a
-reported gap.
+reported gap. **A gap here is invisible otherwise** — this repo's CI does not
+build either consumer.
 
 ## Procedure
 
