@@ -203,6 +203,14 @@ Bu dosyadaki kuralların bir kısmı artık `.claude/` altında kendini uyguluyo
 **`preflight`'ı model kendi çağıramaz** (`disable-model-invocation`), kullanıcı
 `/preflight` yazar — o yüzden `main`'e push etmeden önce çalıştırılmasını öner.
 
+**Dört depoya birden takılan araçlar ayrı duruyor.** `spacetrace-tools`
+plugin'i (`spacetrace-tooling/`, bu deponun yanında, git deposu değil)
+`doc-drift-auditor`, `core-pin-guard`, bir `code-reviewer` ve bir `test-writer`
+veriyor; hepsi `spacetrace-tools:` ile adlandırıldığı için buradaki aynı adlı
+ajanlarla çakışmıyor ve **buradakiler daha keskin olduğu için yerinde kalıyor**.
+Plugin'in `CHANGELOG.md` hook'u bu depoda bilerek susuyor — yukarıdaki yerel
+hook zaten var ve gerekçeyi kendi sözleriyle anlatıyor.
+
 **`web-design-guidelines` bizim yazdığımız bir beceri değil.**
 `vercel-labs/agent-skills`'ten vendor edilmiş ve kökteki `skills-lock.json`
 kaynağını, yolunu ve içerik özetini tutuyor. Elle düzenleme — tazelemek

@@ -1,7 +1,8 @@
 {
   "permissions": {
     "additionalDirectories": [
-      "/Users/unalcakir/github/spacetrace-desktop/src"
+      "../spacetrace-desktop",
+      "../spacetrace-hub"
     ]
   },
   "hooks": {
