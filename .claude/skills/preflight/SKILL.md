@@ -1,7 +1,6 @@
 ---
 name: preflight
-description: Run everything CI runs, in the order that fails cheapest first, before pushing to main. Use when the user asks to check, verify, validate or preflight before a push — "push etmeden önce kontrol et", "her şey yeşil mi", "CI geçer mi".
-disable-model-invocation: true
+description: Runs everything CI runs for the core workspace, in the order that fails cheapest first. Use before any push to main, after finishing a change and before committing it, when a public API in the consumed crates changed, and whenever someone asks whether CI will pass — including Turkish phrasings like "push etmeden önce kontrol et", "her şey yeşil mi", "CI geçer mi".
 ---
 
 # Preflight
