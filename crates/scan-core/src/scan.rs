@@ -522,7 +522,7 @@ const THREAD_CAP: usize = 8;
 ///
 /// There is no best fixed number: the optimum moves with the shape of the
 /// tree. Measured on an M3 Max (12 performance + 4 efficiency cores),
-/// interleaved runs, median of 9 `[ölçüm]`:
+/// interleaved runs, median of 9 `[measurement]`:
 ///
 /// ```text
 ///                        best        8        16 (the old default)

@@ -1,986 +1,1085 @@
-# Yapılacaklar
+# To do
 
-Canlı çalışma listesi. Faz tanımları ve çıkış kriterleri için
-[docs/ROADMAP.md](docs/ROADMAP.md), gerekçeler için [docs/WHY.md](docs/WHY.md),
-rakiplerin nerede önde olduğu için [docs/COMPETITORS.md](docs/COMPETITORS.md).
+Live work list. For phase definitions and exit criteria see
+[docs/ROADMAP.md](docs/ROADMAP.md), for rationale see [docs/WHY.md](docs/WHY.md),
+for where competitors are ahead see [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Son güncelleme: 14 Eylül 2026 (**Sürüm kesildi: CLI 0.7.0, masaüstü 0.7.0,
-hub 0.5.0.** Şema v3'te sabit kaldığı için sıra zorunluluğu yoktu. Ayrıca
-**B1-K bitti** — çift depolama kalktı, ölçüm
-altyapısı depoda. Öncesi: **Sıra 1–4 kapandı** — E1, E2, A4, A1, A2,
-A4w, B1, A3, A5. Üç platformda CI yeşil. 10 Eylül ayrıca
-yayın günüydü: masaüstü 0.4.0 → 0.4.2, sonra A5 ile birlikte masaüstü 0.5.0,
-hub 0.4.0 ve CLI 0.5.0. Şema atlaması olduğu için sıra zorunluydu: önce
-masaüstü ve hub, sonra CLI (gerekçe docs/RELEASING.md). Ayrıca macOS FDA
-onboarding ve **kararlı imza kimliği** girdi — E3'ün ücretsiz yarısı,
-ayrıntısı aşağıda. Sıradaki iş → Sıra 5: **B2**, sonra B3)
+Last updated: 14 September 2026 (**Version cut: CLI 0.7.0, desktop 0.7.0,
+hub 0.5.0.** Since it stayed fixed at v3, the schema had no order requirement.
+Also **B1-K done** — the double storage is gone, the measurement
+infrastructure is in the repository. Before that: **Order 1–4 closed** — E1, E2, A4, A1, A2,
+A4w, B1, A3, A5. CI green on all three platforms. 10 September was also
+a release day: desktop 0.4.0 → 0.4.2, then desktop 0.5.0 together with A5,
+hub 0.4.0 and CLI 0.5.0. Order was required because of a schema jump: first
+desktop and hub, then CLI (rationale in docs/RELEASING.md). Also macOS FDA
+onboarding and a **stable signing identity** landed — the free half of E3,
+details below. Next up → Order 5: **B2**, then B3)
 
 ---
 
-## Açık kararlar ✅ kapandı
+## Open decisions ✅ closed
 
-Beşi de 7 Eylül 2026'da karara bağlandı. Gerekçeler ve ölçümler
-[docs/DECISIONS.md](docs/DECISIONS.md) içinde; özet:
+All five were decided on 7 September 2026. Rationale and measurements are
+in [docs/DECISIONS.md](docs/DECISIONS.md); summary:
 
-- [x] **Arayüz dili** → İngilizce (K1). CLI, README, ARCHITECTURE çevrildi;
-      gerekçe belgeleri Türkçe kaldı. i18n kapsam dışı ilan edildi.
-- [x] **Lisans modeli** → çekirdek + ajan Apache-2.0 bu monorepo'da; masaüstü ve
-      merkez ayrı depoda ticari (K2). WHY.md'deki "Pro = sınırsız ajan"
-      hipotezi uygulanamaz olduğu için düzeltildi.
-- [x] **Ajan protokolü** → HTTP + JSON, çatı axum; snapshot gövdesi
+- [x] **Interface language** → English (K1). CLI, README, ARCHITECTURE translated;
+      rationale documents stayed Turkish. i18n declared out of scope.
+- [x] **License model** → core + agent Apache-2.0 in this monorepo; desktop and
+      hub commercial in a separate repository (K2). The "Pro = unlimited agent"
+      hypothesis in WHY.md was corrected because it was unimplementable.
+- [x] **Agent protocol** → HTTP + JSON, axum framework; snapshot body
       `application/octet-stream` (K3).
-- [x] **Snapshot taşınabilirliği** → ham SQLite, `VACUUM INTO` + zstd (K4).
-      Ölçüldü: girdi başına 49.5 B ham, 12.4 B zstd → 1M dosya ≈ 12 MB.
-- [x] **GitHub deposu** → public (K5).
+- [x] **Snapshot portability** → raw SQLite, `VACUUM INTO` + zstd (K4).
+      Measured: 49.5 B raw per entry, 12.4 B zstd → 1M files ≈ 12 MB.
+- [x] **GitHub repository** → public (K5).
 
 ---
 
-## Faz 1 — Çekirdek ve CLI ✅
+## Phase 1 — Core and CLI ✅
 
-- [x] Workspace iskeleti, CI (ubuntu/macos/windows), Apache-2.0
-- [x] `scan-core`: paralel DFS, arena ağaç (bitişik çocuklar, çocuk indeksi
-      ebeveyninden büyük — başlangıçta BFS düzenindeydi, B1-K'den beri değil)
-- [x] Hardlink tekilleştirme `(dev, ino)`, `--no-dedupe` ile kapatılabilir
-- [x] Sembolik bağlantılar izlenmiyor, kendi boyutlarıyla sayılıyor
-- [x] `alloc` = `st_blocks * 512`; `size` = yalnızca dosya baytları
+- [x] Workspace scaffold, CI (ubuntu/macos/windows), Apache-2.0
+- [x] `scan-core`: parallel DFS, arena tree (contiguous children, child index
+      greater than the parent's — originally in BFS order, not since B1-K)
+- [x] Hardlink deduplication `(dev, ino)`, can be disabled with `--no-dedupe`
+- [x] Symbolic links are not followed, counted with their own size
+- [x] `alloc` = `st_blocks * 512`; `size` = file bytes only
 - [x] `--exclude`, `-x/--one-file-system`, `--depth`
-- [x] İzin hatalarını sayma ve örnekleme (tarama durmuyor)
-- [x] `store`: SQLite şeması, arena'yı olduğu gibi saklama, `PRAGMA user_version`
+- [x] Counting and sampling permission errors (the scan does not stop)
+- [x] `store`: SQLite schema, storing the arena as-is, `PRAGMA user_version`
 - [x] `store`: `list`, `latest_for`, `last_two_for`, `delete`, `prune`
-- [x] ncdu uyumlu JSON dışa aktarım
-- [x] `diff`: suçlu klasör tespiti (yoğunlaşma eşiği), eklenen/silinen alt ağaçlar
+- [x] ncdu-compatible JSON export
+- [x] `diff`: culprit folder detection (concentration threshold), added/removed subtrees
 - [x] `cli`: scan / ls / scans / diff / export / prune / rm
-- [x] Canlı ilerleme göstergesi, her komutta `--json`
-- [x] 32 test; `du` ile birebir doğrulama (`/usr`, `/usr/share`, `/etc`)
-- [x] clippy uyarısız, `cargo fmt` temiz, Windows hedefi tip denetimi
+- [x] Live progress indicator, `--json` on every command
+- [x] 32 tests; exact verification against `du` (`/usr`, `/usr/share`, `/etc`)
+- [x] clippy warning-free, `cargo fmt` clean, Windows target type-checked
 - [x] README, WHY, ROADMAP, ARCHITECTURE
 
 ---
 
-## Faz 2 — Ajan ✅ çekirdek tamam
+## Phase 2 — Agent ✅ core done
 
-### Çekirdek
-- [x] `agent` crate'i (workspace'e eklendi, `spacetrace-agent` ikilisi)
-- [x] `agent scan` — tek seferlik, ağsız (`--root` ile tek kök)
-- [x] Yapılandırma dosyası (TOML): kökler, hariç tutulanlar, zamanlama, token
-      — bilinmeyen anahtarlar reddediliyor, `agent check` ile ön doğrulama
-- [x] Dahili zamanlayıcı — elle yazılmış 5 alanlı cron (chrono eklenmedi),
-      Vixie'nin dom/dow birleşim kuralı dâhil
-- [x] Snapshot rotasyonu (kök başına `keep`; `store::prune_target`)
+### Core
+- [x] `agent` crate (added to the workspace, `spacetrace-agent` binary)
+- [x] `agent scan` — one-off, no network (single root with `--root`)
+- [x] Configuration file (TOML): roots, exclusions, scheduling, token
+      — unknown keys are rejected, pre-validated with `agent check`
+- [x] Built-in scheduler — hand-written 5-field cron (chrono not added),
+      including Vixie's dom/dow union rule
+- [x] Snapshot rotation (`keep` per root; `store::prune_target`)
 
-### Ağ
-- [x] `agent serve` — axum HTTP servisi
-  - [x] `GET /health` (tokensiz, yalnızca canlılık+sürüm), `GET /status`
+### Network
+- [x] `agent serve` — axum HTTP service
+  - [x] `GET /health` (no token, liveness+version only), `GET /status`
   - [x] `GET /scans`, `GET /scans/:id`, `GET /scans/:id/download`
-  - [x] `POST /scans` (202 + arka planda tarama), `POST /snapshots` (alıcı uç)
-  - [x] Bearer token doğrulama (sabit zamanlı karşılaştırma), dosya/env/config
-  - [x] Gövde boyutu sınırı, SIGTERM ile temiz kapanma
-  - [ ] Opsiyonel yerleşik TLS — şimdilik ters vekil öneriliyor (→ **D2**)
-- [x] `agent push <url>` — snapshot'ı merkeze/başka ajana gönder (zstd)
-- [x] Eşzamanlı tarama kilidi (aynı kök iki kez taranmıyor → 409)
-- [x] Hız sınırlama — **D3 yapıldı** (14 Eylül 2026); ertelenme gerekçesi
-      yanlıştı, ayrıntısı orada
+  - [x] `POST /scans` (202 + background scan), `POST /snapshots` (receiving endpoint)
+  - [x] Bearer token validation (constant-time comparison), file/env/config
+  - [x] Body size limit, clean shutdown on SIGTERM
+  - [ ] Optional built-in TLS — a reverse proxy is recommended for now (→ **D2**)
+- [x] `agent push <url>` — send the snapshot to the hub/another agent (zstd)
+- [x] Concurrent scan lock (the same root is not scanned twice → 409)
+- [x] Rate limiting — **D3 done** (14 September 2026); the reason for deferring it
+      was wrong, details there
 
-### İstemci tarafı
-- [x] CLI'da uzak kaynak: `--remote <url|ad>` (scans / ls / diff / export)
-- [x] `spacetrace pull` — uzak snapshot'ı yerel veritabanına al
-- [x] Uzak kaynak tanımları `remotes.toml`
-- [ ] SSH modu: kurulum gerektirmeden karşı tarafta geçici ajan çalıştırma
+### Client side
+- [x] Remote source in the CLI: `--remote <url|name>` (scans / ls / diff / export)
+- [x] `spacetrace pull` — pull a remote snapshot into the local database
+- [x] Remote source definitions `remotes.toml`
+- [ ] SSH mode: running a temporary agent on the other side without requiring installation
 
-### Dağıtım
-- [x] Statik ikili (musl) — linux/amd64, linux/arm64 (release workflow)
-- [x] Docker imajı (host'u read-only mount ile tarar)
-- [x] systemd unit + örnek yapılandırma (sertleştirilmiş, ProtectSystem=strict)
-- [x] `curl | sh` kurulum betiği (POSIX sh, busybox uyumlu)
-- [x] GitHub Releases otomasyonu (tag → build → artefakt + SHA256SUMS)
+### Distribution
+- [x] Static binary (musl) — linux/amd64, linux/arm64 (release workflow)
+- [x] Docker image (scans the host via a read-only mount)
+- [x] systemd unit + example configuration (hardened, ProtectSystem=strict)
+- [x] `curl | sh` install script (POSIX sh, busybox-compatible)
+- [x] GitHub Releases automation (tag → build → artifact + SHA256SUMS)
 
-### Doğrulama (çıkış kriteri)
-- [x] Uçtan uca yerel doğrulama: ajan + CLI `--remote diff` anlamlı çıktı
-      veriyor, suçlu klasörü doğru buluyor
-- [ ] **Kendi Hetzner sunucularına, Proxmox host'una ve bir konteynere kur**
-- [ ] **Bir hafta gerçek veri topla** — bu ikisi yalnızca gerçek makinelerde
-      yapılabilir, kod tarafı hazır
-
----
-
-## Faz 3 — Masaüstü ✅
-
-Ayrı depo: [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) (K2).
-Yerleşim motoru burada kaldı (`crates/treemap`), çünkü çekirdek ve test edilebilir.
-
-- [x] Tauri v2 + React/TS iskeleti, Rust çekirdeğini süreç içinde çağırma
-- [x] Squarified treemap — yerleşim Rust'ta (`crates/treemap`), çizim Canvas2D
-- [x] LOD: min_area altındaki dikdörtgenler bölünmüyor; karo sayısı diskin
-      değil ekranın büyüklüğüne bağlı
-- [x] Culling ve hit-test — quadtree yerine hiyerarşinin kendisi kullanıldı
-      (çocuk her zaman ebeveyninin içinde olduğu için ayrı indeks gereksiz)
-- [x] Klasör ağacı paneli (tembel genişleyen), çift yönlü seçim senkronu
-- [x] Dosya türüne göre renklendirme, çöpe gönder, Finder/Explorer'da aç
-- [x] Uzak kaynak akışı: ajandan snapshot indir, yerelmiş gibi gez
-- [x] Diff görünümü (iki snapshot karşılaştırma tablosu)
-- [x] Düğüm kimlikleri generation'a bağlı — eski ağaca ait id reddediliyor
-- [ ] **Windows MFT hızlı yolu** (`usn-journal-rs`) — yönetici arkasında (→ **B4**)
-- [x] macOS Full Disk Access onboarding ekranı — karşılama ekranında bant,
-      ayar paneline düğme, `Info.plist`'te altı kullanım açıklaması
-- [x] Zaman çizelgesi görünümü (bir hedefin tüm geçmişi) — **C3**, masaüstü
-      0.6.0'da yayınlandı
-- [ ] Üç WebView'da treemap performans testi (WebKitGTK dâhil) — yalnızca
-      macOS'ta doğrulandı
+### Validation (exit criterion)
+- [x] End-to-end local validation: agent + CLI `--remote diff` produces meaningful
+      output, correctly finds the culprit folder
+- [ ] **Install on our own Hetzner servers, the Proxmox host, and a container**
+- [ ] **Collect real data for a week** — these two can only be done on
+      real machines, the code side is ready
 
 ---
 
-## Faz 4 — Merkez ✅
+## Phase 3 — Desktop ✅
 
-Ayrı depo: [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) (K2).
+Separate repository: [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) (K2).
+The layout engine stayed here (`crates/treemap`), because it is core and testable.
 
-- [x] axum + SQLite servisi, self-host, tek statik ikili
-- [x] Çoklu ajan panosu — aciliyete göre sıralı (önce dolacak olan)
-- [x] Klasör başına büyüme trendi (en küçük kareler, uyum kalitesiyle birlikte)
-- [x] "Bu hızla giderse N gün sonra dolar" tahmini — dayanağı zayıfsa
-      söylenmiyor (≥3 örnek, ≥1 gün, r² ≥ 0.5, ölçülmüş kapasite, ≤10 yıl)
-- [x] Eşik uyarıları: webhook (boş yer, büyüme hızı, dolma ufku) + cooldown
-- [x] Ekip erişimi ve token yönetimi — ajan token'ları hash'li ve iptal
-      edilebilir; ajan token'ı panoyu okuyamaz, admin token'ı push edemez
-- [x] docker-compose ile tek komut kurulum
-- [x] Kapasite ölçümü çekirdeğe eklendi (şema v2) — tahminin ön koşulu
-- [x] E-posta ile uyarı — **C1**, hub 0.5.0'da yayınlandı (`mailto:` hedefi,
-      `[smtp]` config bölümü)
-- [x] Kişi başına hesap — **C2**, hub 0.5.0'da yayınlandı (viewer/admin)
+- [x] Tauri v2 + React/TS scaffold, calling the Rust core in-process
+- [x] Squarified treemap — layout in Rust (`crates/treemap`), drawing in Canvas2D
+- [x] LOD: rectangles below min_area are not split; the tile count depends
+      on the screen's size, not the disk's
+- [x] Culling and hit-testing — the hierarchy itself was used instead of a quadtree
+      (a separate index is unnecessary since a child is always inside its parent)
+- [x] Folder tree panel (lazily expanding), bidirectional selection sync
+- [x] Coloring by file type, send to trash, open in Finder/Explorer
+- [x] Remote source flow: download a snapshot from the agent, browse it as if local
+- [x] Diff view (comparison table for two snapshots)
+- [x] Node ids tied to generation — an id belonging to an old tree is rejected
+- [ ] **Windows MFT fast path** (`usn-journal-rs`) — behind admin (→ **B4**)
+- [x] macOS Full Disk Access onboarding screen — banner on the welcome screen,
+      button in the settings panel, six usage descriptions in `Info.plist`
+- [x] Timeline view (a target's full history) — **C3**, released in desktop
+      0.6.0
+- [ ] Treemap performance testing across three WebViews (including WebKitGTK) — only
+      verified on macOS
 
 ---
 
-## Rekabet açıkları
+## Phase 4 — Hub ✅
 
-9 Eylül 2026 rakip analizinden çıkan iş listesi. Gerekçeler, ölçümler ve
-kaynaklar [docs/COMPETITORS.md](docs/COMPETITORS.md) içinde; her madde **hangi
-rakibin bizden iyi olduğuyla** etiketli. Sıralama aşağıda, "Sıra" başlığında.
+Separate repository: [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) (K2).
 
-### A. Doğruluk — iddiamızı üç platformda karşıla
+- [x] axum + SQLite service, self-hosted, single static binary
+- [x] Multi-agent dashboard — sorted by urgency (the one filling up soonest first)
+- [x] Per-folder growth trend (least squares, with fit quality)
+- [x] "Fills up in N days at this rate" estimate — not shown if the basis is weak
+      (≥3 samples, ≥1 day, r² ≥ 0.5, measured capacity, ≤10 years)
+- [x] Threshold alerts: webhook (free space, growth rate, fill horizon) + cooldown
+- [x] Team access and token management — agent tokens are hashed and can be
+      revoked; an agent token cannot read the dashboard, an admin token cannot push
+- [x] One-command setup with docker-compose
+- [x] Capacity measurement added to the core (schema v2) — a prerequisite for the estimate
+- [x] Email alerts — **C1**, released in hub 0.5.0 (`mailto:` target,
+      `[smtp]` config section)
+- [x] Per-person accounts — **C2**, released in hub 0.5.0 (viewer/admin)
 
-Bunlar eksik özellik değil, **verdiğimiz sözü tutmama**. Hız eksiği rekabetçi
-dezavantaj; yanlış rakam ürünün kendisini çürütür.
+---
 
-- [x] **A1 Windows `alloc` gerçek değeri** — yazıldı *(9 Eylül 2026)*,
-      **CI onayı bekliyor** (macOS'ta yalnızca tip denetimi yapılabiliyor).
-      `FILE_STANDARD_INFO` → **`AllocationSize`** kullanılıyor.
-      *Önce `GetCompressedFileSizeW` denendi ve CI yanlışladı:* sıkıştırılmamış
-      ve sparse olmayan dosyalarda mantıksal boyutu döndürüyor — 100.001
-      baytlık dosyaya 100.001 dedi. Adı zaten bunu söylüyormuş. Yani yol
-      tabanlı bir çağrıyla olmuyor, handle şart. Dizinler de sorgulanıyor ki
-      `alloc` iki platformda aynı şeyi anlatsın.
-      *Rakip:* TreeSize, WizTree, WinDirStat 2.5.0 doğru rakam veriyor.
-- [x] **A2 Windows hardlink dedupe** — yazıldı *(9 Eylül 2026)*, **CI onayı
-      bekliyor**. `GetFileInformationByHandle` tek çağrıda `nNumberOfLinks` +
-      `nFileIndexHigh/Low` + `dwVolumeSerialNumber` veriyor, yani nlink, ino ve
-      dev birlikte geliyor. Handle `CreateFileW` yerine `std::fs::OpenOptions`
-      ile açılıyor (`FILE_READ_ATTRIBUTES`, `BACKUP_SEMANTICS`,
-      `OPEN_REPARSE_POINT`): RAII kapatıyor, erken dönüşte sızma yok, unsafe
-      yüzeyi küçük ve **yeni windows-sys feature'ı gerekmedi**.
-      *Yan kazanç:* `-x/--one-file-system` Windows'ta artık gerçekten çalışıyor
-      — daha önce her girdi volume 0 bildirdiği için sessizce etkisizdi.
-      *Maliyet:* dosya başına bir handle. Yalnızca dedupe veya `-x` açıkken
-      ödeniyor (`FileIdentity::Skipped`); ölçülmüş mertebe +36%, kaldıran B4.
-      *Rakip:* WinDirStat 2.5.0 (Ocak 2026).
-- [x] **A3 APFS clone tekilleştirme** — yapıldı *(9 Eylül 2026)*, varsayılan
-      açık, `--no-clone-dedupe` ile kapanır (ajanda `dedupe_clones`).
-      Clone'un kendi inode'u var ve `nlink == 1`, yani hardlink tekilleştirme
-      onu göremiyor; ama diskte blokları bir kez duruyor. Kontrollü ölçüm:
-      **3 clone × 100 MB = 0 MB** boş alan tüketimi, `du` ise 400 MB diyor.
-      Tespit `fcntl(F_LOG2PHYS_EXT)` ile: aynı fiziksel offset'te başlayan
-      dosyalar extent paylaşıyor. Sıkıştırılmış dosyalarda `ENOTSUP` dönüyor,
-      o da güvenli biçimde "clone değil" demek. Yalnızca **boyutu başka bir
-      dosyayla çakışan** dosyalar sorgulanıyor, çünkü her sorgu bir `open` +
-      `fcntl`.
+## Competitive gaps
 
-      **Ölçüm düzeltmesi — kendi rakamımı düzeltiyorum.** İlk ölçümüm
-      "%31,7 fazla sayıyoruz" dedi ve **yanlıştı**: ölçüm betiğim hardlink'leri
-      tekilleştirmiyordu, oysa tarayıcı `~/github`'da 68 bin hardlink eliyor.
-      İki hardlink aynı inode'u paylaştığı için doğal olarak aynı fiziksel
-      offset'i bildiriyor — yani "clone" saydıklarımın çoğu zaten hallettiğimiz
-      hardlink'lermiş. Hardlink tekilleştirmesi sonrası **gerçek rakam:
-      0,76 GiB / 15,6 GiB = %4,9**, 430 dosya. Bağımsız Python aracı ve
-      tarayıcı birebir aynı sayıyı veriyor (430).
+Work list drawn from the 9 September 2026 competitor analysis. Rationale, measurements and
+sources are in [docs/COMPETITORS.md](docs/COMPETITORS.md); every item is labeled with **which
+competitor is better than us**. The ordering is below, under the "Order" heading.
 
-      | Ağaç | Kurtarılan | Maliyet |
+### A. Accuracy — meet our claim on three platforms
+
+These are not missing features, they are **failing to keep our word**. A speed
+shortfall is a competitive disadvantage; a wrong number refutes the product itself.
+
+- [x] **A1 Windows `alloc` real value** — written *(9 September 2026)*,
+      **awaiting CI confirmation** (only type-checking is possible on macOS).
+      `FILE_STANDARD_INFO` → **`AllocationSize`** is used.
+      *`GetCompressedFileSizeW` was tried first and CI disproved it:* it
+      returns the logical size for uncompressed, non-sparse files — it said
+      100,001 for a 100,001-byte file. The name already gave it away. So a
+      path-based call doesn't work, a handle is required. Directories are
+      queried too, so `alloc` means the same thing on both platforms.
+      *Competitor:* TreeSize, WizTree, WinDirStat 2.5.0 give the correct number.
+- [x] **A2 Windows hardlink dedupe** — written *(9 September 2026)*, **awaiting
+      CI confirmation**. `GetFileInformationByHandle` gives `nNumberOfLinks` +
+      `nFileIndexHigh/Low` + `dwVolumeSerialNumber` in a single call, i.e. nlink,
+      ino and dev arrive together. The handle is opened with
+      `std::fs::OpenOptions` instead of `CreateFileW` (`FILE_READ_ATTRIBUTES`,
+      `BACKUP_SEMANTICS`, `OPEN_REPARSE_POINT`): RAII closes it, no leak on
+      early return, the unsafe surface is small, and **no new windows-sys
+      feature was needed**.
+      *Side benefit:* `-x/--one-file-system` now actually works on Windows —
+      previously it was silently a no-op because every entry reported volume 0.
+      *Cost:* one handle per file. Only paid when dedupe or `-x` is on
+      (`FileIdentity::Skipped`); measured order of magnitude +36%, removed by B4.
+      *Competitor:* WinDirStat 2.5.0 (January 2026).
+- [x] **A3 APFS clone deduplication** — done *(9 September 2026)*, on by
+      default, turned off with `--no-clone-dedupe` (`dedupe_clones` in the agent).
+      A clone has its own inode and `nlink == 1`, so hardlink deduplication
+      can't see it; but its blocks sit on disk only once. Controlled
+      measurement: **3 clones × 100 MB = 0 MB** of free-space consumption,
+      while `du` says 400 MB. Detection is via `fcntl(F_LOG2PHYS_EXT)`: files
+      starting at the same physical offset share an extent. Compressed files
+      return `ENOTSUP`, which safely means "not a clone". Only files whose
+      **size collides with another file's** are queried, because every query
+      is an `open` + `fcntl`.
+
+      **Measurement correction — correcting my own number.** My first
+      measurement said "we're overcounting by 31.7%" and it **was wrong**: my
+      measurement script wasn't deduplicating hardlinks, while the scanner
+      eliminates 68,000 hardlinks in `~/github`. Since two hardlinks share the
+      same inode, they naturally report the same physical offset — meaning
+      most of what I counted as "clones" were actually hardlinks we'd already
+      handled. After hardlink deduplication, the **real number: 0.76 GiB /
+      15.6 GiB = 4.9%**, 430 files. The independent Python tool and the
+      scanner give the exact same number (430).
+
+      | Tree | Recovered | Cost |
       |------|-----------|---------|
-      | `/Applications` (412k girdi) | 0 (hiç clone yok) | +91 ms (+8%) |
-      | `~/github` (138k dosya) | 0,76 GiB (%4,9) | +72 ms (+21%) |
+      | `/Applications` (412k entries) | 0 (no clones at all) | +91 ms (+8%) |
+      | `~/github` (138k files) | 0.76 GiB (4.9%) | +72 ms (+21%) |
 
-      **Değişmez #1 yeniden yazıldı:** `alloc` artık "`du` ile birebir" değil,
-      "diskin gerçekten tuttuğu". Paylaşılan blok yokken `du` ile birebir aynı
-      (test zorluyor), varken fark **tam olarak paylaşılan bloklar** (o da test
-      ediliyor).
-      *Rakip:* **DaisyDisk 4.34** aynı şeyi yapıyordu; artık biz de yapıyoruz.
-- [x] **A4 (Unix) `du` karşılaştırma testi — yazıldı.** *(9 Eylül 2026)*
-      **Madde yanlış kurulmuştu:** "test yalnızca macOS'ta koşuyor" değil,
-      **test hiç yoktu**. `totals_match_the_files_on_disk` testin kendi yazdığı
-      sabitlerle karşılaştırıyordu ve `alloc` iddiası `>= 4096`'ydı; `du`
-      doğrulaması elle yapılıyordu. Buna karşılık CLAUDE.md, ARCHITECTURE.md ve
-      WHY.md "bu bir test koşulu" diyordu — üçü de artık doğru.
-      Yeni: `crates/scan-core/tests/du_equivalence.rs`, 6 test, CI'da
-      ubuntu + macos'ta koşuyor. `alloc` oracle'ı harici `du`; `size` oracle'ı
-      aynı dosyadaki **naif seri yürüyüş**, çünkü `du` mantıksal boyutu
-      veremiyor (BSD `-A` bloğa yuvarlıyor, GNU `--apparent-size` dizin
-      inode'unu ekliyor — bizim `size` eklemiyor).
-      Mutasyon testiyle doğrulandı: `alloc`=`size` → 3 test düşüyor,
-      dedupe bozulunca → 3 test, dizin inode'u toplama eklenince → 1 test
-      (yalnızca naif yürüyüş yakalıyor; `du` o mutasyona onay verirdi).
-- [x] **A4w `du` karşılaştırmasının Windows karşılığı** — yazıldı
-      *(9 Eylül 2026)*, A1/A2 ile aynı commit'te.
-      `crates/scan-core/tests/windows_metadata.rs`, 6 test.
-      Windows'ta `du` yok, harici oracle yok; yerine **inşa tabanlı** test.
-      Cluster boyutu taşınabilir biçimde sorulamadığı için hile şu: **512'nin
-      katı olmayan bir uzunluk** seçiliyor (100.001). NTFS cluster'ı en az 512
-      bayt olduğundan gerçek bir tahsis rakamı bu uzunluğa **eşit olamaz** —
-      yani `alloc != size` iddiası, mantıksal boyutun döndürülmediğini cluster
-      boyutunu bilmeden kanıtlıyor. Dosya içeriği bilinçli olarak
-      **sıkıştırılamaz** (sıfırlarla dolu bir dosya, sıkıştırma açık bir
-      birimde testi haksız yere düşürürdü).
-      `stats.errors == 0` iddiası da kanarya: sistematik bir API hatası
-      olsaydı `alloc` sessizce mantıksal boyuta düşerdi, test bunu yakalar.
-- [x] **A5 Snapshot bütünlük kontrolü** — yapıldı *(10 Eylül 2026)*. Şema v3'te
-      `scans.content_hash`: taramanın *mantıksal içeriğinin* SHA-256'sı
-      (metadata satırı + her `entries` satırı, alanlar etiketli, dizeler
-      uzunluk önekli). Dosyanın baytlarının değil — `export_snapshot` her
-      seferinde yeni bir SQLite dosyası kuruyor ve `VACUUM` içeriği
-      değiştirmeden dosyayı değiştiriyor; kendi kendine oynayan bir özet,
-      olmayandan kötü. `import_snapshot` tutmazsa hiçbir şeyi almıyor,
-      `export_snapshot` bozuk bildiğini göndermiyor, `spacetrace verify`
-      istendiğinde bakıyor. `NULL` = "özet yok" (v3 öncesi), "bozuk" değil.
-      **Kimlik doğrulaması değil** — gövdeyi değiştirebilen özeti de
-      hesaplar; tehdit modeli bozulma, saldırgan değil.
-      Yeni bağımlılık yok (`sha2` zaten workspace'te).
-- [ ] **A6 btrfs/ZFS farkındalığı** — reflink ve sıkıştırma yüzünden ağaç
-      yürüyüşü yanlış. Uzun vade; doğrusu örnekleme gerektiriyor.
-      *Rakip:* btdu (Monte Carlo, ~100 örnekte %1 çözünürlük).
+      **Invariant #1 rewritten:** `alloc` is no longer "identical to `du`",
+      but "what the disk actually holds". When there are no shared blocks it's
+      identical to `du` (enforced by a test); when there are, the difference
+      is **exactly the shared blocks** (also tested).
+      *Competitor:* **DaisyDisk 4.34** already did this; now we do too.
+- [x] **A4 (Unix) `du` comparison test — written.** *(9 September 2026)*
+      **The item was framed wrong:** it's not "the test only runs on macOS",
+      **there was no test at all**. `totals_match_the_files_on_disk` was
+      comparing against constants the test itself wrote, and the `alloc`
+      claim was `>= 4096`; `du` verification was done by hand. Meanwhile
+      CLAUDE.md, ARCHITECTURE.md and WHY.md said "this is a tested condition"
+      — all three are now true.
+      New: `crates/scan-core/tests/du_equivalence.rs`, 6 tests, running in CI
+      on ubuntu + macos. The `alloc` oracle is external `du`; the `size`
+      oracle is a **naive serial walk** over the same file, because `du`
+      can't give the logical size (BSD `-A` rounds to the block, GNU
+      `--apparent-size` adds the directory inode — our `size` doesn't add it).
+      Verified with mutation testing: `alloc`=`size` → 3 tests fail, breaking
+      dedupe → 3 tests, adding directory-inode summing → 1 test (only the
+      naive walk catches it; `du` would approve that mutation).
+- [x] **A4w Windows counterpart of the `du` comparison** — written
+      *(9 September 2026)*, in the same commit as A1/A2.
+      `crates/scan-core/tests/windows_metadata.rs`, 6 tests.
+      There's no `du` on Windows, no external oracle; instead a
+      **construction-based** test. Since the cluster size can't be queried
+      portably, the trick is: a length that's **not a multiple of 512** is
+      chosen (100,001). Since an NTFS cluster is at least 512 bytes, a real
+      allocation number **can't equal** that length — meaning the
+      `alloc != size` claim proves the logical size isn't being returned,
+      without knowing the cluster size. The file content is deliberately made
+      **incompressible** (a file full of zeros would unfairly fail the test
+      on a volume with compression turned on).
+      The `stats.errors == 0` assertion is also a canary: if there were a
+      systematic API error, `alloc` would silently fall back to the logical
+      size, and the test catches that.
+- [x] **A5 Snapshot integrity check** — done *(10 September 2026)*. In schema
+      v3, `scans.content_hash`: the SHA-256 of the scan's *logical content*
+      (the metadata row + every `entries` row, fields tagged, strings
+      length-prefixed). Not the file's bytes — `export_snapshot` builds a new
+      SQLite file every time, and `VACUUM` changes the file without changing
+      its content; a hash that moves on its own is worse than none. If
+      `import_snapshot` doesn't match, it takes nothing; `export_snapshot`
+      doesn't ship something it knows is corrupt; `spacetrace verify` checks
+      it on request. `NULL` = "no hash" (pre-v3), not "corrupt". **Not
+      authentication** — it also computes a hash for a body that could be
+      tampered with; the threat model is corruption, not an attacker.
+      No new dependency (`sha2` is already in the workspace).
+- [ ] **A6 btrfs/ZFS awareness** — tree walking is wrong because of reflinks
+      and compression. Long-term; doing it right requires sampling.
+      *Competitor:* btdu (Monte Carlo, 1% resolution at ~100 samples).
 
-### B. Hız — ölçülmüş açıklar
+### B. Speed — measured gaps
 
-- [x] **B1 Bellek** — *(9 Eylül 2026: ölçüldü, parçalandı, dördü yapıldı.
-      Beşincisi ve asıl olanı, **B1-K**, 14 Eylül 2026'da bitti.)*
+- [x] **B1 Memory** — *(9 September 2026: measured, broken down, four done.
+      The fifth and main one, **B1-K**, finished on 14 September 2026.)*
 
-      **Dağılım — düzeltme öncesi** (`/Applications`, 412.232 girdi, tepe RSS
-      119 MB = **290 B/girdi**), faz faz RSS probuyla ölçüldü:
+      **Distribution — before the fix** (`/Applications`, 412,232 entries,
+      peak RSS 119 MB = **290 B/entry**), measured phase by phase with an
+      RSS probe:
 
-      | Kalem | MB | B/girdi |
+      | Item | MB | B/entry |
       |---|---|---|
-      | taban (ikili + çalışma zamanı) | 8 | — |
-      | `RawEntry` ara ağacı (yürüyüş fazı) | 36,3 | 88 |
-      | ad `String`'leri | ~13,2 | ~32 |
-      | parçalanma, malloc başlıkları, geçici `PathBuf`'lar | ~19 | ~46 |
-      | arena (`Node` 104 B) | 42,9 | 104 |
+      | baseline (binary + runtime) | 8 | — |
+      | `RawEntry` intermediate tree (walk phase) | 36.3 | 88 |
+      | name `String`s | ~13.2 | ~32 |
+      | fragmentation, malloc headers, temporary `PathBuf`s | ~19 | ~46 |
+      | arena (`Node` 104 B) | 42.9 | 104 |
 
-      **Sonuç (aynı gün):** 298 → **231 B/girdi** (117 → 91 MB), yani **%22,5**.
-      Hız gerilemedi — dönüşümlü A/B ölçümünde 8 thread'te en iyi 0.976s →
-      0.894s, yani hafifçe **hızlandı** (girdi başına bir malloc eksildi).
-      Not: ardışık ölçüm önce %12 gerileme göstermişti; makine ısınmasından
-      kaynaklanan sürüklenmeydi, dönüşümlü koşturma bunu eledi.
+      **Result (same day):** 298 → **231 B/entry** (117 → 91 MB), i.e.
+      **22.5%**. No speed regression — in the alternating A/B measurement,
+      at 8 threads the best went from 0.976s → 0.894s, i.e. it **sped up**
+      slightly (one fewer malloc per entry). Note: a sequential measurement
+      had first shown a 12% regression; that was drift caused by machine
+      warm-up, alternating runs eliminated it.
 
-      **Kritik gözlem:** yürüyüş bittiğinde 77 MB, flatten bittiğinde 119 MB.
-      Yani `RawEntry` ağacı ile arena **aynı anda yaşıyor** ve `RawEntry`
-      serbest bırakılsa da işletim sistemine geri verilmiyor. 290 B/girdinin
-      192'si bu **çift depolama**.
+      **Critical observation:** 77 MB when the walk finished, 119 MB when
+      flatten finished. So the `RawEntry` tree and the arena **live at the
+      same time**, and even when `RawEntry` is freed it isn't returned to
+      the operating system. 192 of the 290 B/entry is this **double
+      storage**.
 
-      - [x] **Arena kapasitesini önceden ayır.** Girdi sayısı flatten anında
-            zaten tam biliniyor (`progress.files + dirs`). Öncesinde 1024'ten
-            ikiye katlanarak 524.288'e çıkıyordu. Ölçülen kazanç 298 → 290 B
-            (%3) — tahmin ettiğimden çok azdı, çünkü tepe flatten'da değil
-            yürüyüşte oluşuyor.
-      - [x] **Paylaşılan ad arenası.** Adlar `Tree` içinde tek bir `String`'de;
-            düğüm `(offset: u32, len: u16)` tutuyor. `u8` değil `u16`, çünkü
-            kökün adı tam yol ve 255 baytı aşabiliyor.
-            `Node.name` alanı kalktı, yerine `Tree::name(id)`; düğüm kurmanın
-            tek yolu artık `TreeAssembler` + `StoredNode`, yani **hatalı bir
-            offset yapı gereği kurulamıyor**. Şema değişmedi (SQLite hâlâ
-            satır başına TEXT saklıyor).
-      - [x] **Alan daraltma:** `nlink`, `files`, `dirs` `u64` → `u32`.
-            `Node` 104 → **72 B** (ölçüldü). `mtime` `i64` kaldı — 1970 öncesi
-            dosyalar gerçek ve negatif damga taşıyorlar.
-      - [x] **`RawEntry` 88 → 48 B.** Adlar dizin başına tek tamponda
-            (`Children { names, entries }`), çocuklar `Option<Box<Children>>`.
-            `to_string_lossy()` geçerli UTF-8'de ödünç döndürdüğü için girdi
-            başına `String` tahsisi tamamen kalktı: **412k → 35k tahsis.**
-      - [x] **B1-K Çift depolamayı kaldır** — yapıldı *(14 Eylül 2026)*,
-            aşağıdaki notta tarif edilen araştırma yapılıp **sorunun kendisi
-            yanlış kurulmuş bulundu**.
+      - [x] **Pre-allocate the arena's capacity.** The entry count is
+            already known exactly by flatten time (`progress.files +
+            dirs`). Before, it grew from 1024 by doubling up to 524,288.
+            Measured gain 298 → 290 B (3%) — much smaller than expected,
+            because the peak forms during the walk, not during flatten.
+      - [x] **Shared name arena.** Names live in a single `String` inside
+            `Tree`; the node holds `(offset: u32, len: u16)`. `u16`, not
+            `u8`, because the root's name is a full path and can exceed
+            255 bytes. The `Node.name` field is gone, replaced by
+            `Tree::name(id)`; the only way to build a node is now
+            `TreeAssembler` + `StoredNode`, so **a bad offset can't be
+            constructed structurally**. The schema didn't change (SQLite
+            still stores TEXT per row).
+      - [x] **Field narrowing:** `nlink`, `files`, `dirs` `u64` → `u32`.
+            `Node` 104 → **72 B** (measured). `mtime` stayed `i64` —
+            pre-1970 files are real and carry a negative timestamp.
+      - [x] **`RawEntry` 88 → 48 B.** Names in a single buffer per
+            directory (`Children { names, entries }`), children
+            `Option<Box<Children>>`. Since `to_string_lossy()` returns
+            borrowed on valid UTF-8, the per-entry `String` allocation is
+            gone entirely: **412k → 35k allocations.**
+      - [x] **B1-K Remove double storage** — done *(14 September 2026)*,
+            the research described in the note below was carried out and
+            **the problem itself was found to be misframed**.
 
-      **Hedef düzeltmesi:** RESEARCH.md'deki **~25 B/dosya** hedefi bizim alan
-      kümemizle **ulaşılabilir değil** ve karşılaştırma elmayla armut. ncdu 2
-      düğüm başına `own_size`/`own_alloc`/`files`/`dirs` tutmuyor. Bizim
-      taban aritmetiğimiz: en agresif daraltmayla `Node` 72 B + ad ~21 B =
-      **~93 B/girdi**, artı çift depolama. Gerçekçi hedef **dua-cli'nin 64 B
-      arena düğümü** mertebesi, 25 değil.
-      *Rakip:* dua-cli 64 B arena düğümü + paylaşılan ad deposu, RSS %49 aşağı;
-      ncdu 2 dosyada 25 B, dizinde 56 B.
+      **Target correction:** the **~25 B/file** target from RESEARCH.md is
+      **not reachable** with our field set, and the comparison is apples
+      to oranges. ncdu 2 doesn't keep `own_size`/`own_alloc`/`files`/
+      `dirs` per node. Our baseline arithmetic: with the most aggressive
+      narrowing, `Node` 72 B + name ~21 B = **~93 B/entry**, plus double
+      storage. The realistic target is on the order of **dua-cli's 64 B
+      arena node**, not 25.
+      *Competitor:* dua-cli 64 B arena node + shared name store, RSS 49%
+      lower; ncdu 2: 25 B per file, 56 B per directory.
 
-      ### B1-K — çift depolama ✅ *(14 Eylül 2026)*
+      ### B1-K — double storage ✅ *(14 September 2026)*
 
-      **Cevap: ikilem yoktu.** Aşağıdaki dört soru araştırmanın çıkış
-      noktasıydı ve birincisi ötekileri gereksiz kıldı.
+      **Answer: there was no dilemma.** The four questions below were the
+      research's starting point, and the first made the others
+      unnecessary.
 
-      *"Çift depolama, değişmez #2 korunarak kaldırılabilir mi?"* — Evet, ve
-      değişmez #2 sanıldığından zayıfmış. Arenanın istediği şey BFS değil, iki
-      özellik: çocuklar bitişik, her çocuğun indeksi ebeveyninden büyük.
-      Depodaki her tüketici tek tek denetlendi ve **hiçbiri seviye sırası
-      istemiyor**: `aggregate` ve `median_bands` yalnızca ikinci özelliğe
-      dayanan ters geçişler, `Tree::check` tam olarak o iki özelliği
-      denetliyor, `store` düzeni olduğu gibi saklıyor, `diff` çocukları **ada
-      göre** eşliyor, masaüstü id'leri generation'a bağlıyor. Kodda "BFS"
-      yalnızca yorumlarda ve belgelerde geçiyordu.
+      *"Can double storage be removed while preserving invariant #2?"* —
+      Yes, and invariant #2 turned out to be weaker than assumed. What the
+      arena needs isn't BFS but two properties: children are contiguous,
+      and each child's index is greater than its parent's. Every consumer
+      in the repository was checked one by one and **none of them wants
+      level order**: `aggregate` and `median_bands` are reverse passes
+      that rely only on the second property, `Tree::check` checks exactly
+      those two properties, `store` stores the layout as-is, `diff`
+      matches children **by name**, the desktop ties ids to a generation.
+      In the code, "BFS" only appeared in comments and docs.
 
-      Bir dizinin listesi zaten tek thread'de tamamlandığı için, o an arenada
-      bitişik bir blok açılıp yazılabiliyor (`TreeBuilder::push_block`).
-      Ebeveyn adlandırılabilmek için arenada zaten olmak zorunda, yani ikinci
-      özellik yapı gereği tutuyor. Ara ağaç tamamen kalktı.
+      Since a directory's listing is already completed on a single
+      thread, a contiguous block can be opened and written in the arena
+      at that point (`TreeBuilder::push_block`). For the parent to be
+      nameable it must already be in the arena, so the second property
+      holds structurally. The intermediate tree is gone entirely.
 
-      Seviye-senkron BFS'e, iş-çalan DFS'i riske atmaya, chunk'lı arenaya
-      **gerek olmadı** — üçü de yanlış kurulmuş bir kısıtın çözümleriydi.
-      dua-cli'nin yolu da okundu (`traverse.rs`): onlar da ara ağaç tutmuyor,
-      girdileri akarken arenaya ekliyorlar; farkları tek tüketici thread +
-      sınırlı kanal. Bize uymadı, çünkü listeleyen thread çocukların id'lerini
-      recursion'dan **önce** bilmek zorunda.
+      Level-synchronized BFS, risking the work-stealing DFS, a chunked
+      arena — **none of them were needed** — all three were solutions to
+      a constraint that had been misframed. dua-cli's approach was also
+      read (`traverse.rs`): they don't keep an intermediate tree either,
+      they append entries to the arena as they stream; their difference
+      is a single consumer thread + a bounded channel. It didn't fit us,
+      because the listing thread has to know the children's ids **before**
+      recursion.
 
-      **Ölçüm** (`examples/memprobe.rs`, `scripts/bench-walk.sh`;
-      serpiştirilmiş 9 tur, medyan, M3 Max):
+      **Measurement** (`examples/memprobe.rs`, `scripts/bench-walk.sh`;
+      interleaved 9 runs, median, M3 Max):
 
-      | | taban | sonra |
+      | | baseline | after |
       |---|---|---|
-      | `/Applications` tepe | 91,5 MB | **57,6 MB** (-%37) |
-      | `/Applications` B/girdi, ipuçlu | 221 | **125** (-%43) |
-      | `~/github` tepe | 234,6 MB | **201,6 MB** (-%14) |
-      | Linux 75k, tepe | 15,0 MiB | **10,7 MiB** (-%29) |
-      | Linux 75k, "ağaç olmayan" | 8,4 MiB | **4,1 MiB** (-%51) |
+      | `/Applications` peak | 91.5 MB | **57.6 MB** (-37%) |
+      | `/Applications` B/entry, hinted | 221 | **125** (-43%) |
+      | `~/github` peak | 234.6 MB | **201.6 MB** (-14%) |
+      | Linux 75k, peak | 15.0 MiB | **10.7 MiB** (-29%) |
+      | Linux 75k, "non-tree" | 8.4 MiB | **4.1 MiB** (-51%) |
 
-      Dört dağılımın hiçbiri örtüşmüyor. **Hız iki korpusta da aynı**:
-      2022'ye karşı 1956 ms ve 739'a karşı 750 ms, ikisinde de aralıklar iç
-      içe — yani söylenecek şey "aynı", iki medyanın farkı değil.
+      None of the four distributions overlap. **Speed is the same in both
+      corpora**: 2022 vs 1956 ms and 739 vs 750 ms, with the ranges nested
+      in both — meaning what should be said is "the same," not the
+      difference between the two medians.
 
-      **`~/github`'da kazancın küçük kalması B1-K'nin işi değil.** Orada
-      tepenin ~140 MiB'ı canlı veri değil: taban ikili de ağacı düşürdükten
-      sonra 201 MiB'da kalıyor. macOS libmalloc'un geri vermediği sayfalar,
-      yani D4. Linux'ta aynı kod "ağaç olmayan" kısmı yarıya indiriyor ve
-      yapısal sonuç o.
+      **The gain staying small in `~/github` is not B1-K's doing.** There,
+      ~140 MiB of the peak isn't live data: even the baseline binary stays
+      at 201 MiB after dropping the tree. Pages macOS libmalloc doesn't
+      return, i.e. D4. On Linux the same code halves the "non-tree"
+      portion, and that is the structural result.
 
-      **`ScanOptions::expected_entries`** eklendi: arena artık yürüyüş
-      sırasında dolduğu için son boyutu baştan bilinmiyor, ve ikiye katlanan
-      bir `Vec` son taşımada iki tamponu birden tutuyor (412k'da 57 MB; N =
-      2^k+1'de arenanın iki katı). Bayrak değil — tek dürüst kaynağı aynı
-      kökün önceki taraması. CLI ve ajan store'dan soruyor, masaüstü zaten
-      ilerleme çubuğu için tuttuğu rakamı veriyor.
+      **`ScanOptions::expected_entries`** was added: since the arena now
+      fills during the walk, its final size isn't known up front, and a
+      doubling `Vec` holds two buffers at once on its last move (57 MB at
+      412k; twice the arena's size at N = 2^k+1). Not a flag — its only
+      honest source is a previous scan of the same root. The CLI and
+      agent ask the store, the desktop already supplies the figure it
+      keeps for the progress bar.
 
-      **Gözlemlenebilir değişiklik:** iki tarama artık aynı id'leri vermiyor
-      (aynı cevapları veriyor). `dupes`'un grup temsilcisi tarama içinde
-      deterministik, iki tarama arasında yer değiştirebilir. Tarayıcının kendi
-      clone tekilleştirmesi bu yüzden `(derinlik, yol)` ile sıralıyor.
+      **Observable change:** two scans no longer produce the same ids
+      (they produce the same answers). `dupes`'s group representative is
+      deterministic within a scan, and can shift between two scans. The
+      scanner's own clone deduplication therefore sorts by
+      `(depth, path)`.
 
-      **Doğrulama:** `/Applications`'ın 412.983 satırı CSV dışa aktarımında
-      birebir aynı. `/usr`'da ağacın şekli aynı, yalnızca hangi hardlink
-      adının baytları taşıdığı değişiyor — değişmez 3 bunu zaten belirsiz
-      ilan ediyor ve **eski ikili de kendi iki koşusu arasında 245 satırda
-      değişiyor** (ölçüldü).
+      **Verification:** `/Applications`'s 412,983-row CSV export is
+      byte-for-byte identical. On `/usr` the tree's shape is identical,
+      only which hardlink name carries the bytes changes — invariant 3
+      already declares this undefined, and **the old binary itself
+      changes in 245 rows between its own two runs** (measured).
 
-      **Hedef düzeltmesi hâlâ geçerli:** RESEARCH.md'deki ~25 B/dosya bizim
-      alan kümemizle ulaşılabilir değil (ncdu 2 düğüm başına `own_size`/
-      `own_alloc`/`files`/`dirs` tutmuyor). Taban aritmetiğimiz `Node` 72 B +
-      ad ~21 B = ~93 B/girdi, ve ipuçlu ölçüm artık **125 B/girdi**, yani
-      dua-cli mertebesinde.
+      **The target correction still stands:** ~25 B/file from
+      RESEARCH.md isn't reachable with our field set (ncdu 2 doesn't keep
+      `own_size`/`own_alloc`/`files`/`dirs` per node). Our baseline
+      arithmetic is `Node` 72 B + name ~21 B = ~93 B/entry, and the
+      hinted measurement is now **125 B/entry**, i.e. on the order of
+      dua-cli.
 
-- [x] **B2 Thread sayısı ayarı** — yapıldı *(10 Eylül 2026)*. `--threads N`,
-      ajanda kök başına `threads`, ve yürüyüş artık rayon'un global havuzunda
-      değil kendi havuzunda (kütüphane süreç geneli bir ayarı sahiplenemez).
-      Varsayılan `min(çekirdek, 8)`. **En iyi thread sayısı diye bir şey yok:**
-      optimum ağacın büyüklüğüyle kayıyor — 50k girdide 6, 412k'da 12. Seçilen
-      sayı hiçbirinde en iyi değil ama ikisinde de eski varsayılanı yeniyor
-      (%39 ve %11). Tablo ve yöntem docs/COMPETITORS.md §1.2.
-      *Rakip:* erdtree ampirik 3 thread; TreeSize CPU yüküne göre ayarlıyor.
-      **Açık kalan:** 412k üstü ölçülmedi. Sentetik 1.2M denemesi şekli
-      bozuk çıktığı için atıldı; gerçek büyük bir korpus gerekiyor.
-- [ ] **B3 HDD / ağ sürücüsü modu** — dönen diskte ve NFS'te paralel yürüyüş tek
-      thread'den kötü olabilir (seek thrash); bu durum için hiçbir şeyimiz yok.
-      *Rakip:* gdu `--sequential`; QDirStat girdileri stat etmeden önce inode'a
-      göre sıralıyor.
-- [ ] **B4 Windows MFT hızlı yolu** (`usn-journal-rs`) — yönetici gerekiyor,
-      ReFS'te ve ağ/FAT'te yok → normal yola geri düşme şart, ve o yol A1/A2'de
-      düzeliyor. **Sıra bu yüzden A'dan sonra.**
-      *Rakip:* WizTree (ham MFT), TreeSize Free (yönetici), WinDirStat 2.5.0.
-- [x] **B5 macOS `getattrlistbulk` hızlı yolu** — yapıldı *(11 Eylül 2026)*.
-      Ayrı bir crate gerekmedi: `libc` zaten `getattrlistbulk`'ü açıyor.
-      Dizin başına `readdir` + **girdi başına `lstat`** yerine tek çağrıda hem
-      adlar hem metadata.
+- [x] **B2 Thread count tuning** — done *(10 September 2026)*.
+      `--threads N`, `threads` per root in the agent, and the walk now
+      runs in its own pool instead of rayon's global pool (a library
+      can't own a process-wide setting). Default `min(cores, 8)`.
+      **There's no such thing as a single best thread count:** the
+      optimum shifts with the tree's size — 6 at 50k entries, 12 at 412k.
+      The chosen count isn't the best at either, but it beats the old
+      default at both (39% and 11%). Table and method in
+      docs/COMPETITORS.md §1.2.
+      *Competitor:* erdtree, empirically 3 threads; TreeSize tunes by CPU
+      load.
+      **Left open:** not measured above 412k. The synthetic 1.2M attempt
+      was discarded because its shape came out malformed; a real large
+      corpus is needed.
+- [ ] **B3 HDD / network drive mode** — on spinning disks and NFS, a
+      parallel walk can be worse than single-thread (seek thrash); we
+      have nothing for this case.
+      *Competitor:* gdu `--sequential`; QDirStat sorts entries by inode
+      before stat'ing them.
+- [ ] **B4 Windows MFT fast path** (`usn-journal-rs`) — needs
+      administrator, absent on ReFS and network/FAT → falling back to the
+      normal path is mandatory, and that path gets fixed in A1/A2.
+      **The order is therefore after A.**
+      *Competitor:* WizTree (raw MFT), TreeSize Free (administrator),
+      WinDirStat 2.5.0.
+- [x] **B5 macOS `getattrlistbulk` fast path** — done *(11 September
+      2026)*. No separate crate was needed: `libc` already exposes
+      `getattrlistbulk`. Instead of `readdir` per directory +
+      **`lstat` per entry**, both names and metadata in a single call.
 
-      **Ölçüm, serpiştirilmiş ve medyanlı, iki korpusta:**
+      **Measurement, interleaved with medians, on two corpora:**
 
-      | Ağaç | Eski | Yeni | Kazanç |
+      | Tree | Old | New | Gain |
       |------|------|------|--------|
-      | `~/github` (297.695 girdi) | 1293 ms | 556 ms | **2,33×** |
-      | `/Applications` (412k girdi) | 1554 ms | 646 ms | **2,41×** |
+      | `~/github` (297,695 entries) | 1293 ms | 556 ms | **2.33×** |
+      | `/Applications` (412k entries) | 1554 ms | 646 ms | **2.41×** |
 
-      Dağılımlar hiç örtüşmüyor (`~/github`: yeni maks 598, eski min 1225),
-      yani bu makinenin gürültüsünün üretebileceği bir sayı değil. Yalnız
-      listeleme katmanı tek thread'de ölçüldüğünde 3,3×; paralel yürüyüşte
-      uçtan uca 2,3–2,4×, çünkü ağaç kurma ve clone sondası aynı kalıyor.
-      Üç kökte (`~/github`, `/Applications`, `/usr`) iki ikilinin çıktısı
-      birebir aynı.
+      The distributions don't overlap at all (`~/github`: new max 598,
+      old min 1225), meaning this isn't a number this machine's noise
+      could produce. When the listing layer alone is measured
+      single-threaded, 3.3×; end-to-end in the parallel walk, 2.3–2.4×,
+      because tree building and the clone probe stay the same. Across
+      three roots (`~/github`, `/Applications`, `/usr`) the two binaries'
+      output is byte-for-byte identical.
 
-      **Asıl risk ikinci bir kod yoluydu**, hız değil: sessizce ayrışan iki
-      metadata kaynağı `store::digest`'in kendi başlığında uyardığı hata.
-      O yüzden hızlı yol aynı `RawMeta`'yı üretiyor ve `assert_same_answer_as_lstat`
-      iki yolu alan alan karşılaştırıyor — symlink, kırık symlink, dizine
-      symlink, hardlink ve tek batch'e sığmayan dizin dâhil.
+      **The real risk was a second code path**, not speed: two metadata
+      sources silently diverging is the error `store::digest` warns about
+      in its own header. So the fast path produces the same `RawMeta`,
+      and `assert_same_answer_as_lstat` compares the two paths field by
+      field — including symlinks, broken symlinks, a symlink to a
+      directory, hardlinks, and a directory that doesn't fit in a single
+      batch.
 
-      **Dizin `nlink`'i düzeltilmek zorundaydı.** `ATTR_DIR_LINKCOUNT` APFS'te
-      gerçek hardlink sayısını (1) veriyor, `st_nlink` ise her Unix aracının
-      gösterdiği 2+altdizin'i. Dizin başına bir `lstat` ile eşitlendi;
-      **ölçülen maliyeti yok** (3,31× vs 3,29×), çünkü çekirdek o inode'u az
-      önce okumuş oluyor.
+      **Directory `nlink` had to be corrected.** `ATTR_DIR_LINKCOUNT` on
+      APFS gives the real hardlink count (1), while `st_nlink` gives the
+      2+subdirectories every Unix tool shows. Reconciled with one `lstat`
+      per directory; **no measured cost** (3.31× vs 3.29×), because the
+      kernel has just read that inode.
 
-      **Mount içeren dizinde kullanılmıyor.** Dizinin tamamı tek çağrıda
-      geliyor, yani cevap vermeyen bir dosya sistemine süre tanınacak girdi
-      başına an kalmıyor — D1'in koruması eski yolu istiyor ve yürüyüş o
-      dizinleri ona veriyor.
+      **Not used in a directory containing a mount.** The whole directory
+      comes back in one call, so there's no longer a per-entry moment
+      where a non-responding file system could be given time — D1's
+      protection wants the old path, and the walk hands it those
+      directories.
 
-      **"Rakiplerin hiçbiri macOS'ta bunu yapmıyor" notu yanlıştı.**
-      COMPETITORS.md §2'deki tablo DiskRaptor'ın `getattrlistbulk` kullandığını
-      zaten yazıyordu, yani bu madde öne geçme değil eşitlenme. `dumac`'in
-      `du`'ya karşı 6,39× rakamı da bizim 2,3×'imizle karşılaştırılamaz:
-      onların tabanı tek thread'li `du`, bizimki zaten 8 thread'le paralel
-      yürüyen kendi tarayıcımız.
+      **The note that "none of the competitors do this on macOS" was
+      wrong.** The table in COMPETITORS.md §2 already said DiskRaptor
+      uses `getattrlistbulk`, so this item is catching up, not getting
+      ahead. `dumac`'s 6.39× figure against `du` also isn't comparable to
+      our 2.3×: their baseline is single-threaded `du`, ours is already
+      our own scanner walking in parallel with 8 threads.
 
-      **İlk denemede `attribute_set_t`'yi bir slot kaydırmıştım** (`attrlist`
-      ile karıştırıp; onun başlığı var, bunun yok) ve her girdi hatalı
-      görünüyordu. Karşılaştırma fonksiyonum da sessizce geçiyordu, çünkü
-      `zip` 9 ile 0'ı sıfır kez dönüyor — sayı eşitliği iddiası sonradan
-      eklendi.
-- [ ] **B6 Linux `getdents64` + `statx` hızlı yolu.**
-      *Rakip:* `dut` sıcak cache'te `du`'dan 6.87×, dust/dua/gdu'dan 2.8–3.75×.
-- [ ] **B7 USN Journal ile artımlı yeniden tarama (Windows)** — gecelik tarayan
-      bir ajan için her seferinde her şeyi taramak israf. Stratejik olarak en
-      büyük hız kazancı. *Rakip:* **SpaceObServer** — en yakın mimari rakibimiz
-      ve tam bu noktada önde.
+      **In the first attempt I had `attribute_set_t` shifted by one
+      slot** (confusing it with `attrlist`; that one has a header, this
+      one doesn't), and every entry looked wrong. My comparison function
+      also passed silently, because `zip` of 9 against 0 iterates zero
+      times — the count-equality assertion was added afterward.
+- [ ] **B6 Linux `getdents64` + `statx` fast path.**
+      *Competitor:* `dut`, in warm cache, 6.87× over `du`, 2.8–3.75× over
+      dust/dua/gdu.
+- [ ] **B7 Incremental rescan via USN Journal (Windows)** — for an agent
+      that scans nightly, scanning everything every time is wasteful.
+      Strategically the biggest speed gain. *Competitor:* **SpaceObServer**
+      — our closest architectural competitor, and ahead right at this
+      point.
 
-### C. Özellik açıkları
+### C. Feature gaps
 
-- [x] **C1 E-posta uyarısı (hub)** — yapıldı *(11 Eylül 2026)*. Bir kuralın
-      hedefi ya http(s) URL'i ya da e-posta adresi; **tek sütun**, yanyana iki
-      nullable alan değil, yani "tam olarak bir hedef" hatırlanması gereken bir
-      kural değil verinin şekli. `mailto:` şeması seçildi çünkü v1'deki her
-      webhook satırı zaten geçerli bir değer — göç dönüştürme değil, yeniden
-      adlandırma (hub şeması v1 → v2, testi `db.rs` içinde, gerçekten v1'in
-      yazdığı gibi kurulmuş bir veritabanıyla).
-      **Kimlik bilgileri veritabanında değil**, config dosyasında
-      (`password_file` ile, `admin_token` kalıbının aynısı): veritabanı
-      yedeklenen ve hata raporuna eklenen dosya.
-      **`lettre` bağımlılığı bilinçli** — cron ayrıştırıcısını elle yazdık ama
-      SMTP öyle bir liste değil: TLS std'de yok, ve asıl ısıran kısım ağdan
-      gelen bir hostname'in başlığa girmesi. Çıplak bir CRLF başlık bloğunu
-      bitiriyor ve gerisi başlık olarak okunuyor. rustls-only alındı, `cargo
-      tree`'de openssl/native-tls yok (musl statik derleme için şart).
-      *Rakip:* SpaceObServer.
-      - [ ] **Gerçek teslimat testi sizde.** Burada doğrulanan: rotalar (28
-            entegrasyon testi, gerçek sokette), parolanın sayfaya sızmaması,
-            CRLF'li alıcının reddi, v1→v2 göçü. **Doğrulanmayan: gerçek bir
-            röleye gerçek posta.** Ayarlar → "Send a test message" tam olarak
-            bunun için var ve bir uyarının izlediği yolun aynısını kullanıyor.
-            Bakılacak: STARTTLS ile 587, implicit TLS ile 465, ve yanlış
-            parolanın verdiği hatanın okunabilirliği.
-- [x] **C2 Kişi başına hesap (hub)** — yapıldı *(11 Eylül 2026)*. Kişi başına
-      token, iki rol: `viewer` her şeyi görür hiçbirini değiştiremez, `admin`
-      erişimi kimin aldığı dâhil her şeyi değiştirir.
-      **Parola değil token, ve bu bir kısayol değil sınır**: üretilmiş 256
-      bitlik bir token düz SHA-256 olarak saklanabilir çünkü brute-force
-      edilecek bir şey yok; insan seçimi bir parola saklanamazdı ve yavaş bir
-      KDF ile etrafındaki her şeyi gerektirirdi. Giriş formu zaten token
-      alıyordu, yani bu mekanizmaya ad ve rol eklemek oldu.
-      **Yetkilendirme router'ın şekli, handler'daki bir kontrol değil.**
-      Yazan rotalar kendi grubunda ve `require_write` katmanının arkasında;
-      handler içindeki bir kontrol unutulabilir ve unutulması salt okunur bir
-      hesabın filodaki her uyarı kuralını silebilmesi demek. İki guard var ve
-      ikisinin de diş taşıdığı kanıtlandı: bir write rotasını okuma grubuna
-      taşımak `a_viewer_can_read_everything_and_change_nothing`'i düşürüyor,
-      listeye eklenmemiş yeni bir POST rotası `every_write_route_is_in_this_list`'i
-      düşürüyor (o test `web.rs`'i okuyor, çünkü axum rotalarını dışarı
-      vermiyor).
-      Uyarı kuralları kimin eklediğini taşıyor (`created_by`, v2 satırlarında
-      NULL — geriye doldurmak birinin adını yapmadığı bir işin üstüne yazmak
-      olurdu). Son admin kendini kaldıramıyor: geri dönüş yolu sunucudaki
-      dosya, ve web arayüzünden kendini kilitleyen birinin tam olarak
-      bulunmadığı yer orası.
-      *Rakip:* SpaceObServer (Client/Web Access).
-- [x] **C3 Zaman çizelgesi görünümü (masaüstü)** — yapıldı *(11 Eylül 2026)*.
-      Bir hedefin `(host, root)` geçmişi tek çizgide, aralarındaki değişim
-      yanında, ve her adımdan tam o sıçramanın diff'ine bir tık.
-      **Eksen sıfırdan başlıyor** — kendi verisine kırpılmış bir eksen %2'lik
-      sürüklenmeyi uçuruma çeviriyor ve bu görünüm tam da "büyüyor mu?"
-      sorusunu cevaplamak için var.
-      **Gruplama Rust'ta** (`src-tauri/src/history.rs`), çünkü masaüstünde JS
-      test koşucusu yok; kural içeren hiçbir şey test edilemeyen tarafta
-      durmamalı (treemap yerleşimi de aynı sebeple Rust'ta). Kök yolu
-      normalleştiriliyor: `/data` ile `/data/` bir hedefin geçmişini ikiye
-      bölerdi.
-      **Kapsam sınırı:** masaüstü *olanı* gösteriyor, hub *tahmin ediyor*.
-      Hub'daki `trend.rs` en küçük kareler + `r2` eşiğiyle tahmin yapıyor ve
-      kötü uyumda reddediyor; onun ikinci bir kopyasını masaüstüne koymak iki
-      eşik kümesinin birbirinden ayrışması demekti. Taşımak istenirse `trend`
-      önce çekirdek depoya alınmalı — ayrı iş.
-- [x] **C4 Duplicate bulucu** — yapıldı *(11 Eylül 2026)*. `spacetrace dupes`,
-      yeni `crates/dupes`. Üç kademe, her biri yalnızca bir öncekinin
-      eleyemediğine ödeme yapıyor: boyut (bedava, tarama zaten biliyor) → ilk
-      16 KiB → tam dosya. **Ölçüldü:** `~/github` (375.585 dosya, 33,8 GiB) →
-      cevap 2,6 GiB okumaya mal oldu (%7,7); ikinci koşu 30 MiB okudu ve hiçbir
-      şeyi yeniden özetlemedi.
-      **BLAKE3, ve ardından bayt karşılaştırması yok** — 256 bit çıktıda
-      çakışma olasılığı diskin yanlış bayt döndürmesinin çok altında, ve
-      doğrulama geçişi bağlayıcı olmayan bir risk için okumayı ikiye katlardı.
-      Bu, *kriptografik* bir özet hakkında bir iddia ve 64 bitlik biriyle
-      savunulamazdı — xxh3 olmamasının sebebi bu.
-      **Hardlink'ler duplicate değil**: baytlarını zaten paylaşıyorlar, ve
-      geri kazanılabilir diye saymak silinince gelmeyecek yeri vaat etmek
-      olurdu. Ayrı grupta ve sıfır kazançla listeleniyorlar. Dikkat: tarama
-      hardlink'in ikinci adını 0 bayt yazıyor (değişmez 3), o yüzden boyut
-      kademesi `nlink > 1` olanlar için diske bakıyor.
-      **Önbellek snapshot veritabanında değil**, yanındaki ayrı dosyada
-      (`<db>.hashes`): snapshot başka makineye taşınıyor ve yerel inode
-      numaraları orada geçerli görünüp başka bir diske ait olurdu — ayrıca
-      tablo eklemek `SCHEMA_VERSION`'ı ve onunla birlikte RELEASING.md'nin
-      sürüm sırasını tetiklerdi, her an silinebilecek bir önbellek için.
-      **Hiçbir şey silinmiyor**, ajanla aynı gerekçe: hangi kopyanın kalacağı
-      bu crate'in sahip olmadığı bağlamı gerektiren bir karar.
-      *Rakip:* DiskRaptor (xxh3), WinDirStat 2.5.0, Czkawka.
-- [x] **C5 Tarama sırasında canlı büyüyen ağaç (masaüstü)** — yapıldı
-      *(11 Eylül 2026)*. `scan-core/src/live.rs` + masaüstünde `LiveMap.tsx`.
-      **Tek seviye, ve bu taslak değil karar**: treemap asgari alanın altını
-      çizmiyor, yani tarama uçarken okunabilen tek kısım üst seviye, ve koşan
-      bir taramaya sorulan soru her zaman "bunların hangisi büyük". Her
-      seviyeyi taşımak, görülemeyecek kareler için diskle büyüyen ve her
-      işçiden kilitlenen bir yapı demekti.
-      **Baytlar dosya başına değil dizin başına ekleniyor** — en sıcak döngü
-      girdi başına ve oraya paylaşımlı yazma koymamak için zaten ödeme
-      yapılmıştı.
-      **Maliyet ölçüldü:** yayın başına 4 ns (ilk hâli `RwLock` ile 203 ns'ti;
-      "bir kez yazılır sonra okunur" zaten `OnceLock`'un anlamı). 34.000
-      dizinlik `/Applications` için toplam 0,13 ms. Tüm taramanın A/B'si bunu
-      çözemiyor (-%3,45 / -%0,45 — gürültü tabanı), o yüzden doğru form
-      işlem başına ölçüm × işlem sayısı.
-      **Aynı `squarify` rutini** hem canlı önizlemeyi hem bitmiş haritayı
-      çiziyor (treemap crate'inde public edildi), yani tarama bitince resim
-      kendini yeniden dizmiyor — devir teslim algoritma değişikliği değil veri
-      değişikliği.
-      **Yalnızca pencere boşken**: yeniden tarama okunmakta olan haritaya
-      dokunmuyor, çünkü bu uygulamanın kuralı "iş pencereyi elinden almaz".
-      Doğruluk iddiası ayrı testte: canlı toplamlar bitmiş ağacın toplamlarıyla
-      birebir eşleşiyor (iki tamamen farklı yoldan gelen iki cevap).
-      - [ ] **Görsel doğrulama sizde.** Ekran görüntüsü alamıyorum. Bakılacak:
-            karelerin gerçekten büyüyüp yer değiştirdiği, etiketlerin dar
-            karede taşmadığı, ve tarama bitip gerçek harita geldiğinde resmin
-            zıplamadığı. Mantık tarafı test edildi (yerleşim, kap, ölçü,
-            kategori, alan sınırları).
-- [x] **C6 Sunburst görünümü (masaüstü)** — yapıldı *(11 Eylül 2026)*.
-      `treemap/src/sunburst.rs` + masaüstünde `Sunburst.tsx`. Halka başına bir
-      seviye, yayın açısı **ebeveynindeki pay** (kökteki değil) — halkaların
-      alt alta hizalanmasının sebebi bu.
-      **Açı boyut, alan değil.** Bir yayın alanı yarıçapla büyüyor, yani
-      dışarıda duran küçük bir klasör içeride duran büyüğünden çok mürekkep
-      kaplıyor. Görünümün sınırı, uygulamanın değil — treemap'in varsayılan
-      kalmasının sebebi de bu, ve arayüz bunu ipucu metninde söylüyor.
-      Ortadaki delik yalnızca etiket için değil: en içteki halkanın yayları
-      aksi hâlde bir noktada birleşirdi ve en çok okunan seviye nişan alması
-      en zor olan olurdu.
-      Mutasyonla üç davranış doğrulandı, üçü de yakalandı: ebeveyn payı yerine
-      kök payı, hit-test'in açı kuralı, çok ince yayların elenmesi.
-      *Rakip:* FreeSize (treemap + sunburst + heatmap), Filelight.
-      - [ ] **Görsel doğrulama sizde.** Bakılacak: halkaların hizalandığı,
-            etiketlerin dar yayda taşmadığı, imlecin işaret ettiğini seçtiği
-            (özellikle saat 12 dikişinde), ve dar/geniş pencerede dairenin
-            elips olmadığı.
-- [x] **C7 Dosya yaşı** — yapıldı *(11 Eylül 2026)*. `spacetrace age`
-      (`--bands`, `--json`) ve masaüstünde yaşa göre renklendirilen harita.
-      Hesap çekirdekte (`scan-core/src/age.rs`), C3'teki kalıpla: masaüstünde
-      JS testi yok, kural içeren şey test edilebilir tarafta durur.
-      **Bayta göre ağırlıklı, dosya sayısına göre değil** — yüz bin eski kaynak
-      dosyası cevap değil, bir disk imajı cevap. **Dizinler profile girmiyor:**
-      bir dizinin `mtime`'ı yanına bir şey eklenince değişiyor, içindekilerin
-      yaşıyla ilgisi yok. **`mtime` yoksa ayrı bant** — ncdu'dan gelen snapshot
-      onu taşımıyor ve 1970 okumak "elli yıldır dokunulmamış" demek olurdu.
-      **Haritada dizin de renkleniyor** ve bandı alt ağacının *medyan baytı*
-      (`median_bands`) — kendi `mtime`'ı değil. Isı haritasını yeniden
-      renklendirilmiş kategori haritasından ayıran şey bu: bakılmaya değer her
-      derinlikte alanın çoğu klasör, ve hareket edilebilen birim klasör.
-      Medyan, "en çok bayt hangi bantta" yerine seçildi çünkü ikincisi 51/49
-      bölünmüş bir klasörü tek bir renge boyuyor ve renk tek dosyada dönüyor.
-      *Rakip:* FreeSize (heatmap).
-      - [ ] **Görsel doğrulama sizde.** Bu makinede ekran görüntüsü izni yok,
-            yani rampanın okunurluğu, lejandın dar pencerede taşıp taşmadığı ve
-            klasör tonunun (%55 alfa) çocuklarını gömüp gömmediği
-            **denenmedi**. Hesap tarafı doğrulandı: `/Applications`'ın en büyük
-            300 dizininde `median_bands` ile alt ağaç profilinin medyanı
-            bağımsız iki yürüyüşle karşılaştırıldı, sıfır uyuşmazlık.
-- [x] **C8 ncdu/gdu JSON içe aktarma** — yapıldı *(11 Eylül 2026)*.
-      `spacetrace import <dosya>`; `--root`, `--host`, `--label`. Yeni
-      bağımlılık yok, `serde_json` zaten `store`'daydı.
+- [x] **C1 Email alert (hub)** — done *(11 September 2026)*. A rule's
+      target is either an http(s) URL or an email address; **a single
+      column**, not two side-by-side nullable fields, because "exactly one
+      target" isn't a rule that needs remembering but the shape of the data.
+      The `mailto:` scheme was chosen because every webhook row in v1 was
+      already a valid value — not a migration transform but a rename (hub
+      schema v1 → v2, its test in `db.rs`, against a database actually set up
+      the way v1 wrote it).
+      **Credentials aren't in the database**, they're in the config file
+      (via `password_file`, the same pattern as `admin_token`): the database
+      is the file that gets backed up and attached to bug reports.
+      **The `lettre` dependency is deliberate** — we hand-wrote the cron
+      parser, but SMTP isn't that kind of list: TLS isn't in std, and the
+      part that actually bites is a hostname coming off the network landing
+      in a header. A bare CRLF ends a header block and the rest gets read as
+      a header. rustls-only was chosen, no openssl/native-tls in `cargo
+      tree` (mandatory for the musl static build).
+      *Competitor:* SpaceObServer.
+      - [ ] **Real delivery testing is on you.** What's verified here: the
+            routes (28 integration tests, on a real socket), the password
+            not leaking to the page, rejection of a CRLF-laced recipient,
+            the v1→v2 migration. **Not verified: real mail to a real
+            relay.** Settings → "Send a test message" exists exactly for
+            this and follows the same path an alert takes. To check:
+            587 with STARTTLS, 465 with implicit TLS, and how readable the
+            error is for a wrong password.
+- [x] **C2 Per-person accounts (hub)** — done *(11 September 2026)*. A
+      token per person, two roles: `viewer` sees everything and can change
+      nothing, `admin` changes everything, including who has access.
+      **A token, not a password, and this is a boundary, not a shortcut**:
+      a generated 256-bit token can be stored as plain SHA-256 because
+      there's nothing to brute-force; a human-chosen password couldn't be
+      stored that way and would need a slow KDF plus everything built
+      around it. The login form already took a token, so this became
+      adding a name and a role to that mechanism.
+      **Authorization is the router's shape, not a check in the handler.**
+      Write routes sit in their own group behind the `require_write` layer;
+      a check inside a handler can be forgotten, and forgetting it means a
+      read-only account can delete every alert rule in the fleet. There are
+      two guards and both were proven to have teeth: moving a write route
+      into the read group fails
+      `a_viewer_can_read_everything_and_change_nothing`, and a new POST
+      route not added to the list fails
+      `every_write_route_is_in_this_list` (that test reads `web.rs`,
+      because axum doesn't expose its routes).
+      Alert rules carry who added them (`created_by`, NULL on v2 rows —
+      backfilling it would mean writing someone's name over work they
+      didn't do). The last admin can't remove themselves: the fallback
+      path is a file on the server, and that's exactly the spot where
+      someone locking themselves out from the web UI doesn't exist.
+      *Competitor:* SpaceObServer (Client/Web Access).
+- [x] **C3 Timeline view (desktop)** — done *(11 September 2026)*.
+      A target's `(host, root)` history on a single line, the change
+      between points shown alongside it, and one click from every step
+      straight to that jump's diff.
+      **The axis starts at zero** — an axis cropped to its own data turns
+      a 2% wobble into a cliff, and this view exists precisely to answer
+      "is it growing?".
+      **Grouping is in Rust** (`src-tauri/src/history.rs`), because the
+      desktop has no JS test runner; anything that carries a rule shouldn't
+      sit on the side that can't be tested (treemap layout is in Rust for
+      the same reason). The root path is normalized: `/data` versus
+      `/data/` would split a target's history in two.
+      **Scope boundary:** the desktop shows *what happened*, the hub
+      *predicts*. The hub's `trend.rs` predicts with least squares plus an
+      `r2` threshold and rejects on a bad fit; putting a second copy of it
+      on the desktop would mean two threshold sets drifting apart from
+      each other. If it's ever moved, `trend` should go into the core
+      repository first — separate work.
+- [x] **C4 Duplicate finder** — done *(11 September 2026)*. `spacetrace
+      dupes`, a new `crates/dupes`. Three tiers, each paying only for what
+      the previous one couldn't rule out: size (free, the scan already
+      knows it) → first 16 KiB → full file. **Measured:** `~/github`
+      (375,585 files, 33.8 GiB) → the answer cost 2.6 GiB of reading
+      (7.7%); the second run read 30 MiB and re-hashed nothing.
+      **BLAKE3, and no byte comparison afterward** — at a 256-bit output
+      the odds of a collision are far below the disk returning the wrong
+      bytes, and a verification pass would double the reads for a
+      non-binding risk. This is a claim about a *cryptographic* hash and
+      couldn't be defended with a 64-bit one — that's why it isn't xxh3.
+      **Hardlinks aren't duplicates**: they already share their bytes, and
+      counting them as recoverable would promise space that won't appear
+      on deletion. They're listed in a separate group with zero savings.
+      Watch out: the scan writes the hardlink's second name as 0 bytes
+      (invariant 3), so the size tier looks at the disk for anything with
+      `nlink > 1`.
+      **The cache snapshot isn't in the database**, it's in a separate
+      file next to it (`<db>.hashes`): the snapshot travels to another
+      machine and local inode numbers would look valid there while
+      belonging to a different disk — also, adding a table would trigger
+      `SCHEMA_VERSION` and, with it, RELEASING.md's version ordering, for
+      a cache that can be deleted at any time.
+      **Nothing gets deleted**, same reasoning as the agent: which copy
+      stays is a decision that needs context this crate doesn't have.
+      *Competitor:* DiskRaptor (xxh3), WinDirStat 2.5.0, Czkawka.
+- [x] **C5 Tree that grows live during a scan (desktop)** — done
+      *(11 September 2026)*. `scan-core/src/live.rs` + `LiveMap.tsx` on
+      the desktop.
+      **A single level, and that's a decision, not a rough draft**: a
+      treemap doesn't draw a floor under minimum area, so the only part
+      still readable while a scan is flying is the top level, and the
+      question asked of a running scan is always "which of these is big".
+      Carrying every level would mean a structure that grows on disk for
+      squares that can never be seen, and that locks from every worker.
+      **Bytes are added per directory, not per file** — the hottest loop
+      already paid, per entry, to avoid putting a shared write there.
+      **Cost was measured:** 4 ns per publish (the first version was
+      203 ns with `RwLock`; "written once, then read" is already what
+      `OnceLock` means). 0.13 ms total for `/Applications` with 34,000
+      directories. An A/B of the whole scan can't resolve this
+      (-3.45% / -0.45% — noise floor), so the correct form is
+      per-operation measurement times operation count.
+      **The same `squarify` routine** draws both the live preview and the
+      finished map (made public in the treemap crate), so the picture
+      doesn't rearrange itself once the scan finishes — the handoff is a
+      data change, not an algorithm change.
+      **Only while the window is idle**: a rescan doesn't touch a map
+      that's currently being read, because this app's rule is "work never
+      takes the window out of your hands".
+      The accuracy claim is in a separate test: live totals match the
+      finished tree's totals exactly (two answers arriving by two
+      completely different paths).
+      - [ ] **Visual verification is on you.** I can't take screenshots.
+            To check: that the squares really do grow and move, that
+            labels don't overflow in a narrow square, and that the
+            picture doesn't jump when the scan finishes and the real map
+            arrives. The logic side is tested (layout, container,
+            measurement, category, area bounds).
+- [x] **C6 Sunburst view (desktop)** — done *(11 September 2026)*.
+      `treemap/src/sunburst.rs` + `Sunburst.tsx` on the desktop. One level
+      per ring, an arc's angle is **its share of its parent** (not of the
+      root) — that's why the rings line up underneath each other.
+      **Angle is size, not area.** An arc's area grows with the radius, so
+      a small folder sitting further out covers far more ink than a
+      bigger one sitting further in. That's the view's limitation, not the
+      app's — it's also why the treemap stays the default, and the
+      interface says so in its hint text.
+      The hole in the middle isn't only for the label: the innermost
+      ring's arcs would otherwise meet at a point, and the level that gets
+      read the most would be the hardest to aim at.
+      Three behaviors were verified by mutation, and all three were
+      caught: root share instead of parent share, the hit-test's angle
+      rule, and pruning of arcs that are too thin.
+      *Competitor:* FreeSize (treemap + sunburst + heatmap), Filelight.
+      - [ ] **Visual verification is on you.** To check: that the rings
+            line up, that labels don't overflow on a narrow arc, that the
+            cursor selects what it's pointing at (especially at the
+            12 o'clock seam), and that the circle isn't an ellipse in a
+            narrow/wide window.
+- [x] **C7 File age** — done *(11 September 2026)*. `spacetrace age`
+      (`--bands`, `--json`) and, on the desktop, a map colored by age.
+      Computed in the core (`scan-core/src/age.rs`), the same pattern as
+      C3: no JS testing on the desktop, so anything carrying a rule stays
+      on the side that can be tested.
+      **Weighted by bytes, not by file count** — a hundred thousand old
+      source files isn't the answer, a disk image is. **Directories don't
+      enter the profile:** a directory's `mtime` changes the moment
+      something is added next to it, and has nothing to do with the age
+      of what's inside it. **A separate band when there's no `mtime`** —
+      a snapshot coming from ncdu doesn't carry it, and reading 1970 would
+      mean "untouched for fifty years".
+      **Directories are colored on the map too**, and their band is the
+      subtree's *median byte* (`median_bands`) — not their own `mtime`.
+      This is what separates a heat map from a recolored category map: at
+      every depth worth looking at, most of the area is folders, and the
+      unit you can act on is a folder. Median was chosen over "which band
+      has the most bytes" because the latter paints a folder split 51/49
+      a single color, and the color flips on a single file.
+      *Competitor:* FreeSize (heatmap).
+      - [ ] **Visual verification is on you.** No screenshot permission
+            on this machine, so the ramp's readability, whether the
+            legend overflows in a narrow window, and whether the folder
+            tint (55% alpha) buries its children **haven't been tried**.
+            The computation side is verified: on `/Applications`'s
+            300 largest directories, `median_bands` was checked against
+            the subtree profile's median with two independent walks, zero
+            mismatches.
+- [x] **C8 ncdu/gdu JSON import** — done *(11 September 2026)*.
+      `spacetrace import <file>`; `--root`, `--host`, `--label`. No new
+      dependency, `serde_json` was already in `store`.
 
-      **Toplama ikinci kez yazılmadı.** İçe aktarıcı `Tree::from_nested`'e
-      veriyor, o da yürüyüşün kullandığı `TreeBuilder` + `aggregate`'i
-      çağırıyor. Arena değişmezleri ve toplama tek uygulamada kalıyor.
+      **Aggregation wasn't written a second time.** The importer feeds
+      `Tree::from_nested`, which calls the same `TreeBuilder` +
+      `aggregate` the walker uses. Arena invariants and aggregation stay
+      in one implementation.
 
-      **Mutasyon testi iki gerçek hata çıkardı.** Birincisi: `from_nested`
-      `children_start`/`children_len` doldurmuyordu (`push` yapmıyor, tarayıcı
-      onu `flatten`'da yapıyor) — ağacın toplamları doğru, her `children()`
-      çağrısı boştu. Layout testi de bu yüzden **boş bir iddiaydı**:
-      `children_len = 0` olunca iki döngü de hiç dönmüyordu. Fixture'da bir
-      alt dizinden *sonra* kardeş yoktu, o yüzden DFS mutasyonu bile
-      geçiyordu; fixture düzeltilince hata çıktı.
+      **Mutation testing turned up two real bugs.** First: `from_nested`
+      wasn't filling `children_start`/`children_len` (it doesn't `push`,
+      the scanner does that in `flatten`) — the tree's totals were
+      correct, but every `children()` call came back empty. The layout
+      test was therefore **a hollow claim**: with `children_len = 0`,
+      neither loop ever ran. The fixture had no sibling *after* a
+      subdirectory, so even the DFS mutation still passed; fixing the
+      fixture surfaced the bug.
 
-      İkincisi ve daha ciddisi: **gerçek ncdu dizinlere de `asize` yazıyor** ve
-      ben onu mantıksal toplama ekliyordum — **değişmez 1 ihlali**, GNU
-      `du --apparent-size`'ın bizden ayrıldığı noktanın ta kendisi. Kendi
-      dışa aktarıcımız dizinlere `asize: 0` yazdığı için gidiş-dönüş testi
-      bunu asla göremezdi; spec'ten yazılmış gerçekçi bir ncdu fixture'ı
-      yakaladı.
+      Second, and more serious: **real ncdu also writes `asize` on
+      directories**, and I was adding it into the logical aggregate —
+      **a violation of invariant 1**, exactly the point where GNU
+      `du --apparent-size` parts ways with us. Our own exporter writes
+      `asize: 0` on directories, so the round-trip test could never have
+      caught this; a realistic ncdu fixture written from the spec caught
+      it.
 
-      **Doğrulanmayan tek şey:** gerçek bir `ncdu` çıktısı. ncdu bu makinede
-      kurulu değil (kurmak izin isterdi), fixture spec'ten yazıldı.
-- [x] **C9 CSV dışa aktarma** — yapıldı *(11 Eylül 2026)*.
-      `spacetrace export --format csv`, `--depth` ile üst katmanlarda durma.
-      **İki ölçü de sütun, ayar değil** — dosyada sıralama ve yanındaki etiket
-      olmadığı için değişmez 6'nın gerekçesi burada geçmiyor; okuyan seçsin.
-      Alt ağaç toplamlarının yanında `own_*` sütunları var, yoksa bütün
-      satırların toplamı bir dosyayı üstündeki her klasör için tekrar sayar.
-      RFC 4180 kaçırma elle yazıldı ve testi bir CSV *okuyucusuyla* yapılıyor:
-      altın dize karşılaştırması, tutarlı biçimde yanlış üreten bir hatayı da
-      geçerdi.
+      **The one thing not verified:** real `ncdu` output. ncdu isn't
+      installed on this machine (installing it would need permission),
+      the fixture was written from the spec.
+- [x] **C9 CSV export** — done *(11 September 2026)*.
+      `spacetrace export --format csv`, `--depth` to stop at the upper
+      tiers.
+      **Both measures are columns, not a setting** — since there's no
+      ordering in the file and no label next to it, invariant 6's
+      rationale doesn't apply here; let the reader choose.
+      Alongside subtree totals there are `own_*` columns, otherwise
+      summing every row would count a file again for every folder above
+      it.
+      RFC 4180 escaping was hand-written and tested against a CSV
+      *reader*: a golden-string comparison would also have let through a
+      bug that produces consistently wrong output.
 
-### D. Sağlamlık
+### D. Robustness
 
-- [x] **D1 Yavaş/yanıt vermeyen mount'ta timeout ve devam** — yapıldı
-      *(görünürlük 10, timeout 11 Eylül 2026)*.
-      *Rakip:* DiskRaptor bu hatayı canlı yaşadı (issue #46: "1TB USB HDD'de
-      30 saniye ilerleme yok") ve timeout/retry ekledi.
+- [x] **D1 Timeout and continue on a slow/unresponsive mount** — done
+      *(visibility 10, timeout 11 September 2026)*.
+      *Competitor:* DiskRaptor lived this bug in production (issue #46: "no
+      progress for 30 seconds on a 1TB USB HDD") and added timeout/retry.
 
-      **Sorun.** `read_dir_parallel` her girdi için `entry.metadata()`, yani
-      bir `lstat` çağırıyor ve bu `dev` karşılaştırmasından **önce**. Ölü bir
-      mount'ta o syscall dönmüyor ve taşınabilir şekilde kesilemiyor. Üç
-      sonucu vardı: `--one-file-system` korumuyordu (kontrol, hang'e sebep
-      olan `lstat`'ın verisini kullanıyor), bir girdi bulunduğu dizinin
-      **tamamını** kilitliyordu (dizin okuma bilinçli olarak tek thread'te),
-      ve iptal kurtarmıyordu (`is_cancelled()` yalnızca `read_dir`'den önce).
+      **Problem.** `read_dir_parallel` calls `entry.metadata()` for every
+      entry, i.e. an `lstat`, and this happens **before** the `dev`
+      comparison. On a dead mount that syscall never returns and can't be
+      interrupted portably. There were three consequences: `--one-file-system`
+      didn't protect (the check uses the data from the `lstat` that causes the
+      hang), one entry locked up the **entire** directory it was in (directory
+      reading is deliberately single-threaded), and cancellation didn't help
+      (`is_cancelled()` only runs before `read_dir`).
 
-      **Çözüm.** Dokunmadan önce sınırı bilmek: `mounts.rs` tarama başında
-      mount tablosunu okuyor (macOS `getmntinfo(MNT_NOWAIT)` — **`MNT_WAIT`
-      değil**, o da ölü mount'ta bloke oluyor; Linux `/proc/self/mountinfo`,
-      saf std; diğerleri boş küme = eski davranış). Mount noktasına
-      terk edilmeye razı olunan bir thread üzerinden yaklaşılıyor
-      (`timeout.rs`); cevap gelmezse **okunamayan yol** sayılıyor
-      (değişmez 7) ve yürüyüş kardeşlerle devam ediyor. Kısmi ağaç
-      döndürülmüyor (değişmez 5).
+      **Solution.** Know the boundary before touching it: `mounts.rs` reads
+      the mount table at the start of the scan (macOS `getmntinfo(MNT_NOWAIT)`
+      — **not `MNT_WAIT`**, which also blocks on a dead mount; Linux
+      `/proc/self/mountinfo`, pure std; others empty set = old behavior). The
+      mount point is approached through a thread that's accepted as
+      disposable (`timeout.rs`); if it doesn't answer it counts as an
+      **unreadable path** (invariant 7) and the walk continues with its
+      siblings. A partial tree is never returned (invariant 5).
 
-      **`libc` zaten oradaydı.** Bu maddenin engeli diye yazdığım "önce
-      `scan-core`'a `libc` eklenmeli" yanlıştı: `capacity.rs` ve `meta.rs`
-      zaten kullanıyor.
+      **`libc` was already there.** What I wrote as this item's blocker —
+      "`libc` needs to be added to `scan-core` first" — was wrong:
+      `capacity.rs` and `meta.rs` already use it.
 
-      **Varsayılan 60 sn, cömert bilerek.** İki hatanın maliyeti eşit değil:
-      fazla beklemek taramayı yavaşlatır, erken vazgeçmek **bütün bir birimi**
-      tam olduğunu iddia eden bir toplamdan sessizce düşürür. `--mount-timeout 0`
-      eski davranışı geri veriyor; ajanda kök başına `mount_timeout`.
+      **Default 60 s, deliberately generous.** The two errors don't cost the
+      same: waiting too long slows the scan, giving up too early silently
+      drops **an entire volume** from a total that claims to be complete.
+      `--mount-timeout 0` restores the old behavior; in the agent,
+      `mount_timeout` per root.
 
-      **Maliyet: dizin başına bir hash sorgusu, ~95 ns.** `~/github` (297.695
-      girdi, 10.856 dizin) için **1,03 ms**, yani ~%0,09. Girdi başına değil
-      dizin başına, çünkü `Mounts` mount noktalarının *ebeveynlerini* de
-      tutuyor: mount içermeyen bir dizin hiçbir girdisini sorgulatmıyor.
-      **Bütün-tarama A/B'si bu işi yapamıyor** — +%9,19 gösterdi, yani gerçek
-      maliyetin 100 katı; 1 ms, ±150 ms'lik koşu gürültüsünün içinde
-      görünmüyor. Sayı mikro-benchmark'tan ve dizin sayımından geliyor.
+      **Cost: one hash lookup per directory, ~95 ns.** For `~/github`
+      (297,695 entries, 10,856 directories) that's **1.03 ms**, i.e. ~0.09%.
+      Per directory, not per entry, because `Mounts` also holds the *parents*
+      of mount points: a directory with no mount under it never gets any of
+      its entries looked up. **A whole-scan A/B can't do this job** — it
+      showed +9.19%, i.e. 100 times the real cost; 1 ms doesn't show up
+      inside ±150 ms of run-to-run noise. The number comes from the
+      micro-benchmark and the directory count.
 
-      **Doğrulanamayan tek şey:** gerçek bir çekirdek seviyesi asılmanın bu
-      yola girdiği. Sonda enjekte edilebilir olduğu için mekanizmanın
-      tamamı test ediliyor (atlanıyor, kardeşler taranıyor, toplam şişmiyor,
-      sağlıklı mount normal taranıyor, kapatınca sonda hiç çağrılmıyor) —
-      ama asılan mount'u üretmek için ikinci bir makine gerekiyor.
+      **The one thing that can't be verified:** that a real kernel-level hang
+      goes through this path. Because the probe is injectable, the whole
+      mechanism is tested (it's skipped, siblings are scanned, the total
+      doesn't inflate, a healthy mount scans normally, the probe is never
+      called when disabled) — but producing an actually-hung mount needs a
+      second machine.
 
-- [ ] **D2 Ajanda yerleşik TLS** — şu an ters vekil öneriliyor (Faz 2'de de var).
-- [x] **D3 Ajanda hız sınırlama** — yapıldı *(14 Eylül 2026)*.
-      `crates/agent/src/ratelimit.rs`, elle yazılmış token bucket, yeni
-      bağımlılık yok (cron ayrıştırıcısıyla aynı gerekçe).
+- [ ] **D2 Built-in TLS in the agent** — a reverse proxy is currently
+      recommended (also in Phase 2).
+- [x] **D3 Rate limiting in the agent** — done *(14 September 2026)*.
+      `crates/agent/src/ratelimit.rs`, a hand-written token bucket, no new
+      dependency (same rationale as the cron parser).
 
-      **Ertelenme gerekçesi yanlıştı.** "Token zaten gerekli" başka bir soruyu
-      cevaplıyor: token *kimin* okuyabileceğine karar veriyor, *ne sıklıkla*
-      okuyabileceğine değil. İki şey tokenin tamamen dışında: `/health`
-      bilinçli olarak tokensiz, ve yanlış bir token da bir başlık ayrıştırma,
-      bir karşılaştırma ve bir cevaba mal oluyor. Sınırlayıcı bu yüzden
-      **auth'tan önce** çalışıyor — bunları sınırlayabileceği tek konum orası,
-      ve mutasyonla doğrulandı (`/health`'i muaf tutunca test düşüyor).
+      **The reason it was deferred was wrong.** "A token is already
+      required" answers a different question: the token decides *who* can
+      read, not *how often*. Two things sit entirely outside the token:
+      `/health` is deliberately tokenless, and even a wrong token costs a
+      header parse, a comparison and a response. That's why the limiter runs
+      **before auth** — that's the only place it can limit those, and it's
+      verified by mutation (exempting `/health` makes the test fail).
 
-      Pencere değil kova: pencere sınırında sınırın iki katı geçebiliyor
-      (bir pencerenin son anı + sonrakinin ilk anı), ve "ani yoğunluk olur,
-      sürekli akış olmaz" ancak kovayla ifade edilebiliyor.
+      A bucket, not a window: at a window boundary you can exceed double the
+      limit (the last instant of one window plus the first instant of the
+      next), and "bursts happen, sustained flooding doesn't" can only be
+      expressed with a bucket.
 
-      **Ters vekil uyarısı belgede yazılı.** Proje ters vekil öneriyor ve orada
-      her istek vekilin adresinden geliyor, yani istemci başına sınır herkesin
-      paylaştığı tek sınıra dönüşüyor. `X-Forwarded-For` **okunmuyor**:
-      herkesin yazabildiği bir başlık, yazarak yeni bir hak almanın yolu olurdu.
+      **The reverse-proxy warning is written in the doc.** The project
+      recommends a reverse proxy, and there every request comes from the
+      proxy's address, so a per-client limit turns into a single limit
+      everyone shares. `X-Forwarded-For` is **not read**: it's a header
+      anyone can write, and writing it would be a way to grant yourself a
+      new allowance.
 
-      Tablo sert sınırlı (4096 adres). Dolduğunda ve herkes hâlâ borçluyken
-      yeni adresler reddediliyor — akış hâlindeki birini unutmak ona dolu bir
-      hak geri verir, yani tablo sınırın etrafından dolaşmanın yolu olurdu.
-      Bunu kendi testim yakaladı: ilk hâlimde yalnızca "dolu" kovalar
-      atılıyordu ve her yeni istemci hemen jetonunu harcadığı için hiçbiri dolu
-      olmuyordu, yani tablo sınırsız büyüyordu.
+      The table is hard-limited (4096 addresses). Once it's full and
+      everyone is still in debt, new addresses are rejected — forgetting one
+      that's mid-stream would hand it back a full allowance, which would be a
+      way to route around the table's limit. My own test caught this: in the
+      first version only "full" buckets were evicted, and since every new
+      client immediately spent its token, none of them were ever full, so the
+      table grew unboundedly.
 
-      Varsayılan 120/dakika + 60 ani; `0` kapatıyor. Sekiz birim testi (saat
-      testin elinde, yoksa her iddia bir `sleep` ve bir tahmin olurdu) ve üç
-      entegrasyon testi gerçek sokette.
-- [~] **D4 10M+ dosyada bellek profili** — **ölçüldü** *(11 Eylül 2026)*.
-      Eskiden burada tek noktadan bir ekstrapolasyon vardı (~2,8 GB); gerçek
-      cevap ondan hem daha iyi hem daha ilginç.
+      Default 120/minute + 60 burst; `0` disables it. Eight unit tests (the
+      clock is in the test's hands, otherwise every assertion would be a
+      `sleep` and a guess) and three integration tests on a real socket.
+- [~] **D4 Memory profile at 10M+ files** — **measured** *(11 September
+      2026)*. This used to be a single-point extrapolation (~2.8 GB); the
+      real answer is both better and more interesting than that.
 
-      **Ağacın kendisi: 96 bayt/girdi, 100k'dan 10M'e kusursuz doğrusal, ve
-      macOS ile Linux'ta birebir aynı** (10M girdi = 915–916 MiB). Sentetik
-      ağaç `TreeAssembler` ile kuruldu, yani `store::load`'un kullandığı yol —
-      yapının modeli değil, yapının kendisi.
+      **The tree itself: 96 bytes/entry, perfectly linear from 100k to 10M,
+      and identical on macOS and Linux** (10M entries = 915–916 MiB). The
+      synthetic tree was built with `TreeAssembler`, i.e. the same path
+      `store::load` uses — the structure itself, not a model of it.
 
-      **Ama RSS ağaç değil, ve aradaki fark platforma bağlı.** 250k girdilik
-      aynı ağaçta:
+      **But RSS isn't the tree, and the gap between them is
+      platform-dependent.** For the same 250k-entry tree:
 
       | | macOS | Linux (glibc) |
       |---|---|---|
-      | tek tarama RSS | 125 MiB (~4× ağaç) | **35 MiB** (~1,2× ağaç) |
-      | 12–20 tarama sonra | **941 MiB** | **37,9 MiB** |
-      | tarama başına | +42 MiB | +0,2 MiB |
+      | single-scan RSS | 125 MiB (~4× tree) | **35 MiB** (~1.2× tree) |
+      | after 12–20 scans | **941 MiB** | **37.9 MiB** |
+      | per scan | +42 MiB | +0.2 MiB |
 
-      **Aynı kod.** Linux her zaman `read_dir` + `lstat` yolunu kullanıyor ve
-      düz; macOS'ta *aynı yol* (bulk kapatılarak ölçüldü) tarama başına
-      +26 MiB büyüyor. Yani bu bir sızıntı değil, macOS libmalloc'un
-      parçalanmış span'ları geri vermemesi. `malloc_zone_pressure_relief`
-      denendi: **hiçbir şey yapmıyor** (RSS birebir aynı). `getattrlistbulk`
-      yolu ayırma trafiğini artırdığı için büyümeyi +26'dan +45 MiB'a
-      çıkarıyor — sebep değil, çarpan.
+      **Same code.** Linux always uses the `read_dir` + `lstat` path and is
+      flat; on macOS *the same path* (measured with bulk disabled) grows
+      +26 MiB per scan. So this isn't a leak, it's macOS libmalloc not giving
+      back fragmented spans. `malloc_zone_pressure_relief` was tried: **it
+      does nothing** (RSS is bit-for-bit identical). The `getattrlistbulk`
+      path raises the growth from +26 to +45 MiB because it increases
+      allocation traffic — a multiplier, not the cause.
 
-      Elenen açıklamalar: thread sayısı (1'de 138 MiB, 16'da 163 — gürültü),
-      thread havuzu sızıntısı (3 girdilik ağaçta 20 tarama boyunca RSS sabit).
+      Explanations ruled out: thread count (138 MiB at 1, 163 at 16 — noise),
+      a thread-pool leak (RSS flat over 20 scans on a 3-entry tree).
 
-      *Sonuç:* **Ajan için sorun yok** — Linux'ta 10M girdi ≈ 1,1 GB ve
-      tekrarlı taramalar birikmiyor. *Kalan:* **masaüstünde "Yeniden tara"**
-      aynı süreçte tekrar tarıyor ve macOS'ta her seferinde büyüyor; uzun bir
-      oturumda görünür. Ucuz bir çare yok (relief işe yaramıyor), gerçek çare
-      yürüyüşteki ayırma trafiğini azaltmak — yani B1.
+      *Conclusion:* **no problem for the agent** — on Linux 10M entries ≈
+      1.1 GB and repeated scans don't accumulate. *Remaining:* **"Rescan" in
+      the desktop** scans again in the same process and grows every time on
+      macOS; visible over a long session. There's no cheap fix (relief does
+      nothing); the real fix is reducing allocation traffic in the walk —
+      i.e. B1.
 
-      **Düzeltme (14 Eylül 2026): "tarama başına +42 MiB" korpusa bağlıymış
-      ve bu satır onu söylemiyordu.** B1-K'nin taban ölçümü aynı prob'u iki
-      ağaçta koşturdu, 8 tur, tek süreçte:
+      **Correction (14 September 2026): "+42 MiB per scan" turned out to be
+      corpus-dependent, and this line didn't say so.** B1-K's baseline
+      measurement ran the same probe on two trees, 8 rounds, in a single
+      process:
 
       | | `/Applications` | `~/github` |
       |---|---|---|
-      | girdi | 412.983 | 428.731 |
-      | 1. tur | 87,4 MiB | 204,8 MiB |
-      | 8. tur | 94,8 MiB | 445,0 MiB |
-      | tarama başına | +1,0 MiB (düzleşiyor) | +34 MiB (düzleşmiyor) |
+      | entries | 412,983 | 428,731 |
+      | round 1 | 87.4 MiB | 204.8 MiB |
+      | round 8 | 94.8 MiB | 445.0 MiB |
+      | per scan | +1.0 MiB (flattens) | +34 MiB (doesn't flatten) |
 
-      Neredeyse aynı girdi sayısı, tamamen farklı davranış. Ayırt eden şey
-      ayırma trafiği: `~/github`'ın adları 21,7 MiB, `/Applications`'ınki
-      8,2 MiB. Yani "macOS'ta her tarama +42 MiB" bir üst sınır, kural değil.
+      Nearly the same entry count, completely different behavior. What
+      distinguishes them is allocation traffic: `~/github`'s names are
+      21.7 MiB, `/Applications`'s are 8.2 MiB. So "+42 MiB per scan on
+      macOS" is an upper bound, not a rule.
 
-      **B1-K sonrası (14 Eylül 2026):** ayırma trafiği düştüğü için tepe de
-      düştü — `/Applications` 91,5 → 57,6 MB, Linux'ta "ağaç olmayan" kısım
-      yarıya indi. Birikme macOS'ta duruyor (sebep libmalloc, kod değil) ama
-      daha düşük bir tabandan başlıyor, ve masaüstü artık `expected_entries`
-      ipucunu geçiyor.
-- [x] **D5 `store::save` ilerleme geri bildirimi** — yapıldı
-      *(14 Eylül 2026)*. **Ve önce yeniden ölçüldü, çünkü eski rakam yanlıştı.**
-      11 Eylül'deki "en çok ~290 ms" dolaylı bir üst sınırdı (toplam süreden
-      tarama çıkarılarak). Doğrudan A/B: `/Applications`'ta kaydetmeden 753 ms,
-      kaydederek 1324 ms → **571 ms**, yani tahminin iki katı. 10M girdiye
-      ≈ **14 saniye**. "Acil değil" değerlendirmesi bu rakamla ayakta durmuyor.
+      **After B1-K (14 September 2026):** the peak dropped too since
+      allocation traffic dropped — `/Applications` 91.5 → 57.6 MB, and on
+      Linux the "non-tree" portion was cut in half. The accumulation on
+      macOS still stands (the cause is libmalloc, not the code) but it
+      starts from a lower baseline, and the desktop now passes the
+      `expected_entries` hint.
+- [x] **D5 Progress feedback for `store::save`** — done
+      *(14 September 2026)*. **And re-measured first, because the old number
+      was wrong.** The 11 September "at most ~290 ms" was an indirect upper
+      bound (subtracting the scan from the total time). Direct A/B: on
+      `/Applications`, 753 ms without saving, 1324 ms with saving →
+      **571 ms**, i.e. double the estimate. At 10M entries ≈ **14 seconds**.
+      The "not urgent" assessment doesn't hold up against this number.
 
-      İçi de ölçüldü: satır yazma **273 ms**, `digest` **208 ms**, commit
-      18 ms. İki geçiş de aynı mertebede olduğu için iki ayrı faz:
-      `Phase::Saving` ve `Phase::Checksumming`. Tek faz olsaydı çubuk sonuna
-      varıp baştan başlardı.
+      The internals were measured too: row writing **273 ms**, `digest`
+      **208 ms**, commit 18 ms. Since both passes are the same order of
+      magnitude, there are two separate phases: `Phase::Saving` and
+      `Phase::Checksumming`. With a single phase, the bar would reach the
+      end and start over.
 
-      `ScanProgress`'e `rows_done`/`rows_total` eklendi ve `StallWatch`'ın
-      sayaç dizisine girdi — o dizinin `ScanProgress`'ten kendi okuması tam
-      olarak bunun için tasarlanmıştı, yani her izleyici değiştirilmeden
-      kapsadı. CLI'ın ilerleme satırı artık RAII bir muhafız: eskiden yürüyüş
-      biter bitmez temizleniyordu ve komut yarım saniye sessiz kalıyordu.
-      Ajanın `/status`'u da kaydetme boyunca cevap veriyor (`rows_done`,
-      `rows_total`, `phase: "saving"`).
+      `rows_done`/`rows_total` were added to `ScanProgress` and entered
+      `StallWatch`'s counter array — that array's own read from
+      `ScanProgress` was designed exactly for this, so every watcher was
+      covered without being changed. The CLI's progress line is now an RAII
+      guard: it used to be cleared the instant the walk finished, and the
+      command went silent for half a second. The agent's `/status` also
+      responds throughout the save (`rows_done`, `rows_total`, `phase:
+      "saving"`).
 
-      Testi kaydetmeyi **yan thread'den izliyor**: "doğru sayıda bitti" bir
-      sayacın en sonda tek adımda zıplamasıyla da doğru olurdu, ve öyle bir
-      sayaç bütün faz boyunca donmuş görünür. İki mutasyonla doğrulandı.
-- [x] **D6 `Tree::rel_path` her çağrıda kökten yürüyor** — yapıldı
-      *(14 Eylül 2026)*. Ne belgelendi ne önbelleklendi: **yönü çevrildi.**
-      `Tree::for_each_path` yolu inerken kuruyor — bir dizine girmek tampona
-      bir parça ekliyor, çıkmak onu kesiyor — yani her ad altındaki girdi
-      sayısı kadar değil, bir kez yazılıyor. Önbellek düşünülmedi bile: bellek
-      B1-K'de zorlukla kazanılmıştı.
+      The test **watches the save from a side thread**: "finished with the
+      right count" would also be true of a counter that jumps in one step at
+      the very end, and such a counter would look frozen for the whole
+      phase. Verified with two mutations.
+- [x] **D6 `Tree::rel_path` walks from the root on every call** — done
+      *(14 September 2026)*. Neither documented nor cached: **the direction
+      was reversed.** `Tree::for_each_path` builds the path while descending
+      — entering a directory appends a segment to the buffer, leaving it
+      truncates it — so it's written once, not once per entry under that
+      name. Caching wasn't even considered: the memory had been hard-won in
+      B1-K.
 
-      **Ölçüldü:** `/Applications`'ın 412.983 girdisinde `rel_path` ile
-      **61 ms**, inerek **4,5 ms** — **13,6×**, beş turda dağılımlar hiç
-      örtüşmüyor. Uçtan uca CSV dışa aktarımı 449 → **400 ms** (medyan,
-      serpiştirilmiş 7 tur; OLD min 445 > NEW medyan). Kontrol olarak yol
-      kurmayan ncdu dışa aktarımı 182 → 183 ms, yani değişiklik tam beklenen
-      yerde.
+      **Measured:** on `/Applications`'s 412,983 entries, **61 ms** with
+      `rel_path`, **4.5 ms** descending — **13.6×**, and over five rounds the
+      distributions never overlap. End-to-end CSV export 449 → **400 ms**
+      (median, 7 interleaved rounds; OLD min 445 > NEW median). As a
+      control, the ncdu export, which doesn't build a path, went 182 →
+      183 ms, i.e. the change landed exactly where expected.
 
-      **`dupes`'ta ölçülebilir fark yok** (2970 → 2909 ms, dağılımlar
-      örtüşüyor) çünkü komutun süresini tarama ve `stat` belirliyor. Oradaki
-      gerekçe hız değil en kötü durum: `Tree::path` derinlikle doğrusal ve
-      derinliği bu crate belirlemiyor — başka makineden gelen bir snapshot
-      istediği kadar derin olabilir, yani her dosya için çağırmak kötü girdide
-      karesel.
+      **No measurable difference in `dupes`** (2970 → 2909 ms, distributions
+      overlap) because the command's duration is dominated by the scan and
+      `stat`. The rationale there isn't speed but worst case: `Tree::path` is
+      linear in depth, and this crate doesn't control the depth — a snapshot
+      from another machine can be as deep as it likes, so calling it per
+      file is quadratic on adversarial input.
 
-      **Yan bulgu ve gerçek bir hata:** `dupes` altı yerde düğüm id'siyle
-      sıralıyordu ve her birinin yorumu "iki koşu aynı sonucu versin"
-      diyordu — ama B1-K'den beri id'ler iki tarama arasında değişiyor.
-      Yayınlanmış 0.7.0 sabit bir fikstürde her koşuda farklı sıra veriyor
-      (ölçüldü). Altısı da yola çevrildi. Mevcut test bunu göremezdi: `find`'ı
-      **tek bir ağaç** üzerinde beş kez çağırıyordu, yani id'ler zaten aynıydı.
+      **A side finding, and a real bug:** `dupes` sorted by node id in six
+      places, and each one's comment said "so two runs give the same result"
+      — but ids have changed between scans since B1-K. The published 0.7.0
+      gives a different order on every run against a fixed fixture
+      (measured). All six were converted to sort by path. The existing test
+      couldn't have caught this: it called `find` **on a single tree** five
+      times, so the ids were already identical.
 
-      CSV satır sırası da değişti (artık katı DFS: klasör, hemen ardından
-      içeriği) — changelog'da yazılı.
+      CSV row order changed too (now strict DFS: a folder immediately
+      followed by its contents) — noted in the changelog.
 
-### E. Dağıtım ve belge
+### E. Distribution and documentation
 
-- [x] **E1 `docs/RESEARCH.md`'den COMPETITORS.md'ye bağlantı** ve §1 rakip
-      tablosunun ölçümlerle güncellenmesi. *(9 Eylül 2026)* dua-cli ayrı satıra
-      çıktı; TreeSize Free MFT ve WinDirStat 2.5.0 düzeltmeleri işlendi;
-      §3'teki ~25 B/dosya hedefinin yanına ölçülen 276–437 B ve 16 thread
-      gerilemesi yazıldı. Yanlışlanan (b) maddesi silinmedi, **yanlışlandığı
-      belirtilerek** bırakıldı — hangi kararın hangi bilgiyle verildiği kaybolmasın.
-- [x] **E2 WHY.md düzeltmesi** — *"Uzak makine + tarama geçmişi yalnızca
-      SpaceObServer'da var ve $600+/yıl; altında hiçbir şey yok"* cümlesi
-      **artık yanlış**: FreeSize Pro CHF 29/yıl aynı vaadi veriyor, dua-cli
-      diff'i ücretsiz. Fiyat hipotezi de bu cümleye dayanıyordu.
-      *(9 Eylül 2026)* Beş yer düzeltildi: karşılaştırma tablosuna dua-cli sütunu
-      ve **"self-host edilebilir" satırı** eklendi (kalın satır artık "geçmiş"
-      değil, bu); "koca bir boşluk" paragrafı **üçlü kesişime** daraltıldı;
-      "FreeSize'ın kopyalaması için sunucu yazması gerekir" cümlesi düzeltildi
-      (yazdılar); fiyat çıpalarına CHF 29 eklendi; hız kazanma koşuluna ölçüm
-      eklendi. **Ek:** README'deki *"**Every** disk analyser … FreeSize"* iddiası
-      da yanlıştı, o da düzeltildi.
-- [ ] **E3 Kod imzalama** — macOS Developer ID + notarization ($99/yıl),
-      Windows OV ($150–300/yıl). *Rakip:* FreeSize, Diskaroo, TreeSize, WizTree
-      — hepsi imzalı. Diskin her yerini okuyan imzasız bir program =
-      SmartScreen/Gatekeeper uyarısı = düşük kurulum oranı.
-      **Yarısı 10 Eylül 2026'da ücretsiz kapandı:** Gatekeeper ile TCC ayrı
-      sistemler ve ikincisi yalnızca *kararlı bir kimlik* istiyordu. Kendinden
-      imzalı sertifika girdi, izinler artık güncellemeden sağ çıkıyor. Açık
-      kalan yalnızca Gatekeeper/SmartScreen uyarısı, ve onun bedeli para.
-      Geçici yama olarak `install-desktop.sh` / `.ps1` var — curl karantina
-      damgası yazmadığı için uyarı hiç tetiklenmiyor. Ödeme yapıldığında
-      silinecekler docs/RELEASING.md'de madde madde yazılı.
+- [x] **E1 Link from `docs/RESEARCH.md` to COMPETITORS.md** and updating the
+      §1 competitor table with measurements. *(9 September 2026)* dua-cli got
+      its own row; the TreeSize Free MFT and WinDirStat 2.5.0 corrections were
+      applied; next to the §3 ~25 B/file target, the measured 276–437 B and
+      the 16-thread regression were written in. The falsified item (b) was not
+      deleted, it was left **marked as falsified** — so which decision was
+      made with which information doesn't get lost.
+- [x] **E2 WHY.md correction** — the sentence *"Remote machine + scan history
+      exist only in SpaceObServer and $600+/year; below that there's
+      nothing"* is **now wrong**: FreeSize Pro at CHF 29/year makes the same
+      promise, and the dua-cli diff is free. The pricing hypothesis was also
+      based on this sentence.
+      *(9 September 2026)* Five places were corrected: the dua-cli column and
+      the **"self-hostable" row** were added to the comparison table (the
+      bold row is no longer "history", it's this now); the "a huge gap"
+      paragraph was narrowed to the **triple intersection**; the sentence
+      "FreeSize would need to write a server to copy this" was corrected
+      (they did write one); CHF 29 was added to the price anchors; a
+      measurement was added to the speed-gain condition. **Also:** the
+      README's claim *"**Every** disk analyser … FreeSize"* was also wrong,
+      and that was corrected too.
+- [ ] **E3 Code signing** — macOS Developer ID + notarization ($99/year),
+      Windows OV ($150–300/year). *Competitors:* FreeSize, Diskaroo, TreeSize,
+      WizTree — all signed. An unsigned program that reads every corner of
+      the disk = SmartScreen/Gatekeeper warning = low install rate.
+      **Half of it closed for free on 10 September 2026:** Gatekeeper and TCC
+      are separate systems, and the latter only wanted a *stable identity*. A
+      self-signed certificate was introduced, and permissions now survive
+      updates. What's left open is just the Gatekeeper/SmartScreen warning,
+      and its cost is money.
+      As a temporary patch there's `install-desktop.sh` / `.ps1` — since curl
+      doesn't write the quarantine flag, the warning never triggers. What to
+      delete once payment is made is written item by item in
+      docs/RELEASING.md.
 - [ ] **E4 Homebrew / AUR / Microsoft Store.**
-- [x] ~~**E5 Geçiş rehberleri**~~ — **kapsam dışı** *(14 Eylül 2026, kullanıcı
-      kararı)*. ROADMAP 1.0 zorunlusu diye listelemişti; öyle değil. Ürünün
-      kendisi zaten ncdu çıktısını içeri alıyor (C8) ve `--help` ile README
-      İngilizce, yani "nasıl geçerim" sorusunun cevabı araçta duruyor. Bir
-      rehber yazmak mühendislik değil pazarlama, ve bu sıraya ait değil.
+- [x] ~~**E5 Migration guides**~~ — **out of scope** *(14 September 2026,
+      user decision)*. ROADMAP had listed it as a 1.0 requirement; it isn't
+      one. The product itself already imports ncdu output (C8), and `--help`
+      and the README are in English, so the answer to "how do I migrate"
+      already lives in the tool. Writing a guide is marketing, not
+      engineering, and it doesn't belong in this queue.
 
-### Sıra
+### Order
 
-| Sıra | Ne | Neden burada |
+| Order | What | Why it's here |
 |------|-----|--------------|
-| ~~1~~ ✅ | ~~E1, E2~~ | Yarım saat, ve diğer her kararın girdisi — yanlış rekabet haritası üstüne plan yapılmasın. **Bitti (9 Eylül 2026)**, README düzeltmesi de dâhil |
-| ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Doğruluk iddiamız Windows'ta karşılanmıyordu. A4 (Unix) önce yapıldı çünkü test hiç yoktu. **Bitti (9 Eylül 2026), Windows CI yeşil** |
-| ~~3~~ ✅ | ~~B1~~ | Rakip 10 gün önce çözüp nasıl yaptığını yazdı; 10M dosya hedefinin önündeki duvar. **Dördü bitti (9 Eylül 2026), B1-K 14 Eylül'de** |
-| ~~4~~ ✅ | ~~A3, A5~~ | macOS'ta yanlıştık (DaisyDisk doğruydu) — A3 bitti; ağ üzerinden bozulma artık sessiz değil. **Bitti (10 Eylül 2026)** |
-| 5 | ~~B2~~ ✅, **B3 ← sıradaki** | Ucuz ve ölçülmüş — B2 bitti (10 Eylül 2026); B3 gerçek bir HDD ya da ağ sürücüsü istiyor |
-| ~~6~~ | ~~C3, D1~~ | İkisi de yapıldı |
-| 7 | B4, ~~B5~~ ✅, B6 | Platforma özel hızlı yollar — B5 bitti (11 Eylül 2026); B4 Windows, B6 Linux makinesi istiyor |
-| 8 | B7 | Stratejik en büyük kazanç, ama en büyük iş |
-| 9 | ~~C1–C9~~ ✅ | Özellik paritesi tamamlandı *(11 Eylül 2026)* |
-| 10 | E3, E4, D2, D3 | Yayın hazırlığı (E5 kapsam dışı bırakıldı) |
-| ~~son~~ ✅ | ~~B1-K~~ | Çift depolama. Araştırma yapıldı ve **sorun yanlış kurulmuştu**: arena BFS istemiyormuş, iki özellik istiyormuş. Ara ağaç kalktı, hız aynı, tepe bellek `/Applications`'ta -%37. **Bitti (14 Eylül 2026)** |
+| ~~1~~ ✅ | ~~E1, E2~~ | Half an hour, and the input to every other decision — no plan should be built on a wrong competitive map. **Done (9 September 2026)**, including the README correction |
+| ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Our accuracy claim wasn't being met on Windows. A4 (Unix) was done first because there were no tests at all. **Done (9 September 2026), Windows CI green** |
+| ~~3~~ ✅ | ~~B1~~ | A competitor solved this 10 days ago and wrote up how; the wall in front of the 10M-file target. **Four of them done (9 September 2026), B1-K on 14 September** |
+| ~~4~~ ✅ | ~~A3, A5~~ | We were wrong on macOS (DaisyDisk was right) — A3 is done; corruption over the network is no longer silent. **Done (10 September 2026)** |
+| 5 | ~~B2~~ ✅, **B3 ← next up** | Cheap and measured — B2 is done (10 September 2026); B3 needs a real HDD or a network drive |
+| ~~6~~ | ~~C3, D1~~ | Both done |
+| 7 | B4, ~~B5~~ ✅, B6 | Platform-specific fast paths — B5 is done (11 September 2026); B4 needs a Windows machine, B6 a Linux machine |
+| 8 | B7 | The biggest strategic win, but also the biggest job |
+| 9 | ~~C1–C9~~ ✅ | Feature parity completed *(11 September 2026)* |
+| 10 | E3, E4, D2, D3 | Release prep (E5 left out of scope) |
+| ~~last~~ ✅ | ~~B1-K~~ | Double storage. Research was done and **the problem had been framed wrong**: the arena didn't want BFS, it wanted two properties. The intermediate tree was removed, speed is the same, peak memory is -37% on `/Applications`. **Done (14 September 2026)** |
 
 ---
 
-## Teknik borç
+## Technical debt
 
-Ürünü bloke etmiyor ama biriktirmemeli. Yıldızlı olanlar artık "Rekabet
-açıkları" bölümünde rakip bağlamı ve sırasıyla birlikte izleniyor — iş tanımı
-orada, burada yalnızca borç kaydı olarak duruyorlar.
+Doesn't block the product but shouldn't pile up. The starred ones are now
+tracked in the "Competitive gaps" section together with their competitive
+context and order — the work item lives there, here they only stand as a
+debt record.
 
-- [x] ~~Windows `alloc` gerçek değil~~ → **A1 yapıldı** *(9 Eylül 2026)*.
-      Bu satır 11 Eylül'e kadar açık duruyordu ve işaret ettiği `TODO(win)`
-      işareti koddan çoktan kalkmıştı — yani borç listesi aynı dosyanın yol
-      haritası bölümüyle çelişiyordu. Kapanmış bir borcu açık göstermek,
-      birinin bitmiş işi yeniden yapması demek.
-- [x] ~~Windows hardlink dedupe kapalı~~ → **A2 yapıldı** *(9 Eylül 2026)*.
-- [x] ~~APFS clone tekilleştirme yok~~ → **A3 yapıldı** *(9 Eylül 2026)*,
-      `fcntl(F_LOG2PHYS_EXT)` ile, varsayılan açık.
-- [ ] btrfs/ZFS: reflink ve sıkıştırma yüzünden ağaç yürüyüşü yanlış;
-      "dosya sistemi farkında mod" gerekiyor → **A6**
-- [x] ~~10M+ dosyalı köklerde bellek profili ölçülmedi~~ → **ölçüldü**
-      (9 Eylül 2026): `Node` 104 B, gerçek tepe **276–437 B/girdi**.
-      Sonra düzeltildi: `Node` **72 B** (B1), çift depolama kalktı (B1-K), ve
-      14 Eylül 2026'da tepe `/Applications`'ta **125 B/girdi** (ipuçlu).
-      Ölçüm aracı artık depoda: `examples/memprobe.rs`. Kalan → **D4**
-      (macOS libmalloc birikmesi, kod değil)
-- [x] ~~`Tree::rel_path` her çağrıda kökten yürüyor~~ → **D6 yapıldı**
-      (14 Eylül 2026): `Tree::for_each_path` yolu inerken kuruyor, 13,6× hızlı,
-      ve `dupes`'un id'ye dayalı sıralaması yola çevrildi.
-- ~~Arayüz dizeleri koda gömülü, i18n yok~~ → borç değil, karar
-      ([DECISIONS.md](docs/DECISIONS.md) K1). Dizeler İngilizce ve gömülü kalır.
-- [x] ~~Büyük ağaçlarda `store::save` tek transaction — ilerleme geri bildirimi
-      yok~~ → **D5 yapıldı** (14 Eylül 2026). Tek transaction duruyor; eksik
-      olan sayaçtı. Gerçek maliyet 571 ms/412k (eski "≤290 ms" tahmininin iki
-      katı), 10M'e ≈ 14 s.
+- [x] ~~Windows `alloc` isn't real~~ → **A1 done** *(9 September 2026)*.
+      This line stayed open until 11 September, and the `TODO(win)` marker it
+      pointed to had already been removed from the code — meaning the debt
+      list contradicted the same file's roadmap section. Showing a closed
+      debt as open means someone redoing work that's already done.
+- [x] ~~Windows hardlink dedupe is off~~ → **A2 done** *(9 September 2026)*.
+- [x] ~~No APFS clone deduplication~~ → **A3 done** *(9 September 2026)*, via
+      `fcntl(F_LOG2PHYS_EXT)`, on by default.
+- [ ] btrfs/ZFS: tree walking is wrong because of reflink and compression; a
+      "filesystem-aware mode" is needed → **A6**
+- [x] ~~Memory profile on 10M+ file roots was never measured~~ →
+      **measured** (9 September 2026): `Node` 104 B, real peak
+      **276–437 B/entry**. Then fixed: `Node` **72 B** (B1), double storage
+      removed (B1-K), and on 14 September 2026 the peak on `/Applications` is
+      **125 B/entry** (hinted). The measurement tool is now in the
+      repository: `examples/memprobe.rs`. Remaining → **D4** (macOS
+      libmalloc accumulation, not code)
+- [x] ~~`Tree::rel_path` walks from the root on every call~~ → **D6 done**
+      (14 September 2026): `Tree::for_each_path` builds the path while
+      descending, 13.6× faster, and `dupes`'s id-based sort was switched to
+      path.
+- ~~Interface strings are embedded in code, no i18n~~ → not debt, a decision
+      ([DECISIONS.md](docs/DECISIONS.md) K1). Strings stay English and
+      embedded.
+- [x] ~~`store::save` is a single transaction on large trees — no progress
+      feedback~~ → **D5 done** (14 September 2026). The single transaction
+      stays; what was missing was the counter. Real cost is 571 ms/412k
+      (twice the old "≤290 ms" estimate), ≈14 s at 10M.
 
 ---
 
-## Yayın sonrası — SEO ve AISEO
+## Post-launch — SEO and AISEO
 
-Kendi alan adı ve site deposu **9 Eylül 2026'da yapıldı**; kalanlar hâlâ
-ertelenmiş durumda. Sıra geldiğinde audit'i baştan yapmak gerekmesin diye
-ölçümler burada.
+Our own domain and the site repository **were done on 9 September 2026**;
+the rest is still deferred. So the audit doesn't need to be redone from
+scratch when its turn comes, the measurements are here.
 
-Durum tespiti (9 Eylül 2026, `dist` üzerinde ölçüldü) — **altyapı doğru**: 31
-sayfa build sırasında HTML'e dönüyor, 26'sı hiç framework JS'i çekmiyor, React
-yalnızca treemap demosunun olduğu 5 ana sayfada iniyor. Bu kritik, çünkü AI
-tarayıcılarının çoğu (GPTBot, ClaudeBot, PerplexityBot) JavaScript
-çalıştırmıyor; SPA olsaydı boş sayfa görürlerdi. Sayfa başına tek `<h1>`,
-düzgün `h1→h2→h3`, `canonical`, beş dil için `hreflang` + `x-default`, 30
-URL'lik sitemap ve Open Graph başlıkları hazır.
+Status check (9 September 2026, measured on `dist`) — **the infrastructure
+is correct**: 31 pages turn into HTML during build, 26 of them never fetch
+any framework JS, React only ships on the 5 main pages that have the
+treemap demo. This is critical, because most AI crawlers (GPTBot, ClaudeBot,
+PerplexityBot) don't run JavaScript; if this were an SPA they'd see a blank
+page. One `<h1>` per page, proper `h1→h2→h3`, `canonical`, `hreflang` +
+`x-default` for five languages, a 30-URL sitemap and Open Graph titles are
+ready.
 
-- [x] **Kendi alan adı** → `spacetrace.teknobakkall.com`. Cloudflare'de CNAME,
-      **proxy kapalı** (turuncu bulutla GitHub sertifika üretemiyor).
-      `base` `/` oldu, `public/CNAME` alan adını taşıyor.
-- [x] **Site kendi deposuna alındı** →
+- [x] **Own domain** → `spacetrace.teknobakkall.com`. CNAME in Cloudflare,
+      **proxy off** (with the orange cloud on, GitHub can't issue a
+      certificate). `base` became `/`, `public/CNAME` carries the domain.
+- [x] **The site was moved into its own repository** →
       [unalcakir28/spacetrace-website](https://github.com/unalcakir28/spacetrace-website).
-      Alan adıyla aynı geçişte yapıldı, çünkü depo adı URL'in parçasıydı.
-- [ ] **`robots.txt` ve `llms.txt`** — alan adı geldiği için ikisi de artık
-      mümkün. Site deposunda `public/` içine konur. `llms.txt`, AI ajanlarına
-      projeyi tanıtan yerleşen konvansiyon.
-- [ ] **JSON-LD yapısal veri** (şu an 0 tane). `SoftwareApplication` şeması "bu
-      nedir, hangi işletim sistemi, hangi lisans, ücretsiz mi" sorularının
-      makine tarafından okunabilir cevabı. Sayfa ve dil başına üretilmeli.
-      Not: astro.build'in kendi sitesinde de yok, yani evrensel bir pratik
-      değil — `og:image`'dan önce koymak fazla iddialı olur.
-- [ ] **`og:image` ve Twitter kartı** (ikisi de yok). Şu an her paylaşım
-      LinkedIn/X/Slack/Discord'da çıplak link olarak görünüyor. 1200×630 bir
-      görsel gerekiyor; treemap'in kendisi doğal aday. astro.build'de var.
-- [ ] **Google Search Console + Bing Webmaster Tools kaydı ve sitemap
-      bildirimi.** "En hızlı indexlenme"nin gerçek cevabı bu ve kod işi değil,
-      hesap işi. Bing ayrıca ChatGPT aramasını besliyor.
-- [ ] Küçük: `og:locale` OG şartnamesinin istediği `en_US` biçiminde değil
-      (`en` yazıyor); Google Fonts harici stylesheet olarak çekiliyor,
-      woff2'leri kendimiz sunmak bir render-blocking üçüncü taraf isteğini
-      kaldırır.
+      Done in the same move as the domain, because the repository name was
+      part of the URL.
+- [ ] **`robots.txt` and `llms.txt`** — both are now possible since the
+      domain arrived. They go into `public/` in the site repository.
+      `llms.txt` is the emerging convention for introducing the project to
+      AI agents.
+- [ ] **JSON-LD structured data** (currently 0). The `SoftwareApplication`
+      schema is the machine-readable answer to "what is this, which OS,
+      which license, is it free" questions. Should be generated per page and
+      per language. Note: astro.build's own site doesn't have it either, so
+      it's not a universal practice — putting it ahead of `og:image` would
+      be too presumptuous.
+- [ ] **`og:image` and Twitter card** (neither exists). Right now every
+      share on LinkedIn/X/Slack/Discord shows up as a bare link. A 1200×630
+      image is needed; the treemap itself is the natural candidate.
+      astro.build has one.
+- [ ] **Google Search Console + Bing Webmaster Tools registration and
+      sitemap submission.** This is the real answer to "fastest indexing"
+      and it's an account task, not a code task. Bing also feeds ChatGPT
+      search.
+- [ ] Minor: `og:locale` isn't in the `en_US` format the OG spec wants (it
+      says `en`); Google Fonts is fetched as an external stylesheet —
+      serving the woff2 files ourselves removes one render-blocking
+      third-party request.
 
-Beklenti ayarı: teknik taraf **indexlenmeyi engelleyen bir şey olmamasını**
-sağlar ve içeriği maksimum okunur yapar. Sıralamada yukarı çıkmak içerik ve dış
-bağlantı işi; yeni bir siteyi hiçbir teknik düzenleme hızla üst sıralara
-taşımaz.
+Setting expectations: the technical side ensures **there's nothing blocking
+indexing** and makes the content maximally readable. Climbing the rankings
+is a content and backlink job; no technical tweak moves a new site up the
+rankings quickly.
 
 ---
 
-## Fikir havuzu
+## Idea pool
 
-Karar verilmedi, sırası gelince tartışılacak.
+No decision made yet, will be discussed when its turn comes.
 
-- Duplicate bulucu (boyut → ön-hash → blake3, önbellekli)
-- ncdu/gdu JSON **içe** aktarma (mevcut kullanıcıların eski taramaları)
-- Cushion gölgelendirmeli treemap (SequoiaView/WinDirStat görünümü)
-- Bulut kökleri: S3, OneDrive, Google Drive birer "uzak kaynak" olarak
-- Paket yöneticisi farkındalığı (QDirStat'taki gibi: "bu dosya şu pakete ait")
-- Dosya yaşı ısı haritası ("2 yıldır dokunulmamış 400 GB")
-- `spacetrace watch` — inotify/FSEvents ile canlı güncelleme
-- Prometheus metrik ucu (ajan `/metrics`)
+- Duplicate finder (size → pre-hash → blake3, cached)
+- ncdu/gdu JSON **import** (existing users' old scans)
+- Cushion-shaded treemap (SequoiaView/WinDirStat look)
+- Cloud roots: S3, OneDrive, Google Drive each as a "remote source"
+- Package manager awareness (like QDirStat: "this file belongs to that package")
+- File age heat map ("400 GB untouched for 2 years")
+- `spacetrace watch` — live updates via inotify/FSEvents
+- Prometheus metrics endpoint (agent `/metrics`)

@@ -1,362 +1,388 @@
-# Sürüm ve dağıtım
+# Releases and distribution
 
-Üç bileşenin (CLI + ajan, masaüstü, hub) nasıl derlenip nasıl indirilebilir hâle
-geldiği. Bu belge gerekçe belgesi olduğu için Türkçe; üretilen her şey — sürüm
-notları, indirme sayfası, kurulum talimatları — İngilizce (K1).
+How the three components (CLI + agent, desktop, hub) get built and become
+downloadable. Everything this produces — release notes, the download page,
+install instructions — is English, and since 16 September 2026 so is every
+document describing it, this one included (K1).
 
-## Neden hepsi bu depoda yayınlanıyor
+## Why everything is published in this repository
 
-Bu düzen, masaüstü ve hub private'ken kurulmuştu: private bir deponun release
-varlıkları kimlik doğrulaması olmadan indirilemiyor, o yüzden varlıkların public
-bir depoda durması zorunluydu.
+This setup was established while the desktop and hub were private: a private
+repository's release assets can't be downloaded without authentication, so the
+assets had to live in a public repository.
 
-**O kısıt artık yok** — üç depo da public. Ama düzen duruyor, çünkü artık başka
-sebepleri var:
+**That constraint is live again.** The desktop and hub sat public for a while,
+which is what this paragraph used to report as permanent; they were made
+private again on 16 September 2026 (K2). A private repository's assets still
+cannot be downloaded without a credential the download page has no way to
+supply. The setup would stay even if that changed, because it has two further
+reasons:
 
-- İndirme sayfası **tek bir GitHub API çağrısıyla** üç bileşenin sürümünü
-  öğreniyor. Üç ayrı depoya dağıtmak üç çağrı ve üç hata yolu demek.
-- `install.sh` ve sitenin `src/data/releases.ts` dosyası tek bir depoya bağlı.
-  Dağıtmak, çalışan her indirme bağlantısını hiçbir kazanç karşılığında
-  yeniden yazmak olurdu.
+- The download page learns all three components' versions with **a single
+  GitHub API call**. Splitting across three separate repositories would mean
+  three calls and three failure paths.
+- `install.sh` and the site's `src/data/releases.ts` file are tied to a single
+  repository. Splitting would mean rewriting every working download link for
+  no gain.
 
-Yani her depo kendi kodunu kendi CI'ında derler, çıktıyı **bu deponun
-release'lerine** yayınlar.
+So each repository builds its own code in its own CI, and publishes the
+output to **this repository's releases**.
 
-## Kanallar
+## Channels
 
-Etiket adları sabit. İndirme sayfası bunlara doğrudan bağlanıyor, yani
-**bunları yeniden adlandırmak siteyi kırar.**
+Tag names are fixed. The download page binds to them directly, so **renaming
+them breaks the site.**
 
-| Etiket | İçerik | Tetikleyen |
+| Tag | Content | Trigger |
 |--------|--------|------------|
-| `continuous` | CLI + ajan, `main`'in son hâli | bu depoya push |
-| `v*` | CLI + ajan, kararlı | bu depoda `v*` etiketi |
-| `desktop-continuous` | Masaüstü kurulumları | desktop deposuna push |
-| `desktop-v*` | Masaüstü, kararlı | desktop deposunda `v*` etiketi |
-| `hub-continuous` | Hub ikilileri | hub deposuna push |
-| `hub-v*` | Hub, kararlı | hub deposunda `v*` etiketi |
+| `continuous` | CLI + agent, latest `main` | push to this repository |
+| `v*` | CLI + agent, stable | `v*` tag in this repository |
+| `desktop-continuous` | Desktop installers | push to the desktop repository |
+| `desktop-v*` | Desktop, stable | `v*` tag in the desktop repository |
+| `hub-continuous` | Hub binaries | push to the hub repository |
+| `hub-v*` | Hub, stable | `v*` tag in the hub repository |
 
-`continuous` release'leri **silinip yeniden oluşturulur**, düzenlenmez: böylece
-etiket `main`'i takip eder ve matristen çıkarılan bir varlık indirme sayfasında
-ölü bağlantı olarak kalmaz. Kısa bir 404 penceresi var; sürekli kanal için kabul
-edilebilir.
+`continuous` releases are **deleted and recreated**, not edited: this way the
+tag tracks `main` and an asset dropped from the matrix doesn't stay behind as
+a dead link on the download page. There's a brief 404 window; acceptable for
+the continuous channel.
 
-Varlık adları sürümü taşıyor (`spacetrace-continuous-x86_64-apple-darwin.tar.gz`)
-çünkü `install.sh` dosya adını verilen sürümden kuruyor. Yani
-`SPACETRACE_VERSION=continuous` hiçbir değişiklik olmadan çalışıyor.
+Asset names carry the version (`spacetrace-continuous-x86_64-apple-darwin.tar.gz`)
+because `install.sh` builds the file name from the given version. So
+`SPACETRACE_VERSION=continuous` works with no changes at all.
 
-## Konteyner imajları
+## Container images
 
-| İmaj | Ne | Etiketler |
-|------|-----|-----------|
-| `ghcr.io/unalcakir28/spacetrace` | ajan + CLI | `main`, `edge`, `v*`, `latest` |
+| Image | What | Tags |
+|------|-----|-------|
+| `ghcr.io/unalcakir28/spacetrace` | agent + CLI | `main`, `edge`, `v*`, `latest` |
 | `ghcr.io/unalcakir28/spacetrace-hub` | hub | `main`, `edge`, `v*`, `latest` |
 
-İkisi de amd64 + arm64. **Kaynaktan değil, önceden derlenmiş musl ikililerinden**
-kuruluyor (`.github/docker/Dockerfile.release`): amd64 bir runner'da QEMU altında
-Rust derlemek onlarca dakika sürüyor ve düzenli olarak belleği tüketiyor. Depo
-kökündeki `Dockerfile` kaynaktan derlemeye devam ediyor — `docker build .` bir
-klonda çalışsın diye.
+Both are amd64 + arm64. Built **from pre-compiled musl binaries, not from
+source** (`.github/docker/Dockerfile.release`): compiling Rust under QEMU on
+an amd64 runner takes tens of minutes and routinely exhausts memory. The
+`Dockerfile` at the repository root still builds from source — so that
+`docker build .` works in a clone.
 
-## Yayına alırken gereken elle adımlar
+## Manual steps needed when going live
 
-Bunlar bir kez yapılıyor ve otomatikleştirilemiyor.
+These are done once and can't be automated.
 
-### 1. `RELEASE_TOKEN` (masaüstü ve hub depoları için)
+### 1. `RELEASE_TOKEN` (for the desktop and hub repositories)
 
-Bir depodaki `GITHUB_TOKEN` **başka** bir depoya yazamaz — bu, depo public olsa
-da geçerli; mesele gizlilik değil, token'ın kapsamı. Masaüstü ve hub kendi
-çıktılarını buraya yayınladığı için ayrı bir token gerekiyor:
+A `GITHUB_TOKEN` in one repository can't write to **another** repository —
+this holds even if the repository is public; it's not about privacy, it's the
+token's scope. Since the desktop and hub publish their own output here, a
+separate token is needed:
 
 1. <https://github.com/settings/personal-access-tokens/new>
 2. Repository access → **Only select repositories** → `unalcakir28/spacetrace`
 3. Permissions → Repository permissions → **Contents: Read and write**
-4. Süreyi seçip oluştur, tokenı kopyala
+4. Pick an expiration, create it, and copy the token
 
-Sonra iki depoya da sır olarak ekle:
+Then add it as a secret to both repositories:
 
 ```bash
 gh secret set RELEASE_TOKEN --repo unalcakir28/spacetrace-desktop
 gh secret set RELEASE_TOKEN --repo unalcakir28/spacetrace-hub
 ```
 
-Sır yoksa iş akışı **hata vermiyor**: varlıkları kendi deposunda yayınlıyor ve
-bir uyarı basıyor. Yani ilk push'lar boşa gitmez — ama varlıklar sitenin
-beklediği yerde olmaz, yani indirme bağlantıları 404 verir.
+If the secret is missing the workflow **doesn't fail**: it publishes the
+assets in its own repository and prints a warning. So the first pushes aren't
+wasted — but the assets won't be where the site expects them, so the download
+links 404.
 
-Token süresi dolduğunda yayınlama adımı 403 ile düşer. Yenile ve aynı komutu
-tekrar çalıştır.
+When the token expires, the publish step fails with a 403. Renew it and run
+the same command again.
 
-### 2. GHCR paket görünürlüğü
+### 2. GHCR package visibility
 
-GHCR paketleri, deposu public olsa bile **private başlıyor** — paket
-görünürlüğü depo görünürlüğünden ayrı. `docker pull` kimlik doğrulaması
-istemesin diye her yeni paket için bir kez:
+GHCR packages **start private** even if the repository is public — package
+visibility is separate from repository visibility. So that `docker pull`
+doesn't ask for authentication, once for each new package:
 
-Paket sayfası → **Package settings** → Change visibility → **Public**.
+Package page → **Package settings** → Change visibility → **Public**.
 
 - <https://github.com/users/unalcakir28/packages/container/spacetrace/settings>
 - <https://github.com/users/unalcakir28/packages/container/spacetrace-hub/settings>
 
-`spacetrace` imajı bu public depodan geldiği için zaten public olabilir; yine de
-ilk yayından sonra kontrol et.
+The `spacetrace` image can already be public since it comes from this public
+repository; check it after the first publish anyway.
 
-### 3. GitHub Pages — **artık bu depoda değil**
+### 3. GitHub Pages — **no longer in this repository**
 
-Site kendi deposuna taşındı, yani bu adım oraya ait. Kaydı burada tutmakta bir
-fayda var, çünkü aynı tuzağa iki kez düşülüyor: `GITHUB_TOKEN`'ın hiç var
-olmamış bir Pages sitesini oluşturma izni yok ("Resource not accessible by
-integration"), yani `configure-pages` bunu kendisi başlatamıyor. Yeni bir Pages
-sitesi bir kez elle açılmak zorunda:
+The site moved to its own repository, so this step belongs there. There's
+value in keeping the record here anyway, because the same trap has been hit
+twice: `GITHUB_TOKEN` has no permission to create a Pages site that has never
+existed ("Resource not accessible by integration"), so `configure-pages`
+can't bootstrap it itself. A new Pages site has to be opened by hand, once:
 
 ```bash
 gh api -X POST repos/unalcakir28/spacetrace-website/pages -f build_type=workflow
 gh api -X PUT  repos/unalcakir28/spacetrace-website/pages -f cname=spacetrace.teknobakkall.com
 ```
 
-Alan adı Cloudflare'de CNAME olarak `unalcakir28.github.io`'ya bakıyor ve
-**proxy kapalı** (gri bulut) olmak zorunda: turuncu bulutla önde dururken
-GitHub alan adını doğrulayamıyor ve Let's Encrypt sertifikasını üretemiyor.
+The domain points to `unalcakir28.github.io` as a CNAME in Cloudflare and
+**the proxy has to be off** (grey cloud): with the orange cloud in front,
+GitHub can't verify the domain or issue the Let's Encrypt certificate.
 
-## Kararlı sürüm kesmek
+## Cutting a stable release
 
-Her sürümde önce changelog, sonra sürüm numarası, sonra etiket.
+For every release: first the changelog, then the version number, then the tag.
 
-**1. Changelog'u kapat.** `promote`, o bileşenin `unreleased` girdilerini yeni
-bir sürüme taşır ve `changelog.json`'ı yeniden yazar. Boş bir `unreleased`
-reddedilir: notu hiçbir şey söylemeyen bir sürüm, hiç kesilmemiş bir sürümden
-kötüdür — okuyucu notların mı eksik olduğunu yoksa sürümün mü boş geçtiğini
-ayırt edemez.
+**1. Close the changelog.** `promote` moves that component's `unreleased`
+entries into a new release and rewrites `changelog.json`. An empty
+`unreleased` is rejected: a release whose notes say nothing is worse than a
+release that was never cut — the reader can't tell whether the notes are
+missing or the release was empty.
 
 ```bash
 cargo run -p spacetrace-changelog -- promote --component cli --version 0.2.0
 cargo run -p spacetrace-changelog -- markdown --component cli > CHANGELOG.md
 ```
 
-**2. Sürüm numarasını yükselt ve etiketle.**
+**2. Bump the version number and tag.**
 
 ```bash
-# CLI + ajan (bu depo): Cargo.toml içindeki workspace.package.version
+# CLI + agent (this repo): workspace.package.version in Cargo.toml
 git tag v0.2.0 && git push origin v0.2.0
 
-# masaüstü: package.json, src-tauri/Cargo.toml ve src-tauri/tauri.conf.json
+# desktop: package.json, src-tauri/Cargo.toml and src-tauri/tauri.conf.json
 git tag v0.2.0 && git push origin v0.2.0
 
 # hub: Cargo.toml
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-**Masaüstü ve hub için sıra bozulamaz.** Girdileri bu depoda duruyor (K11), ve
-ikili changelog'u kendi `Cargo.lock`'unun pinlediği çekirdek sürümünden gömüyor:
+**For the desktop and hub the order can't be broken.** Their entries live in
+this repository (K11), and the binary embeds the changelog from the core
+version pinned by its own `Cargo.lock`:
 
-1. girdiyi burada commit'le ve push et
-2. diğer depoda `Cargo.lock`'taki çekirdek pin'ini ilerlet
-3. orada etiketle
+1. commit and push the entry here
+2. advance the core pin in `Cargo.lock` in the other repository
+3. tag it there
 
-İkinci adım atlanırsa uygulama, kendi yayın notlarından eski bir changelog
-gömerek çıkar — kullanıcı "Yenilikler" penceresini açtığında az önce kurduğu
-sürümü orada bulamaz.
+If the second step is skipped, the app ships embedding a changelog older than
+its own release notes — when the user opens the "What's new" window, they
+won't find the version they just installed there.
 
-Etiket `v*` olduğu sürece iş akışı kararlı kanala yayınlıyor. Masaüstü ve hub
-etiketleri bu depoda `desktop-v0.2.0` / `hub-v0.2.0` olarak görünür — aynı isim
-alanında üç bileşen olduğu için.
+As long as the tag is `v*`, the workflow publishes to the stable channel.
+Desktop and hub tags appear in this repository as `desktop-v0.2.0` /
+`hub-v0.2.0` — because three components share the same namespace.
 
-Kuru çalışma: `workflow_dispatch` ile bir etiket adı ver. Derleme yapılır,
-yayınlama adımı atlanır — `publish` kutusunu işaretlemezsen.
+Dry run: give a tag name via `workflow_dispatch`. The build runs, the publish
+step is skipped — unless you check the `publish` box.
 
-`publish: true` ile elle yayınlama, `paths-ignore` filtresinin bir etiket
-push'unu atladığı durumun çıkış yolu (aşağıya bak). Etiket hedef depoda
-default branch'in ucunda oluşturulur.
+Manual publishing with `publish: true` is the way out of the case where the
+`paths-ignore` filter skips a tag push (see below). The tag is created at the
+tip of the default branch in the target repository.
 
-### Şema sürümü artıyorsa: önce masaüstü ve hub, sonra CLI
+### If the schema version is bumping: desktop and hub first, then CLI
 
-Masaüstü ile CLI **aynı veritabanı dosyasını** kullanıyor — masaüstündeki
-`default_database()` yorumu bunu açıkça söylüyor: "so the app opens the same
-history". Ve `store::schema::migrate` kendinden yeni bir dosyayı açmıyor,
-bilinçli olarak: yanlış okumaktansa reddediyor.
+The desktop and the CLI use **the same database file** — the
+`default_database()` comment on the desktop side says it explicitly: "so the
+app opens the same history". And `store::schema::migrate` deliberately
+doesn't open a file newer than itself: it refuses rather than reading it
+wrong.
 
-İkisi birleşince şu oluyor. Yeni CLI ortak veritabanını açar açmaz şemayı
-yükseltiyor; o andan itibaren eski masaüstü **hiçbir şey** yapamıyor. 10 Eylül
-2026'da v3 veritabanına 0.4.1 ikilisiyle bakıldı:
+Combine the two and this happens. The moment the new CLI opens the shared
+database it upgrades the schema; from that point on the old desktop can do
+**nothing**. On 10 September 2026 a v3 database was opened with the 0.4.1
+binary:
 
 ```text
 error: this database was written by a newer spacetrace (schema v3, this
 build understands v2)
 ```
 
-Tarama listelenemiyor, geçmiş açılamıyor. Kullanıcı yalnızca CLI'ı
-güncellediyse masaüstü uygulaması bozulmuş görünüyor, ve sebebi ekranda
-yazmıyor.
+The scan can't be listed, the history can't be opened. If the user only
+updated the CLI, the desktop app looks broken, and the reason isn't shown on
+screen.
 
-Bu yüzden `SCHEMA_VERSION` artıran bir sürümde sıra şu:
+So in a release that bumps `SCHEMA_VERSION` the order is:
 
-1. Masaüstü ve hub'ın core pinini ilerlet, ikisini de yayınla.
-2. **Sonra** CLI'ı yayınla.
-3. Changelog'da söyle: "eski sürümler bu veritabanını açmayacak, masaüstünü
-   de güncelleyin". Kullanıcı sırayı bilmiyor, sen biliyorsun.
+1. Advance the desktop's and hub's core pin, publish both.
+2. **Then** publish the CLI.
+3. Say it in the changelog: "older versions won't open this database, update
+   the desktop too". The user doesn't know the order, you do.
 
-Tersi de doğru: yeni masaüstü eski veritabanını sorunsuz taşıyor, çünkü
-`migrate_from` yalnızca ileri gidiyor. Yani önce masaüstünü yayınlamanın
-maliyeti yok, sonra yayınlamanın maliyeti var.
+The reverse is also true: the new desktop carries the old database without
+issue, because `migrate_from` only ever moves forward. So publishing the
+desktop first costs nothing, publishing it after does.
 
-### "Latest" CLI'nındır, sırayla belirlenmez
+### "Latest" belongs to the CLI, it isn't determined by order
 
-GitHub'ın `releases/latest` uç noktası **en son yayınlanan** sürümü döndürüyor,
-bileşen ayırmadan. Üç bileşenin indirmeleri bu depoda olduğu için bu, bir
-masaüstü ya da hub sürümü kesmenin CLI'ın yerini alması demek.
+GitHub's `releases/latest` endpoint returns the **most recently published**
+release, without distinguishing components. Since all three components'
+downloads live in this repository, this means cutting a desktop or hub
+release takes the CLI's place.
 
-Zararı somut: `spacetrace update` ve ajan, **v0.4.0'a kadarki sürümlerde** o uç
-noktayı okuyor, ve `desktop-v0.4.0` gibi bir etiket onların ayrıştırıcısında
-hiçbir sürüme karşılık gelmiyor — güncelleme kontrolü sessizce kapanıyor ve
-öyle kalıyor. 9 Eylül 2026'da `hub-v0.3.0` bu yeri alınca ölçüldü.
+The damage is concrete: `spacetrace update` and the agent, **in versions up
+to and including v0.4.0**, read that endpoint, and a tag like
+`desktop-v0.4.0` doesn't correspond to any version in their parser — the
+update check silently shuts off and stays that way. Measured on 9 September
+2026 when `hub-v0.3.0` took that spot.
 
-O yüzden masaüstü ve hub iş akışları kararlı sürümü **`gh release create
---latest=false`** ile yayınlıyor. Yeni bir bileşen deposu eklenirse aynısını
-yapması gerekiyor. Bir şekilde yer kaptırılırsa geri alma tek komut:
+So the desktop and hub workflows publish the stable release with **`gh
+release create --latest=false`**. If a new component repository is added, it
+needs to do the same. If the spot somehow gets taken anyway, the fix is one
+command:
 
 ```bash
-gh release edit <cli etiketi> --repo unalcakir28/spacetrace --latest
+gh release edit <cli tag> --repo unalcakir28/spacetrace --latest
 ```
 
-v0.4.1 ve sonrası etiket önekine bakıyor (`is_ours`), yani bu tuzaktan
-etkilenmiyor — kural, hâlâ eski ikiliyi çalıştıranlar için duruyor.
+v0.4.1 and later check the tag prefix (`is_ours`), so they're not affected by
+this trap — the rule stays in place for those still running the old binary.
 
-## Hangi commit neyi tetikliyor
+## Which commit triggers what
 
-Beş hedefli bir derleme bedava değil, bu yüzden yalnızca kodu ilgilendiren
-değişiklikler sürüm iş akışını başlatıyor:
+A five-target build isn't free, so only changes that concern the code trigger
+the release workflow:
 
-- `docs/**`, `website/**`, `*.md`, `tasks/**` → sürüm iş akışı **çalışmaz**
-- `website/**` → Pages iş akışı çalışır (ve yalnızca o)
+- `docs/**`, `website/**`, `*.md`, `tasks/**` → the release workflow **does
+  not run**
+- `website/**` → the Pages workflow runs (and only that)
 
-Site ile ikili derlemesi bilinçli olarak ayrı: indirme sayfasındaki bir yazım
-hatasının düzeltilmesi beş platformluk bir derlemeyi beklememeli, ve bir derleme
-hatası bir belge düzeltmesinin yayına girmesini engellememeli.
+The site and the binary build are deliberately separate: fixing a typo on the
+download page shouldn't have to wait for a five-platform build, and a build
+failure shouldn't block a doc fix from going live.
 
-**Dikkat:** GitHub'da yol filtreleri `on.push` içinde daldan bağımsız, yani
-etiket push'larına da uygulanıyor. Yalnızca `docs/` veya `*.md` değiştiren bir
-commit'i etiketlersen sürüm iş akışı hiç çalışmaz. Pratikte sorun değil —
-sürüm kesmek `Cargo.toml` / `package.json` / `tauri.conf.json` değiştirmeyi
-gerektiriyor ve bunların hiçbiri yoksayılmıyor. Yine de olursa çıkış yolu
-`workflow_dispatch` + `publish: true`.
+**Watch out:** on GitHub, path filters inside `on.push` are
+branch-independent, so they also apply to tag pushes. If you tag a commit
+that only changes `docs/` or `*.md`, the release workflow never runs. Not a
+problem in practice — cutting a release requires changing `Cargo.toml` /
+`package.json` / `tauri.conf.json`, and none of those are ignored. If it
+happens anyway, the way out is `workflow_dispatch` + `publish: true`.
 
-## Kod imzalama — durum ve çıkış planı
+## Code signing — status and exit plan
 
-**Hiçbir şey imzalı değil.** macOS'ta bundle yalnızca linker'ın arm64 için
-zorunlu attığı ad-hoc imzayı taşıyor (`codesign` → `Signature=adhoc`,
-`TeamIdentifier=not set`, `spctl` → `rejected, no usable signature`); Windows
-kurulumu tamamen imzasız.
+**Nothing is signed.** On macOS the bundle only carries the ad-hoc signature
+the linker forces for arm64 (`codesign` → `Signature=adhoc`,
+`TeamIdentifier=not set`, `spctl` → `rejected, no usable signature`); the
+Windows installer is completely unsigned.
 
-Bunun bedeli 10 Eylül 2026'da ölçüldü: macOS 26.5.2'de indirilen `.dmg`
-açılmıyor, ve **Apple'ın "sağ tık → Aç" kısayolunu macOS 15'te kaldırmış
-olması** yüzünden sitede yıllardır yazan talimat geçersizdi. Geriye Sistem
-Ayarları → Gizlilik ve Güvenlik → Yine de Aç kalıyor, ve o düğmenin ad-hoc
-imzalı bir uygulamada göründüğü **doğrulanmadı**.
+The cost of this was measured on 10 September 2026: the downloaded `.dmg`
+doesn't open on macOS 26.5.2, and because **Apple removed the "right-click →
+Open" shortcut in macOS 15**, the instructions that had been on the site for
+years were no longer valid. What's left is System Settings → Privacy &
+Security → Open Anyway, and whether that button appears for an ad-hoc signed
+app **has not been verified**.
 
-Geçici çözüm olarak `install-desktop.sh` ve `install-desktop.ps1` eklendi.
-Bunlar Gatekeeper'ı kandırmıyor: ilk açılış kontrolünü tetikleyen
-`com.apple.quarantine` özniteliğini (Windows'ta Mark-of-the-Web) **tarayıcı**
-yazıyor, curl ve `Invoke-WebRequest` yazmıyor. Ölçüldü — curl ile inen dmg'de
-hiç genişletilmiş öznitelik yok, içinden çıkan uygulama tek diyalog görmeden
-açılıyor. Karşılığında imzanın verdiği *kimlik* garantisi yerine yalnızca
-SHA256SUMS'ın verdiği *bütünlük* garantisi kalıyor; betikler bunu açıkça yazıyor.
+As a stopgap, `install-desktop.sh` and `install-desktop.ps1` were added.
+These don't fool Gatekeeper: the `com.apple.quarantine` attribute that
+triggers the first-launch check (Mark-of-the-Web on Windows) is written by
+the **browser**, not by curl or `Invoke-WebRequest`. Measured — a dmg
+downloaded with curl has no extended attribute at all, and the app that comes
+out of it opens without a single dialog. In exchange, instead of the
+*identity* guarantee a signature gives, only the *integrity* guarantee
+SHA256SUMS gives remains; the scripts say this explicitly.
 
-Homebrew bu boşluğu dolduramaz: `--no-quarantine` Homebrew 4.7'de kaldırıldı ve
-Gatekeeper'dan geçemeyen cask'lar **1 Eylül 2026'da** kendi tap'inizde bile
-desteklenmez oldu.
+Homebrew can't fill this gap: `--no-quarantine` was removed in Homebrew 4.7,
+and casks that fail Gatekeeper became unsupported, **as of 1 September
+2026**, even in your own tap.
 
-Maliyet, karar verilirse:
+The cost, if it's decided:
 
-| | Ücret | Sonuç |
+| | Fee | Outcome |
 |---|---|---|
-| Apple Developer Program | $99/yıl | Notarize edilmiş `.dmg`, macOS uyarısı tamamen kalkar |
-| Windows OV sertifikası | ~$220–400/yıl | SmartScreen anında temizlenmez, itibar birikir |
-| Windows EV sertifikası | ~$500–660/yıl | SmartScreen ilk günden temiz |
+| Apple Developer Program | $99/year | Notarized `.dmg`, the macOS warning goes away entirely |
+| Windows OV certificate | ~$220–400/year | SmartScreen doesn't clear instantly, reputation builds up |
+| Windows EV certificate | ~$500–660/year | SmartScreen clean from day one |
 
-Azure Artifact Signing ($9.99/ay) **Türkiye'ye kapalı** — ABD, Kanada, AB ve
-İngiltere ile sınırlı, yani Windows için ucuz yol yok.
+Azure Artifact Signing ($9.99/month) is **closed to Turkey** — limited to the
+US, Canada, the EU and the UK, so there's no cheap path for Windows.
 
-### İmzasız ≠ kimliksiz: TCC ayrı bir sorun ve o çözüldü
+### Unsigned ≠ identity-less: TCC is a separate problem, and it's solved
 
-Gatekeeper ile TCC (izinler) aynı şey değil, ve ikincisi **para istemiyordu**.
+Gatekeeper and TCC (permissions) aren't the same thing, and the second one
+**didn't cost money**.
 
-macOS, Tam Disk Erişimi'ni ve klasör izinlerini uygulamanın *designated
-requirement*'ına bağlıyor. Ad-hoc imzanın böyle bir şeyi yok, o yüzden sistem
-ikilinin cdhash'ine düşüyor — ve cdhash her derlemede değişiyor. Sonuç: her
-sürüm macOS için başka bir uygulama, kullanıcının verdiği izin Sistem
-Ayarları'nda **açık görünüyor ama uygulanmıyor**, ve her güncellemeden sonra
-tarama klasör klasör yeniden soruyor. 10 Eylül 2026'da kullanıcı bildirdi,
-anahtar açıkken.
+macOS ties Full Disk Access and folder permissions to the app's *designated
+requirement*. An ad-hoc signature doesn't have one, so the system falls back
+to the binary's cdhash — and the cdhash changes on every build. Result: every
+release is a different app to macOS, the permission the user granted shows
+**as on in System Settings but isn't applied**, and after every update the
+scan asks folder by folder again. Reported by a user on 10 September 2026,
+with the toggle on.
 
-Çözüm kendinden imzalı bir sertifika. Gatekeeper'a hiçbir faydası yok, ama
-kimliği sabitliyor. Ölçüldü: içerikleri farklı iki paket (cdhash `53007fdd…` /
-`de0072e5…`) tek bir requirement paylaşıyor:
+The fix is a self-signed certificate. It's no use to Gatekeeper, but it pins
+the identity. Measured: two packages with different contents (cdhash
+`53007fdd…` / `de0072e5…`) share a single requirement:
 
 ```text
 identifier "com.spacetrace.desktop" and certificate root = H"940f909c…"
 ```
 
-`root`, `leaf` değil: codesign zinciri nasıl görüyorsa onu yazıyor ve sertifika
-derleme makinesinde güvenilir kök olduğu için `root` çıkıyor. Aynı sertifika
-güvenilmezken `leaf` yazıyordu — ikisi de derlemeler arası sabit, ama **farklı
-dizeler**, ve TCC requirement'ı yazıldığı gibi karşılaştırıyor. Yani güven
-adımını kaldıran bir derleme geçerli bir imza üretir ve yine de herkesin iznini
-düşürür. Sürüm iş akışı bu yüzden tam olarak `root` biçimini doğruluyor.
+It's `root`, not `leaf`: codesign writes whatever it sees in the chain, and
+it comes out as `root` because the certificate is a trusted root on the build
+machine. The same certificate wrote `leaf` while it was untrusted — both are
+stable across builds, but **different strings**, and TCC compares the
+requirement as written. So a build that skips the trust step produces a valid
+signature and still drops everyone's permission. That's why the release
+workflow validates the exact `root` form.
 
-Kurulumdaki dört tuzak, dördü de yaşandı:
+Four traps in the setup, all four of them hit:
 
-- **OpenSSL 3 varsayılan p12'yi macOS okuyamıyor.** SHA-256 MAC yazıyor;
-  `security import` "MAC verification failed (wrong password?)" diyor ve sizi
-  şifreye baktırıyor. `openssl pkcs12 -export -legacy` gerekiyor.
-- **Sertifika derleme makinesinde güvenilir olmalı.** Tauri kimliği
-  `security find-identity -v` ile arıyor, o da yalnızca geçerli kimlikleri
-  listeliyor; kendinden imzalı bir sertifika trustRoot yapılmadan geçerli
-  sayılmıyor. Runner'lar tek kullanımlık, yani orada güvenmek başka hiçbir
-  makineye ulaşmıyor.
-- **Sertifikayı değiştirmek herkesin iznini sıfırlar.** Requirement leaf
-  parmak iziyle yazılı. Süresi 2036'da doluyor; yenilemek yeni bir sertifika
-  demek, yani kullanıcılar izni bir kez daha verecek.
-- **Tauri kimliği .dmg'ye de basıyor, ve bu indirmeyi tamamen kapatıyor.**
-  macOS'un güvenmediği bir sertifikayla imzalı disk imajı *bağlanırken*
-  reddediliyor — uyarı uygulamayı çalıştırmadan önce, dosyayı açarken çıkıyor.
-  İmzasız imaj bağlanıyor ve soruyu uygulamaya bırakıyor; yani bu konuda
-  **imzasız, kötü imzalıdan iyi**. 26.5.2'de ölçüldü: v0.4.0 `source=no usable
-  signature` → açılıyor, v0.4.1 `origin=spacetrace` → açılmıyor. `codesign
-  --remove-signature` disk imajında çalışmıyor ("operation inapplicable"), o
-  yüzden iş akışı imajı `hdiutil convert` ile yeniden kuruyor; içindeki
-  imzalı .app'e dokunulmuyor.
+- **macOS can't read OpenSSL 3's default p12.** It writes a SHA-256 MAC;
+  `security import` says "MAC verification failed (wrong password?)" and
+  sends you chasing the password. `openssl pkcs12 -export -legacy` is needed.
+- **The certificate must be trusted on the build machine.** Tauri looks up
+  the identity with `security find-identity -v`, which only lists valid
+  identities; a self-signed certificate isn't counted as valid until it's
+  made a trustRoot. Runners are single-use, so trusting it there doesn't
+  reach any other machine.
+- **Changing the certificate resets everyone's permission.** The requirement
+  is written with the leaf's fingerprint. It expires in 2036; renewing it
+  means a new certificate, so users will grant the permission once more.
+- **Tauri also stamps the identity onto the .dmg, and this shuts the download
+  off completely.** A disk image signed with a certificate macOS doesn't
+  trust is rejected while *mounting* — the warning appears before the app
+  ever runs, while the file is being opened. An unsigned image mounts and
+  leaves the question to the app; so on this point **unsigned beats badly
+  signed**. Measured on 26.5.2: v0.4.0 `source=no usable signature` → opens,
+  v0.4.1 `origin=spacetrace` → doesn't open. `codesign --remove-signature`
+  doesn't work on a disk image ("operation inapplicable"), so the workflow
+  rebuilds the image with `hdiutil convert`; the signed .app inside it isn't
+  touched.
 
-Sır: `APPLE_CERTIFICATE` (p12'nin base64'ü) ve `APPLE_CERTIFICATE_PASSWORD`,
-masaüstü deposunda. Özel anahtar `~/.spacetrace/macos-signing.p12`, hiçbir
-deponun içinde değil. Sır yoksa derleme ad-hoc'a düşüyor ve uyarı basıyor;
-sürüm iş akışı ayrıca paketin requirement'ını doğruluyor, yani sessizce geri
-düşmüyor.
+Secrets: `APPLE_CERTIFICATE` (the p12's base64) and
+`APPLE_CERTIFICATE_PASSWORD`, in the desktop repository. The private key is
+at `~/.spacetrace/macos-signing.p12`, not inside any repository. If the
+secret is missing the build falls back to ad-hoc and prints a warning; the
+release workflow also validates the package's requirement, so it doesn't fall
+back silently.
 
-**İmzalama geldiğinde yapılacaklar** (bu bölümün varlık sebebi bu liste):
+**Things to do once signing arrives** (this list is the reason this section
+exists):
 
-1. `install-desktop.sh` ve `install-desktop.ps1` **silinir** — bakımı yapılacak
-   dosyalar değil, bir eksiğin yaması.
-2. Site deposunda `installAltTitle` / `installAltBody` / `installAltNote`
-   anahtarları ve `Download.astro`'daki alternatif kutusu kaldırılır.
-3. `installMacBody` "çift tıkla, açılır" hâline döner.
-4. Masaüstü `release.yml`'deki "Not code-signed" sürüm notu paragrafı silinir.
-5. Masaüstü `release.yml`'deki "Unsign the disk image" adımı silinir — gerçek
-   bir sertifikayla imzalı `.dmg` doğru olan, notarization zaten onu bekliyor.
+1. `install-desktop.sh` and `install-desktop.ps1` **get deleted** — they're
+   not files to maintain, they're a patch for a gap.
+2. The `installAltTitle` / `installAltBody` / `installAltNote` keys in the
+   site repository and the alternative box in `Download.astro` are removed.
+3. `installMacBody` goes back to "double-click, it opens".
+4. The "Not code-signed" release-note paragraph in the desktop's
+   `release.yml` is deleted.
+5. The "Unsign the disk image" step in the desktop's `release.yml` is deleted
+   — a `.dmg` signed with a real certificate is the correct thing,
+   notarization already expects that.
 
 ## Site
 
-Site artık bu depoda değil:
+The site is no longer in this repository:
 **[unalcakir28/spacetrace-website](https://github.com/unalcakir28/spacetrace-website)**
-— Astro, beş dil, 31 sayfa, `spacetrace.teknobakkall.com` adresinden yayında.
-Nasıl çalıştığı ve kolay bozulan yerleri o deponun `CLAUDE.md`'sinde.
+— Astro, five languages, 36 pages, live at `spacetrace.teknobakkall.com`. How
+it works and where it breaks easily is in that repository's `CLAUDE.md`.
 
-Buradan ayrıldı çünkü onu burada tutan tek şey adresti: GitHub Pages proje
-sitesini `/<depo-adı>/` altında sunuyor, yani depo adı URL'in parçasıydı ve
-ayırmak adresi bozardı. Kendi alan adı o bağı kopardı; sitenin `crates/` ile
-zaten hiçbir kod bağı yoktu.
+It split off from here because the only thing keeping it here was the
+address: GitHub Pages serves a project site under `/<repo-name>/`, so the
+repository name was part of the URL, and splitting it out would have broken
+the address. Its own domain cut that tie; the site already had no code tie to
+`crates/` anyway.
 
-**Bu depoda kalan tek bağ, aşağıdaki indirme sözleşmesi.** Sitenin
-`src/data/releases.ts` dosyası buradaki üç sürüm iş akışının ürettiği etiket ve
-varlık adlarına birebir bağlı. Yukarıdaki tabloda bir ad değiştirirsen site
-deposunu da aynı gün güncelle, yoksa her indirme bağlantısı sessizce kırılır —
-ve artık iki ayrı depo olduğu için tek bir CI adımı bunu yakalamıyor.
+**The only remaining tie in this repository is the download contract below.**
+The site's `src/data/releases.ts` file binds one-to-one to the tag and asset
+names produced by the three release workflows here. If you change a name in
+the table above, update the site repository the same day too, or every
+download link silently breaks — and because they're now two separate
+repositories, no single CI step catches it.

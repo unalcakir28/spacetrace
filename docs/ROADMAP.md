@@ -1,144 +1,151 @@
-# Yol haritası
+# Roadmap
 
-Fazlar sırayla ilerler ve her fazın bir **çıkış kriteri** vardır: o karşılanmadan
-sonraki faza geçilmez. Sıralama ilkesi, ürünü farklılaştıran katmanın
-(ajan + geçmiş + diff) görsel cilalardan **önce** gelmesidir; treemap "olması
-gereken" bir özelliktir, ürünün kendisi değil.
+Phases proceed in order and each phase has an **exit criterion**: the next
+phase does not start until it is met. The ordering principle is that the layer
+that differentiates the product (agent + history + diff) comes **before**
+visual polish; the treemap is a "nice-to-have" feature, not the product
+itself.
 
-Güncel yapılacaklar listesi için [../TODO.md](../TODO.md) dosyasına bakın.
+See [../TODO.md](../TODO.md) for the current to-do list.
 
 ---
 
-## Faz 1 — Çekirdek ve CLI ✅
+## Phase 1 — Core and CLI ✅
 
-**Durum:** tamamlandı (Eylül 2026) · **Sürüm:** 0.1.0
+**Status:** complete (September 2026) · **Version:** 0.1.0
 
-Tek başına kullanılabilir bir komut satırı aracı. Bu faz aynı zamanda ajanın da
-temelini kurar: ajan, bu çekirdeğin ağ arayüzü giydirilmiş hâli olacak.
+A standalone, usable command-line tool. This phase also lays the foundation
+for the agent: the agent will be this core with a network interface put on
+it.
 
-- `scan-core`: paralel dizin taraması, arena ağaç modeli, hardlink
-  tekilleştirme, exclude / one-filesystem / max-depth
-- `store`: SQLite anlık görüntü deposu, ncdu uyumlu dışa aktarım, prune
-- `diff`: iki anlık görüntüyü karşılaştırma, "suçlu klasör" tespiti
+- `scan-core`: parallel directory scanning, arena tree model, hardlink
+  deduplication, exclude / one-filesystem / max-depth
+- `store`: SQLite snapshot store, ncdu-compatible export, prune
+- `diff`: comparing two snapshots, "culprit folder" detection
 - `cli`: scan / ls / scans / diff / export / prune / rm
 
-**Çıkış kriteri (karşılandı):** Toplamlar `du` ile birebir eşleşiyor; testler
-üç platformda derleniyor; bir anlık görüntü kaydedilip bir hafta sonra
-karşılaştırılabiliyor.
+**Exit criterion (met):** Totals match `du` exactly; tests build on three
+platforms; a snapshot can be saved and compared a week later.
 
 ---
 
-## Faz 2 — Ajan ✅
+## Phase 2 — Agent ✅
 
-**Durum:** çekirdek çalışıyor · **Sürüm:** 0.2.0
+**Status:** core working · **Version:** 0.2.0
 
-Ürünün farklılaştığı ilk nokta. Aynı ikili sunucuda, NAS'ta ve konteynerde
-çalışır; tarar, saklar, isteyene verir.
+The first point where the product differentiates itself. The same binary
+runs on a server, on a NAS and in a container; it scans, stores, and serves
+it to whoever asks.
 
-- `agent scan` — tek seferlik tarama, snapshot dosyasına yaz
-- `agent serve` — HTTP+JSON servisi (axum, bkz. [DECISIONS.md](DECISIONS.md) K3):
-  snapshot listesi, snapshot indirme, tetiklenen tarama; bearer token ile kimlik
-  doğrulama, opsiyonel TLS
-- `agent push` — snapshot'ı bir merkeze veya başka bir ajana gönder
-- Ajanın kendi zamanlayıcısı (cron ifadesi) — NAS'ta systemd/cron kurcalamamak için
-- Dağıtım: statik ikili (musl), Docker imajı, systemd unit dosyası,
-  `curl | sh` kurulum betiği
-- CLI'dan uzak kaynak okuma: `spacetrace scans --remote https://...`
+- `agent scan` — one-off scan, write to a snapshot file
+- `agent serve` — HTTP+JSON service (axum, see [DECISIONS.md](DECISIONS.md) K3):
+  snapshot list, snapshot download, triggered scan; bearer token
+  authentication, optional TLS
+- `agent push` — send the snapshot to a hub or another agent
+- The agent's own scheduler (cron expression) — so as not to touch systemd/cron on the NAS
+- Distribution: static binary (musl), Docker image, systemd unit file,
+  `curl | sh` install script
+- Reading a remote source from the CLI: `spacetrace scans --remote https://...`
 
-**Çıkış kriteri:** Kendi Hetzner sunucularında, Proxmox host'unda ve bir Docker
-konteynerinde ajan kurulu; her gece tarama alıyor; bir hafta sonra
-`spacetrace diff --remote <host> --path /var` anlamlı çıktı veriyor.
+**Exit criterion:** The agent is installed on our own Hetzner servers, on the
+Proxmox host and in a Docker container; it takes a scan every night; a week
+later `spacetrace diff --remote <host> --path /var` gives a meaningful
+output.
 
-**Karşılanan kısım:** komut zinciri uçtan uca doğrulandı — ajan tarıyor,
-serve ediyor, CLI `--remote diff` suçlu klasörü doğru buluyor. **Kalan:** gerçek
-sunuculara kurulum ve bir haftalık gerçek veri; bunlar yalnızca gerçek
-makinelerde yapılabilir.
+**Part met:** the command chain was verified end to end — the agent scans,
+serves, the CLI `--remote diff` correctly finds the culprit folder.
+**Remaining:** installation on real servers and a week of real data; these
+can only be done on real machines.
 
-**Bilinçli sınır:** Ajan hiçbir şeyi silmez, yalnızca okur. Bu ilk sürümde bir
-özellik eksiği değil, güven kararı.
-
----
-
-## Faz 3 — Masaüstü uygulaması ✅
-
-**Durum:** çalışıyor · **Depo:** [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) (ayrı, K2)
-**Yığın:** Tauri v2 + React/TS
-
-- Klasör ağacı + zoom'lanabilir squarified treemap ✅
-- Dosya türüne göre renklendirme, çöpe gönder, Finder/Explorer'da aç ✅
-- "Uzak kaynak ekle": ajan URL'i; uzak snapshot'ı yerelmiş gibi gezme ✅
-- Diff görünümü: büyüyen/küçülen klasörler ✅
-- Windows MFT hızlı yolu, macOS Full Disk Access onboarding, zaman çizelgesi ⏳
-
-Yerleşim motoru bu depoda: `crates/treemap` (squarified + LOD + hiyerarşik
-hit-test), 21 test. Uygulama kabuğu ayrı depoda.
-
-**Çıkış kriteri:** 100k+ dikdörtgenlik bir treemap üç platformda akıcı
-(pan/zoom'da kare düşürmüyor); uzak bir ajanın snapshot'ı yerel diskle aynı
-arayüzde açılıyor.
-
-**Karşılanan kısım:** uzak snapshot yerel diskle aynı arayüzde ve aynı kod
-yolundan açılıyor. **Kalan:** performans yalnızca macOS'ta doğrulandı; Windows
-ve WebKitGTK ölçülmedi.
+**Deliberate limit:** The agent deletes nothing, it only reads. In this
+first version this is not a missing feature, it is a trust decision.
 
 ---
 
-## Faz 4 — Merkez servis ✅
+## Phase 3 — Desktop application ✅
 
-**Durum:** çalışıyor · **Depo:** [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) (ayrı, K2)
+**Status:** working · **Repository:** [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) (separate, K2)
+**Stack:** Tauri v2 + React/TS
 
-Ekip kademesinin karşılığı. Self-host edilebilir, zorunlu değil.
+- Folder tree + zoomable squarified treemap ✅
+- Coloring by file type, send to trash, open in Finder/Explorer ✅
+- "Add remote source": agent URL; browsing a remote snapshot as if it were local ✅
+- Diff view: growing/shrinking folders ✅
+- Windows MFT fast path, macOS Full Disk Access onboarding, timeline ⏳
 
-- Çoklu ajan panosu: hangi makinede ne kadar yer kaldı, ne büyüyor ✅
-- Klasör başına büyüme trendi ve eşik uyarıları (webhook) ✅
-- Token yönetimi: ajan token'ı panoyu okuyamaz, admin token'ı push edemez ✅
-- E-posta uyarısı ve kişi başına hesap ⏳
+The layout engine is in this repo: `crates/treemap` (squarified + LOD +
+hierarchical hit-test), 21 tests. The application shell is in a separate
+repo.
 
-Pano sunucu tarafında elle üretiliyor; frontend build adımı yok. Masaüstündeki
-React treemap'i paylaşmak yerine bu seçildi, çünkü self-host edilen bir servisin
-tek statik ikili kalması ops açısından daha değerli.
+**Exit criterion:** A treemap with 100k+ rectangles is smooth on three
+platforms (does not drop frames on pan/zoom); a remote agent's snapshot
+opens in the same interface as the local disk.
 
-**Çıkış kriteri:** Beş makineyi izleyen bir kurulum, disk dolmadan önce
-"şu klasör bu hızla giderse 9 gün sonra diski doldurur" uyarısı üretiyor.
-
-**Karşılanan kısım:** mekanizma tek makineyle uçtan uca doğrulandı — 7 günlük
-geçmişte r²=1.0 trend, 4 MiB kalan yer senaryosunda 10.5 gün tahmini, uyarı
-tetiklenip webhook'a gerçekten POST atılıyor. **Kalan:** beş gerçek makine.
-
----
-
-## Faz 5 — Derinlik ⏳
-
-Sıra fazla değil, talebe göre seçilir.
-
-- Duplicate bulucu (boyut → ön-hash → blake3, önbellekli)
-- Dosya sistemi farkındalığı: btrfs/ZFS snapshot ve reflink muhasebesi,
-  APFS clone'ları, sıkıştırılmış kullanım
-- Bulut kökleri: S3, OneDrive, Google Drive birer "uzak kaynak" olarak
-- Cushion gölgelendirmeli treemap
-- USN journal ile artımlı yeniden tarama (Windows)
-- ncdu/gdu JSON içe aktarma (mevcut kullanıcıların eski taramaları)
+**Part met:** the remote snapshot opens in the same interface and through
+the same code path as the local disk. **Remaining:** performance has only
+been verified on macOS; Windows and WebKitGTK have not been measured.
 
 ---
 
-## Sürüm hedefleri
+## Phase 4 — Hub service ✅
 
-| Sürüm | İçerik | Dağıtım |
+**Status:** working · **Repository:** [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) (separate, K2)
+
+The counterpart for the team tier. Self-hostable, not mandatory.
+
+- Multi-agent dashboard: how much space is left on which machine, what is growing ✅
+- Per-folder growth trend and threshold alerts (webhook) ✅
+- Token management: an agent token cannot read the dashboard, an admin token cannot push ✅
+- Email alerts and per-person accounts ⏳
+
+The dashboard is generated by hand server-side; there is no frontend build
+step. This was chosen instead of sharing the desktop's React treemap,
+because for a self-hosted service staying a single static binary is more
+valuable from an ops standpoint.
+
+**Exit criterion:** A setup monitoring five machines produces the warning
+"if this folder keeps going at this rate, it will fill the disk in 9 days"
+before the disk fills up.
+
+**Part met:** the mechanism was verified end to end with a single machine —
+an r²=1.0 trend over 7 days of history, a 10.5-day estimate in a
+4 MiB-remaining-space scenario, the alert fires and a real POST is sent to
+the webhook. **Remaining:** five real machines.
+
+---
+
+## Phase 5 — Depth ⏳
+
+Not phase-ordered, chosen based on demand.
+
+- Duplicate finder (size → pre-hash → blake3, cached)
+- Filesystem awareness: btrfs/ZFS snapshot and reflink accounting,
+  APFS clones, compressed usage
+- Cloud roots: S3, OneDrive, Google Drive each as a "remote source"
+- Cushion-shaded treemap
+- Incremental rescan via the USN journal (Windows)
+- ncdu/gdu JSON import (existing users' old scans)
+
+---
+
+## Version targets
+
+| Version | Contents | Distribution |
 |-------|--------|---------|
-| 0.1 | CLI (Faz 1) | GitHub Releases, Homebrew tap, AUR |
-| 0.2 | + ajan (Faz 2) | + Docker imajı, kurulum betiği |
-| 0.3 | + masaüstü (Faz 3) | + imzalı .dmg / .msi / AppImage |
-| 0.4 | + merkez (Faz 4) | + docker-compose |
-| 1.0 | Faz 1–4 kararlı, İngilizce arayüz, belgelenmiş | Microsoft Store, Homebrew cask |
+| 0.1 | CLI (Phase 1) | GitHub Releases, Homebrew tap, AUR |
+| 0.2 | + agent (Phase 2) | + Docker image, install script |
+| 0.3 | + desktop (Phase 3) | + signed .dmg / .msi / AppImage |
+| 0.4 | + hub (Phase 4) | + docker-compose |
+| 1.0 | Phases 1–4 stable, English interface, documented | Microsoft Store, Homebrew cask |
 
-## Lansman öncesi zorunlular
+## Pre-launch requirements
 
-Sürüm 1.0'dan önce, faz sırasından bağımsız olarak:
+Before version 1.0, independent of phase order:
 
-- **Arayüz dili İngilizce.** Hedef kanallar (HN, r/selfhosted, r/homelab,
-  r/DataHoarder) İngilizce. Türkçe i18n ile geri gelebilir.
-- **Kod imzalama.** macOS: Developer ID + notarization ($99/yıl). Windows: OV
-  sertifika ($150–300/yıl) — Azure Artifact Signing Türkiye'den bireysel olarak
-  alınamıyor, bu yüzden OV yolu planlanmalı.
-- **Belgeler:** kurulum, ajan güvenlik modeli, "ncdu'dan geçiş" ve
-  "TreeSize'dan geçiş" rehberleri.
+- **Interface language English.** The target channels (HN, r/selfhosted,
+  r/homelab, r/DataHoarder) are English. Turkish can come back with i18n.
+- **Code signing.** macOS: Developer ID + notarization ($99/year). Windows: OV
+  certificate ($150–300/year) — Azure Artifact Signing cannot be obtained
+  individually from Turkey, so the OV route has to be planned.
+- **Documentation:** installation, the agent security model, "migrating from
+  ncdu" and "migrating from TreeSize" guides.

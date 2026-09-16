@@ -1,420 +1,476 @@
-# spacetrace — Claude için proje notları
+# spacetrace — project notes for Claude
 
-Disk kullanımını tarayan, SQLite anlık görüntüsüne yazan ve iki görüntüyü
-karşılaştırarak **neyin büyüdüğünü** söyleyen bir araç. Rust workspace.
+A tool that scans disk usage, writes it into a SQLite snapshot and, by
+comparing two snapshots, tells you **what grew**. Rust workspace.
 
-Bağlam okuması (kodda görünmeyen kararlar): [docs/WHY.md](docs/WHY.md) neden bu
-ürün, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) neden bu tasarım,
-[docs/DECISIONS.md](docs/DECISIONS.md) kapanmış fazlar arası kararlar ve
-gerekçeleri, [docs/ROADMAP.md](docs/ROADMAP.md) fazlar, [TODO.md](TODO.md)
-sıradaki iş. Bir özellik önerisini değerlendirirken WHY.md'deki **kapsam dışı**
-listesine bak; bir tasarım kararını yeniden açmadan önce DECISIONS.md'ye bak.
-Ajanı kurmak ve yapılandırmak [docs/AGENT.md](docs/AGENT.md) (hazır systemd
-unit'i `deploy/systemd/spacetrace-agent.service`); "X aracı bunu nasıl yapıyor"
-sorusunun ölçümlü cevabı [docs/COMPETITORS.md](docs/COMPETITORS.md).
+Background reading (decisions that are not visible in the code):
+[docs/WHY.md](docs/WHY.md) why this product,
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) why this design,
+[docs/DECISIONS.md](docs/DECISIONS.md) decisions taken between closed phases
+and their rationale, [docs/ROADMAP.md](docs/ROADMAP.md) phases,
+[TODO.md](TODO.md) what is next. When weighing a feature proposal, check the
+**out of scope** list in WHY.md; before reopening a design decision, check
+DECISIONS.md. Installing and configuring the agent:
+[docs/AGENT.md](docs/AGENT.md) (ready-made systemd unit
+`deploy/systemd/spacetrace-agent.service`); the measured answer to "how does
+tool X do this" is [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-## Komutlar
+## Commands
 
 ```bash
-cargo test --workspace                   # 402 test, hepsi geçmeli
-cargo clippy --workspace --all-targets   # uyarısız olmalı
+cargo test --workspace                   # 402 tests, all must pass
+cargo clippy --workspace --all-targets   # must be warning-free
 cargo fmt --all
-cargo build --release                    # ikili: target/release/spacetrace
+cargo build --release                    # binary: target/release/spacetrace
 cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc --all-targets
 cargo run -q -p spacetrace-changelog -- markdown --component cli > CHANGELOG.md
 ```
 
-**`--all-targets` şart:** onsuz test kodu hiç derlenmiyor ve `#[cfg(test)]`
-altındaki platforma bağlı bir hata ancak CI'da görünüyor (11 Eylül 2026'da
-öyle oldu: `parse_mountinfo` testte her platformda derleniyordu ve içi
-`std::os::unix` kullanıyordu).
+**`--all-targets` is mandatory:** without it the test code is never compiled
+at all, and a platform-dependent error under `#[cfg(test)]` only shows up in
+CI (that is what happened on 11 September 2026: `parse_mountinfo` compiled on
+every platform in tests and used `std::os::unix` inside).
 
-Windows tip denetimi yalnızca `scan-core` için yapılabiliyor: `agent` ve `cli`
-zstd üzerinden C koduna bağlı ve macOS'ta msvc hedefi için çapraz derleyici yok.
-Onların Windows davranışı ancak CI'da görülür — **CI'ı beklemeden "Windows'ta
-çalışıyor" deme.**
+Windows type checking can only be done for `scan-core`: `agent` and `cli`
+depend on C code through zstd, and there is no cross compiler for the msvc
+target on macOS. Their Windows behaviour is only visible in CI — **do not say
+"it works on Windows" without waiting for CI.**
 
-Rust 1.85+ gerekir. Testler geçici dizinlerde **gerçek dosya sistemi** kullanır
-(hardlink, symlink, izin hatası senaryoları dâhil), mock yok.
+Rust 1.85+ is required. The tests use a **real file system** in temporary
+directories (including hardlink, symlink and permission-error scenarios), no
+mocks.
 
-## Bozulmaması gereken değişmezler
+## Invariants that must not break
 
-Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
+These can break silently and go unnoticed outside the tests:
 
-0. **Bir veritabanını açmak yazma kilidi almamalı.** `store::schema::migrate`
-   şema güncelse hiçbir DDL veya kalıcı pragma çalıştırmıyor. Ajan ve hub her
-   istekte bağlantı açtığı için, koşulsuz `CREATE TABLE IF NOT EXISTS` ya da
-   `PRAGMA journal_mode` bir okumanın süren yazmayı SQLITE_BUSY ile devirmesine
-   yol açıyordu (CI'da yakalandı, testi `roundtrip.rs` içinde).
-1. **Boyut anlambilimi.** `size` = yalnızca dosya baytları. `alloc` = **diskin
-   gerçekten tuttuğu**, dizin blokları dâhil. Dizinlerin kendi inode boyutu
-   mantıksal toplama **girmez**; bu yüzden `size` `du -sb` ile eşleşmez (GNU
-   `--apparent-size` her dizinin inode boyutunu ekliyor) — eski hâli öyle
-   diyordu, yanlıştı.
+0. **Opening a database must not take a write lock.** `store::schema::migrate`
+   runs no DDL and no persistent pragma when the schema is up to date. Because
+   the agent and the hub open a connection on every request, an unconditional
+   `CREATE TABLE IF NOT EXISTS` or `PRAGMA journal_mode` caused a read to
+   knock over an in-flight write with SQLITE_BUSY (caught in CI, test in
+   `roundtrip.rs`).
+1. **Size semantics.** `size` = file bytes only. `alloc` = **what the disk
+   actually holds**, including directory blocks. A directory's own inode size
+   does **not** enter the logical total; that is why `size` does not match
+   `du -sb` (GNU `--apparent-size` adds every directory's inode size) — the
+   old wording said it did, and that was wrong.
 
-   **`alloc` = `du` değil, `alloc` ≈ `df`.** Paylaşılan blok yokken ikisi
-   birebir aynı ve test bunu zorluyor. Blok paylaşımı varken `du` fazla
-   sayıyor, biz saymıyoruz, ve **fark tam olarak paylaşılan bloklar**
-   (bu da test ediliyor). İki durum var: hardlink'te `du` da tekilleştiriyor,
-   **APFS clone'unda tekilleştirmiyor** — clone'un kendi inode'u var ve
-   `nlink == 1`, ama diskte blokları bir kez duruyor. Ölçüldü: 3 clone × 100 MB
-   = **0 MB** boş alan tüketimi. Bunu `du`'ya uyarak raporlamak, "diskte ne
-   kadar yer kaplıyor" sorusuna yanlış cevap vermek olurdu.
-   Bu eşleşme bir test koşulu ve **testi
-   `crates/scan-core/tests/du_equivalence.rs`** (9 Eylül 2026'da yazıldı; o güne
-   kadar iddia elle doğrulanıyordu). `alloc` için oracle harici `du`; `size`
-   için oracle aynı dosyadaki naif seri yürüyüş, çünkü `du` mantıksal boyutu
-   veremiyor (BSD `-A` bloğa yuvarlıyor, GNU `--apparent-size` dizin inode'unu
-   ekliyor). Tarama davranışını değiştirirken bu dosyayı genişlet.
-2. **Arena düzeni: iki özellik, ve yalnızca iki.** Bir düğümün çocukları
-   bitişik (`children_start .. +children_len`), ve her çocuğun indeksi
-   ebeveynininkinden **büyük**. `TreeBuilder::aggregate` tek ters geçişte
-   topluyor (ikinci özellik bunun için), `store` düzeni olduğu gibi saklıyor,
-   `Tree::check` tam olarak bu ikisini denetliyor.
+   **`alloc` is not `du`, `alloc` ≈ `df`.** With no shared blocks the two are
+   exactly the same, and a test enforces it. With block sharing `du`
+   over-counts, we do not, and **the difference is exactly the shared blocks**
+   (that is tested too). There are two cases: for hardlinks `du` deduplicates
+   as well, **for an APFS clone it does not** — the clone has its own inode
+   and `nlink == 1`, but its blocks sit on disk once. Measured: 3 clones ×
+   100 MB = **0 MB** of free-space consumption. Reporting that the way `du`
+   does would be the wrong answer to the question "how much room does this
+   take on disk".
+   This equivalence is a test condition and **the test is
+   `crates/scan-core/tests/du_equivalence.rs`** (written on 9 September 2026;
+   until that day the claim was verified by hand). The oracle for `alloc` is
+   the external `du`; the oracle for `size` is the naive serial walk in the
+   same file, because `du` cannot give a logical size (BSD `-A` rounds to
+   blocks, GNU `--apparent-size` adds the directory inode). Extend this file
+   when you change scan behaviour.
+2. **Arena layout: two properties, and only two.** A node's children are
+   contiguous (`children_start .. +children_len`), and every child's index is
+   **greater** than its parent's. `TreeBuilder::aggregate` aggregates in a
+   single reverse pass (that is what the second property is for), `store`
+   persists the layout as it is, and `Tree::check` checks exactly these two.
 
-   **BFS değil, ve bu 14 Eylül 2026'da değişti.** Yıllarca "BFS sırasında"
-   yazdı çünkü öyleydi: yürüyüş ayrı bir ara ağaç kuruyor, `flatten` onu
-   seviye seviye kopyalıyordu. Artık her dizin listelenir listelenmez arenaya
-   yazılıyor (B1-K, çift depolama kalktı), yani **düzen dizinlerin bitiş
-   sırası**. İki özellik yapı gereği tutuyor — ebeveyn adlandırılabilmek için
-   zaten arenada olmak zorunda. Çocuk eklemenin tek yolu
-   `TreeBuilder::push_block`.
+   **Not BFS, and that changed on 14 September 2026.** For years it said "in
+   BFS order" because it was: the walk built a separate intermediate tree and
+   `flatten` copied it level by level. Now every directory is written into the
+   arena as soon as it is listed (B1-K, double storage is gone), so **the
+   layout is the order in which directories finish**. Both properties hold by
+   construction — a parent has to be in the arena already to be nameable. The
+   only way to add a child is `TreeBuilder::push_block`.
 
-   **Sonuç: iki tarama aynı düzeni vermez.** Aynı diskin iki taraması aynı
-   cevapları verir (test: `the_thread_count_does_not_change_the_answer`, yol
-   yol karşılaştırıyor) ama aynı id'leri vermez. `diff` ada göre eşliyor,
-   masaüstü id'leri generation'a bağlıyor — ama **id sırasına dayanan yeni bir
-   şey yazma, ve bunu bir kez yayınlamış durumdayız.**
+   **Consequence: two scans do not produce the same layout.** Two scans of the
+   same disk give the same answers (test:
+   `the_thread_count_does_not_change_the_answer`, which compares path by path)
+   but not the same ids. `diff` matches by name, the desktop ties ids to a
+   generation — but **do not write anything new that relies on id order, and
+   we have already shipped this once.**
 
-   `dupes` altı yerde id'yle sıralıyordu, her birinin yorumu "iki koşu aynı
-   sonucu versin" diyerek. B1-K düzeni değiştirdiğinden beri o yorum yanlıştı:
-   yayınlanmış 0.7.0 sabit bir fikstürde üç koşuda üç farklı sıra verdi
-   (ölçüldü). Altısı da D6'da yola çevrildi; tarayıcının clone
-   tekilleştirmesi zaten `(derinlik, yol)` ile sıralıyordu. **Bunu bir kez
-   "bug değil" diye geçtim, değilmiş** — id düzenine dayanan bir yorum
-   gördüğünde ona inanma, ölç.
+   `dupes` sorted by id in six places, each with a comment saying "so that two
+   runs give the same result". That comment had been wrong ever since B1-K
+   changed the layout: the released 0.7.0 gave three different orders in three
+   runs on a fixed fixture (measured). All six were switched to path in D6;
+   the scanner's clone deduplication was already sorting by `(depth, path)`.
+   **I once waved this off as "not a bug", and it was one** — when you see a
+   comment that relies on id order, do not believe it, measure.
 
-   Bunun testi de zor: mevcut `the_order_is_the_same_every_run` göremezdi,
-   çünkü `find`'ı **tek** bir ağaç üzerinde beş kez çağırıyor — id'ler zaten
-   aynı. Yeni test iki farklı düzeni `from_nested` ile kuruyor; thread
-   sayısıyla kurmak küçük fikstürde aynı düzeni verip bahsi kaybediyor.
-3. **Sembolik bağlantılar izlenmez** (kendi boyutlarıyla sayılır), **sabit
-   bağlantılar bir kez sayılır** (`(dev, ino)`; her iki ad da ağaçta görünür,
-   biri 0 bayt katkı yapar). **Hangi adın baytları taşıdığı belirsizdir** —
-   yürüyüş paralel, inode'u önce talep eden thread kazanıyor ve bu platformdan
-   platforma değişiyor (macOS'ta kökteki kopya, Linux'ta içteki kopya sayıldı;
-   CI'da yakalandı). Garanti "bir kez", "ilk yol" değil — test yazarken
-   çifte iddia et, tek ada değil.
-4. **`Tree::remove_subtree` düğümü sıfırlar, listeden çıkarmaz.** Arena
-   düzeninin anlamı budur: ortadan bir girdi kesmek sonrasındaki her düğümü
-   yeniden numaralandırır ve elinde kimlik tutan her istemciyi (masaüstü) her
-   şeyi unutmaya zorlar. Girdi adreslenebilir kalır ve 0 bayt bildirir;
-   `children_len = 0` yapıldığı için altına inilemez. Dönen kimlik listesi
-   çağıranın artık listelememesi gereken girdilerdir.
-5. **İptal edilen tarama ağaç döndürmez.** `ScanProgress::cancel` sonrası
-   `scan()` `ErrorKind::Interrupted` verir. Kısmi bir ağaç tam görünür ve
-   yanlış toplam bildirir; onu gerçek snapshot'ların yanına yazmak en kötü
-   sonuçtur. **Testi yazarken:** "yürüyüş erkenden durdu" iddiası
-   *tarama başlamadan* iptal edip `progress.files == 0` doğrulanarak kurulur.
-   Yan thread'den iptal edip "hepsini bitirmemiş olmalı" demek, yürüyüşün
-   zamanlayıcıdan yavaş olduğuna bahis oynamaktır ve hızlı makinede kaybeder
-   (macOS CI'da kaybetti).
-6. **Hangi ölçüyle sıralandığı/çizildiği bir parametre, varsayılan değil.**
-   `SizeBasis` (`Logical` | `OnDisk`) `children_by`, `Node::measure` ve
-   `LayoutOptions.basis` üzerinden geçer. Seyrek bir dosya tuttuğundan 50 kat
-   büyük bir uzunluk bildirir (1 TiB iddia eden Docker.raw 19 GiB tutuyor) ve
-   bunlar gerçek disklerdeki *en büyük* girdiler — yani mantıksal ölçü en çok
-   önemli olan girdilerde en çok yanılıyor. Sıralama ile yanındaki rakamın
-   aynı ölçüden gelmesi zorunlu; "en büyük önce" diyen bir liste yanındaki
-   sayıyla aynı şeyi söylemek durumunda. Masaüstü varsayılanı `OnDisk`, CLI
-   `Logical` (çağrı yerlerinde açıkça yazılı).
-7. **Hatalar yutulmaz.** Okunamayan yol sayılır ve örneklenir; tarama durmaz.
-   **Cevap vermeyen bir mount da bir okuma hatasıdır.** `entry.metadata()` ölü
-   bir mount'ta dönmüyor ve kesilemiyor, o yüzden mount noktalarına
-   (`mounts.rs`, tarama başında okunur) terk edilebilir bir thread üzerinden
-   yaklaşılıyor; süre dolunca yol okunamayan sayılıp yürüyüş kardeşlerle
-   devam ediyor. Tabloyu `MNT_NOWAIT` ile oku — `MNT_WAIT` ölü mount'ta
-   bloke oluyor, yani önlem bug'a dönüşüyor.
-8. **Uzun süren her aşamanın kımıldayan bir sayacı olmalı.** İzleyen taraf
-   "takıldı mı" sorusunu yalnızca sayaçlara bakarak cevaplıyor (CLI 10 saniye
-   hareketsizlikte uyarıyor), yani sayacı olmayan bir aşama sağlıklı çalışırken
-   asılmış görünür. Clone sondası tam bunu yapıyordu: `~/github`'da 1989 ms'lik
-   taramanın 1193 ms'i, tek bir sayaç kımıldamadan (ölçüldü, 10 Eylül 2026).
-   `clones_probed` bu yüzden var; yeni bir aşama eklerken aynısını yap.
-   **Kaydetme de bir aşama** (14 Eylül 2026): 412.983 girdide yürüyüş 753 ms,
-   veritabanına yazmak 571 ms — 10M girdiye ≈ 14 saniye. `Phase::Saving` ve
-   `Phase::Checksumming` (iki ayrı geçiş: 273 ms yazma, 208 ms özet) ile
-   `ScanProgress::rows_done`/`rows_total` bunun için var, ve CLI ilerleme
-   satırı artık taramayla birlikte kaydetmeyi de kapsıyor. **`StallWatch`
-   sayaçları `ScanProgress`'ten kendi okuyor**, tam da yeni bir sayaç
-   eklendiğinde her izleyicinin onu değiştirilmeden görmesi için.
-9. **Ajan hiçbir şeyi silmez.** Sunucuya kurulacak yazılımın güven kazanması için
-   verilmiş bilinçli bir karar, eksik özellik değil.
+   Testing it is hard too: the existing `the_order_is_the_same_every_run`
+   could not catch it, because it calls `find` five times on a **single**
+   tree — the ids are the same anyway. The new test builds two different
+   layouts with `from_nested`; building them via the thread count gives the
+   same layout on a small fixture and loses the bet.
+3. **Symlinks are not followed** (they count with their own size),
+   **hardlinks are counted once** (`(dev, ino)`; both names appear in the
+   tree, one contributes 0 bytes). **Which name carries the bytes is
+   undefined** — the walk is parallel, the thread that claims the inode first
+   wins, and this varies from platform to platform (on macOS the copy at the
+   root was counted, on Linux the inner copy; caught in CI). The guarantee is
+   "once", not "the first path" — when writing a test, assert over the pair,
+   not over one name.
+4. **`Tree::remove_subtree` zeroes the node, it does not drop it from the
+   list.** That is what the arena layout means: cutting an entry out of the
+   middle renumbers every node after it and forces every client holding ids
+   (the desktop) to forget everything. The entry stays addressable and reports
+   0 bytes; because `children_len = 0` is set, you cannot descend into it. The
+   returned id list is the entries the caller must no longer list.
+5. **A cancelled scan returns no tree.** After `ScanProgress::cancel`,
+   `scan()` returns `ErrorKind::Interrupted`. A partial tree looks complete
+   and reports a wrong total; writing it next to real snapshots is the worst
+   outcome. **When writing the test:** the claim "the walk stopped early" is
+   established by cancelling *before the scan starts* and verifying
+   `progress.files == 0`. Cancelling from a side thread and saying "it cannot
+   have finished everything" is betting that the walk is slower than the
+   timer, and it loses on a fast machine (it lost on macOS CI).
+6. **Which measure something is sorted or drawn by is a parameter, not a
+   default.** `SizeBasis` (`Logical` | `OnDisk`) is threaded through
+   `children_by`, `Node::measure` and `LayoutOptions.basis`. A sparse file
+   reports a length 50 times larger than what it holds (a Docker.raw claiming
+   1 TiB holds 19 GiB), and these are the *largest* entries on real disks — so
+   the logical measure is most wrong on exactly the entries that matter most.
+   The sort and the number beside it must come from the same measure; a list
+   that says "largest first" has to say the same thing as the number next to
+   it. The desktop default is `OnDisk`, the CLI's is `Logical` (written out
+   explicitly at the call sites).
+7. **Errors are not swallowed.** An unreadable path is counted and sampled;
+   the scan does not stop. **A mount that does not answer is a read error
+   too.** `entry.metadata()` does not return on a dead mount and cannot be
+   interrupted, so mount points (`mounts.rs`, read at the start of the scan)
+   are approached on a thread that can be abandoned; when the deadline passes
+   the path is counted as unreadable and the walk continues with its siblings.
+   Read the table with `MNT_NOWAIT` — `MNT_WAIT` blocks on a dead mount, which
+   turns the precaution into the bug.
+8. **Every long-running phase must have a counter that moves.** The watching
+   side answers "is it stuck" by looking at the counters alone (the CLI warns
+   after 10 seconds without movement), so a phase without a counter looks hung
+   while it is working fine. The clone probe did exactly that: 1193 ms of a
+   1989 ms scan on `~/github`, without a single counter moving (measured,
+   10 September 2026). That is why `clones_probed` exists; do the same when
+   you add a new phase. **Saving is a phase too** (14 September 2026): on
+   412.983 entries the walk takes 753 ms and writing to the database 571 ms —
+   ≈ 14 seconds at 10M entries. `Phase::Saving` and `Phase::Checksumming` (two
+   separate passes: 273 ms writing, 208 ms digest) plus
+   `ScanProgress::rows_done`/`rows_total` exist for this, and the CLI progress
+   line now covers saving as well as scanning. **`StallWatch` reads the
+   counters from `ScanProgress` itself**, precisely so that when a new counter
+   is added every watcher sees it without being changed.
+9. **The agent deletes nothing.** A deliberate decision so that software
+   installed on a server can earn trust, not a missing feature.
 
-## Kod ve depo alışkanlıkları
+## Code and repository habits
 
-- **Bu depoda her şey İngilizce: kod yorumları, kullanıcıya görünen dizeler,
-  `--help` metinleri, hata mesajları.** CLI, ajan ve hub için i18n katmanı yok
-  ve planlanmıyor — çevrilmiş bir komut yanlış bilgidir (K1). Türkçe kalan tek
-  yer: WHY, ROADMAP, TODO, RESEARCH, DECISIONS ve bu dosya — gerekçe belgeleri.
-- **İstisna, ve yalnızca iki yerde: masaüstü GUI ve changelog metinleri beş
-  dilde** (`en tr it fr de`, sitedekiyle aynı küme). Bu K1'in iptali değil,
-  kapsamının daraltılması; gerekçe
-  [docs/DECISIONS.md](docs/DECISIONS.md) K10. Terminal ve sunucu yüzeyi
-  İngilizce kalıyor.
-- Yorum *ne yaptığını* değil **neden öyle yaptığını** anlatır. Kodun kendisi ne
-  yaptığını zaten söylüyor.
-- Bağımlılık eklemekte cimri ol. Ajanın tek statik ikili olarak NAS'a
-  kurulabilmesi gerekiyor; bir bağımlılık eklemeden önce standart kütüphaneyle
-  çözülüp çözülmediğine bak. Örnek: cron ayrıştırıcısı ve takvim aritmetiği
-  chrono yerine elle yazıldı (~200 satır), çünkü tek ihtiyaç "bir sonraki eşleşen
-  dakika"ydı. axum + tokio bilinçli bir istisna (bkz. DECISIONS K3).
-- Yeni bağımlılıklar `[workspace.dependencies]` içinde sürümlenir, crate'ler
-  `foo.workspace = true` ile alır.
-- Commit mesajları Türkçe, gövde **neden** yapıldığını anlatır. Örnek için
-  `git log` bak.
-- **Kullanıcının göreceği bir değişiklik yaptıysan changelog girdisi yaz**:
-  `crates/changelog/changelog.json`, ilgili bileşenin `unreleased` listesine,
-  beş dilde. Commit mesajı yerine geçmez — commit koda ne yaptığını, changelog
-  kullanıcıya ne değiştiğini anlatır (K11). `CHANGELOG.md` üretiliyor, elle
-  düzenleme; bayat kalırsa CI kırılıyor. Kurallar
+- **Everything here is English: code, comments, user-visible strings,
+  `--help` text, error messages, and all documentation — including this file
+  and the `docs/` directory.** There is no i18n layer for the CLI, the agent
+  or the hub and none is planned — a translated command is wrong information
+  (K1). Commit messages are English going forward; the existing history is
+  Turkish and is not being rewritten.
+- **One exception, and only in two places: the desktop GUI and the changelog
+  texts are in five locales** (`en tr it fr de`, the same set as the website).
+  This is not a repeal of K1 but a narrowing of its scope; rationale in
+  [docs/DECISIONS.md](docs/DECISIONS.md) K10. The terminal and server surface
+  stays English.
+- A comment explains not *what* it does but **why it does it that way**. The
+  code already says what it does.
+- Be stingy about adding dependencies. The agent has to be installable on a
+  NAS as a single static binary; before adding a dependency, check whether the
+  standard library solves it. Example: the cron parser and the calendar
+  arithmetic were written by hand instead of chrono (~200 lines), because the
+  only need was "the next matching minute". axum + tokio is a deliberate
+  exception (see DECISIONS K3).
+- New dependencies are versioned in `[workspace.dependencies]`; crates take
+  them with `foo.workspace = true`.
+- Commit message bodies explain **why** something was done. See `git log` for
+  examples; the older entries there are Turkish.
+- **If you made a change a user will see, write a changelog entry**: in
+  `crates/changelog/changelog.json`, in the relevant component's `unreleased`
+  list, in five locales. It does not replace the commit message — the commit
+  tells the code what was done, the changelog tells the user what changed
+  (K11). `CHANGELOG.md` is generated, do not edit it by hand; CI breaks if it
+  goes stale. The rules are in
   [crates/changelog/README.md](crates/changelog/README.md).
-- `cargo clippy` uyarısı bırakma; CI `-D warnings` ile çalışıyor.
-- **İki ayrı liste var ve biri geçici.** Kökteki `TODO.md` gerçek liste, depoda.
-  `tasks/` (`todo.md`, `lessons.md`) gitignore'da — oturum çalışma notları,
-  otorite değil. Bir işi "kapandı" diye işaretlerken `TODO.md`'ye yaz.
+- Do not leave a `cargo clippy` warning behind; CI runs with `-D warnings`.
+- **There are two separate lists and one of them is temporary.** `TODO.md` at
+  the root is the real list, in the repo. `tasks/` (`todo.md`, `lessons.md`)
+  is gitignored — session working notes, not authority. When you mark a task
+  "closed", write it in `TODO.md`.
 
-## Depoda duran Claude araçları
+## Claude tooling that lives in the repo
 
-Bu dosyadaki kuralların bir kısmı artık `.claude/` altında kendini uyguluyor
-(gerekçe: `9f09332`). Hepsi depoda, klonla birlikte geliyor.
+Some of the rules in this file now enforce themselves under `.claude/`
+(rationale: `9f09332`). All of it is in the repo and comes with a clone.
 
-| Araç | Ne zaman |
-|------|----------|
-| `invariant-guard` (ajan) | Yukarıdaki değişmezlere dokunan her diff: scan-core, store, diff, dupes, treemap |
-| `downstream-api-guard` (ajan) | Genel API değişti ve `main`'e push edilecek — desktop ile hub'ı buradaki CI görmüyor |
-| `code-reviewer` (ajan) | Sıradan gözden geçirme, commit'ten önce |
-| `test-writer` (ajan) | Yeni test; depodaki üslubu okuyup eşliyor |
-| `changelog-entry` (beceri) | Kullanıcıya görünen değişiklik: beş dilde girdi, sonra `CHANGELOG.md` üretimi |
-| `release` (beceri) | Sürüm kesme; tam sıra [docs/RELEASING.md](docs/RELEASING.md) |
-| `preflight` (beceri) | Push öncesi CI'ın koştuğu her şey, ucuz olan önce |
-| `web-design-guidelines` (beceri) | UI gözden geçirme; dışarıdan vendor edilmiş, aşağı bak |
+| Tool | When |
+|------|------|
+| `invariant-guard` (agent) | Any diff that touches the invariants above: scan-core, store, diff, dupes, treemap |
+| `downstream-api-guard` (agent) | The public API changed and it is going to be pushed to `main` — CI here does not see desktop or hub |
+| `code-reviewer` (agent) | Ordinary review, before a commit |
+| `test-writer` (agent) | A new test; it reads the repo's style and matches it |
+| `changelog-entry` (skill) | A user-visible change: an entry in five locales, then generating `CHANGELOG.md` |
+| `release` (skill) | Cutting a release; the full sequence is [docs/RELEASING.md](docs/RELEASING.md) |
+| `preflight` (skill) | Everything CI runs, before a push, cheapest first |
 
-**`preflight`'ı model kendi çağıramaz** (`disable-model-invocation`), kullanıcı
-`/preflight` yazar — o yüzden `main`'e push etmeden önce çalıştırılmasını öner.
+**Skills can trigger themselves** (`disable-model-invocation` was removed from
+all of them on 16 September 2026): `preflight` before a push and `release`
+while a version is being cut run on their own, without waiting for the user to
+type `/preflight`. The irreversible steps of `release` (commit, tag, push) are
+gated on approval in the skill's body.
 
-**Dört depoya birden takılan araçlar ayrı duruyor.** `spacetrace-tools`
-plugin'i (`spacetrace-tooling/`, bu deponun yanında, kendi private deposu)
-`doc-drift-auditor`, `core-pin-guard`, bir `code-reviewer` ve bir `test-writer`
-veriyor; hepsi `spacetrace-tools:` ile adlandırıldığı için buradaki aynı adlı
-ajanlarla çakışmıyor ve **buradakiler daha keskin olduğu için yerinde kalıyor**.
-Plugin'in `CHANGELOG.md` hook'u bu depoda bilerek susuyor — yukarıdaki yerel
-hook zaten var ve gerekçeyi kendi sözleriyle anlatıyor.
+**Tools that plug into all five repos live separately.** The
+`spacetrace-tools` plugin (`spacetrace-tooling`, next to this repo, its own
+private repository) provides all of them under the `spacetrace-tools:` prefix.
+The ones relevant here: `doc-drift-auditor` (what a diff turned false in the
+docs) and `workspace-audit` (the same thing across all five repos).
+`code-reviewer` and `test-writer` have plugin versions too, but **the agents
+with the same names here are sharper and stay in place** — the prefix prevents
+the collision.
 
-**`web-design-guidelines` bizim yazdığımız bir beceri değil.**
-`vercel-labs/agent-skills`'ten vendor edilmiş ve kökteki `skills-lock.json`
-kaynağını, yolunu ve içerik özetini tutuyor. Elle düzenleme — tazelemek
-kaynağı yeniden çekip lock'u güncellemek demek. Aynı beceri site deposunda da
-duruyor (`.agents/skills/` altında), oradaki kopya bağımsız.
+**The full list is not kept here**, it is in the plugin's README; keeping an
+inventory in four places produces exactly the drift this file exists to hunt.
+The plugin is a private repository, so a clone cannot see it — someone who
+cannot install it cannot use the list either, nothing is lost.
+The plugin's `CHANGELOG.md` hook is deliberately silent in this repo — the
+local hook above is already there and explains the rationale in its own words.
 
-İki hook `.claude/settings.json` ile devrede: `CHANGELOG.md`'ye Edit/Write
-bloklanıyor (üretilen dosya; Bash yönlendirmesi bilerek serbest, sürüm
-prosedürü onu kullanıyor), ve oturum sonunda `crates/*/src` değişmişken
-`changelog.json` değişmemişse oturum başına bir kez soruluyor. Üçüncüsü,
-`.claude/hooks/rustfmt-on-edit.sh`, depoda duruyor ama yalnızca izlenmeyen
-`settings.local.json`'dan bağlanıyor — bir klonun rustfmt ve jq kurmuş olmasını
-şart koşmasın diye. Kendi makinende istiyorsan bağlantıyı sen ekle.
+**The vendored `web-design-guidelines` skill is not here**, it is in the
+website repo — `4d90a05` took it out together with the site, because it has no
+business in a repo that has no website. That commit left behind the symlink
+under `.claude/skills/` and `skills-lock.json` at the root; with no symlink
+target it was **broken and the skill never loaded at all**. Both were deleted
+on 16 September 2026.
 
-## Crate'ler
+Two hooks are active via `.claude/settings.json`: Edit/Write to `CHANGELOG.md`
+is blocked (it is a generated file; Bash redirection is deliberately allowed,
+the release procedure uses it), and at the end of a session, if `crates/*/src`
+changed but `changelog.json` did not, you are asked once per session.
 
-| Crate | Sorumluluk |
-|-------|------------|
-| `scan-core` | Tarama, ağaç modeli, platforma özel metadata. Hiçbir şeye bağlı değil. |
-| `store` | SQLite anlık görüntü deposu, ncdu ve CSV dışa aktarımı, hash önbelleği |
-| `diff` | İki görüntüyü karşılaştırma, "suçlu klasör" tespiti |
-| `dupes` | Aynı içerikli dosyalar: boyut → ön-hash → blake3, önbellek trait'i |
-| `cli` | `spacetrace` ikilisi (uzak kaynaklar dâhil) |
-| `agent` | `spacetrace-agent` ikilisi: zamanlayıcı + HTTP servisi |
-| `treemap` | Squarified yerleşim + LOD + hiyerarşik hit-test (masaüstü kullanır) |
-| `changelog` | Üç bileşenin changelog'u, beş dilde; üreteç aynı crate'in ikilisi |
-| `buildinfo` | İkiliye commit, derleme tarihi ve kanal damgası (`build.rs`) |
+**`.rs` formatting now comes from the plugin**, not from this repo.
+`.claude/hooks/rustfmt-on-edit.sh` is still there but nothing references it:
+the plugin's hook does the same job in every repo and backs off silently if
+`rustfmt` is not installed — the reason for keeping the local copy opt-in (not
+requiring a clone to have rustfmt installed) is already met on the plugin
+side. The wiring in `settings.local.json` was removed on 16 September 2026,
+because both of them ran in sequence on every edit.
 
-Bağımlılık yönü tek yönlü. Ajan `scan-core`, `store` ve `buildinfo`'ya
-bağlanır; `cli`'ye ve `diff`'e bağlanmaz.
+## Crates
 
-**`store`'un `dupes` özelliği varsayılan kapalı** (`dupes = ["dep:spacetrace-dupes"]`).
-Kopya bulucunun hash önbelleği BLAKE3'ü içeri çekiyor ve ajan da bu crate'ten
-derleniyor — tek statik ikili kalması gereken o. CLI açıyor, başka kimse
-ihtiyaç duymuyor. `store`'a yeni bir ağır bağımlılık girerken aynı soruyu sor.
+| Crate | Responsibility |
+|-------|----------------|
+| `scan-core` | Scanning, the tree model, platform-specific metadata. Depends on nothing. |
+| `store` | SQLite snapshot store, ncdu and CSV export, hash cache |
+| `diff` | Comparing two snapshots, spotting the "culprit folder" |
+| `dupes` | Files with identical content: size → pre-hash → blake3, cache trait |
+| `cli` | The `spacetrace` binary (including remote sources) |
+| `agent` | The `spacetrace-agent` binary: scheduler + HTTP service |
+| `treemap` | Squarified layout + LOD + hierarchical hit-testing (used by the desktop) |
+| `changelog` | The changelog of the three components, in five locales; the generator is the same crate's binary |
+| `buildinfo` | Stamps the binary with the commit, build date and channel (`build.rs`) |
 
-## Depolar
+The dependency direction is one-way. The agent depends on `scan-core`, `store`
+and `buildinfo`; it does not depend on `cli` or `diff`.
 
-Dört fazın hepsi çalışıyor. K2 gereği kod üç depoda:
+**`store`'s `dupes` feature is off by default** (`dupes = ["dep:spacetrace-dupes"]`).
+The duplicate finder's hash cache pulls in BLAKE3, and the agent is built from
+this crate too — it is the one that has to stay a single static binary. The
+CLI turns it on, nobody else needs it. Ask the same question when a new heavy
+dependency enters `store`.
 
-| Depo | İçerik | Görünürlük |
+## Repositories
+
+All four phases are working. Per K2 the code lives in three repositories:
+
+| Repository | Contents | Visibility |
 |------|--------|------------|
-| bu depo | yukarıdaki dokuz crate'in hepsi | public, Apache-2.0 |
-| [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) | Tauri v2 + React masaüstü | private, ticari |
-| [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) | Filo panosu, trend, uyarılar | private, ticari |
+| this repo | all nine crates above | public, Apache-2.0 |
+| [spacetrace-desktop](https://github.com/unalcakir28/spacetrace-desktop) | Tauri v2 + React desktop | private, commercial |
+| [spacetrace-hub](https://github.com/unalcakir28/spacetrace-hub) | Fleet dashboard, trends, alerts | private, commercial |
 
-Diğer ikisi bu depoyu **git bağımlılığı** olarak kullanıyor, path değil. Yani
-buradaki genel API'yi bozan bir değişiklik onları sessizce kırar; `main`'e
-push etmeden önce bunu düşün.
+The other two use this repo as a **git dependency**, not a path one. So a
+change that breaks the public API here breaks them silently; think about that
+before you push to `main`.
 
-## Sürüm ve site
+## Releases and the website
 
-Tam anlatım [docs/RELEASING.md](docs/RELEASING.md); kolay bozulan kısımlar:
+The full account is [docs/RELEASING.md](docs/RELEASING.md); the parts that
+break easily:
 
-- **Üç bileşenin indirilebilir dosyaları da bu deponun release'lerinde.**
-  Masaüstü ve hub kendi CI'larında derleyip buraya yayınlıyor (`RELEASE_TOKEN`
-  sırrı ile — bir depodaki `GITHUB_TOKEN` başka depoya yazamıyor, depo public
-  olsa da). Etiketler: `continuous` / `v*` (CLI), `desktop-continuous` /
-  `desktop-v*`, `hub-continuous` / `hub-v*`.
-- **Etiket ve varlık adları sabit sözleşme, ve karşı taraf artık ayrı bir
-  depoda.** Site deposundaki `src/data/releases.ts` bunlara doğrudan bağlanıyor
-  ve `install.sh` dosya adını verilen sürümden kuruyor. Yeniden adlandırmak
-  indirme sayfasını sessizce kırar — ve iki ayrı depo olduğu için tek bir CI
-  adımı bunu yakalamıyor, aynı gün iki commit gerekiyor.
-- **Konteyner imajları önceden derlenmiş musl ikililerinden kuruluyor**
-  (`.github/docker/Dockerfile.release`), kökteki `Dockerfile`'dan değil. QEMU
-  altında Rust derlemek arm64 imajını dakikalar yerine on dakikalar sürdürüyor.
-  Kökteki Dockerfile duruyor çünkü `docker build .` bir klonda çalışsın diye var.
-- **musl hedefleri `cross` ile derleniyor ve `Cross.toml` şart.** Sürüm damgası
-  (`SPACETRACE_GIT_SHA`, `SPACETRACE_BUILD_DATE`, `SPACETRACE_CHANNEL`) konteynere
-  ancak oradaki passthrough listesiyle giriyor; liste eksikse ikili sessizce
-  **damgasız** derleniyor ve `--version` bunu söyleyemez.
-- Üç kurulum script'i var: `install.sh` (CLI), `install-desktop.sh` ve
-  `install-desktop.ps1`. Varlık adlarını üçü de aynı sözleşmeden okuyor.
-- **Site bu depoda değil.**
+- **The downloadable files of all three components are in this repo's
+  releases too.** The desktop and the hub build in their own CI and publish
+  here (with the `RELEASE_TOKEN` secret — a `GITHUB_TOKEN` in one repo cannot
+  write to another, even when the repo is public). Tags: `continuous` / `v*`
+  (CLI), `desktop-continuous` / `desktop-v*`, `hub-continuous` / `hub-v*`.
+- **Tag and asset names are a fixed contract, and the other side is now in a
+  separate repo.** `src/data/releases.ts` in the website repo binds to them
+  directly, and `install.sh` builds the file name from the version it is
+  given. Renaming them breaks the download page silently — and because they
+  are two separate repos, no single CI step catches it; it takes two commits
+  on the same day.
+- **Container images are built from pre-compiled musl binaries**
+  (`.github/docker/Dockerfile.release`), not from the `Dockerfile` at the
+  root. Compiling Rust under QEMU makes the arm64 image take tens of minutes
+  instead of minutes. The root Dockerfile is still there so that
+  `docker build .` works in a clone.
+- **musl targets are built with `cross` and `Cross.toml` is mandatory.** The
+  version stamp (`SPACETRACE_GIT_SHA`, `SPACETRACE_BUILD_DATE`,
+  `SPACETRACE_CHANNEL`) only reaches the container through the passthrough
+  list there; if the list is incomplete the binary is built silently
+  **without a stamp** and `--version` cannot say so.
+- There are three install scripts: `install.sh` (CLI), `install-desktop.sh`
+  and `install-desktop.ps1`. All three read asset names from the same
+  contract.
+- **The website is not in this repo.**
   [unalcakir28/spacetrace-website](https://github.com/unalcakir28/spacetrace-website)
-  — Astro, beş dil, `spacetrace.teknobakkall.com`. Nasıl çalıştığı o deponun
-  `CLAUDE.md`'sinde; burada bilmen gereken tek şey yukarıdaki indirme
-  sözleşmesi. Ayrılma gerekçesi docs/RELEASING.md → Site.
-- Sürüm iş akışı belge değişikliklerinde çalışmıyor (`paths-ignore`).
+  — Astro, five locales, `spacetrace.teknobakkall.com`. How it works is in
+  that repo's `CLAUDE.md`; the only thing you need to know here is the
+  download contract above. The rationale for the split is docs/RELEASING.md →
+  Site.
+- The release workflow does not run on documentation changes
+  (`paths-ignore`).
 
-## Sıradaki iş
+## What is next
 
-Kalan işler gerçek donanım veya gerçek zaman gerektiriyor (tam liste TODO.md):
-gerçek sunuculara ajan kurulumu ve bir haftalık veri, Windows MFT hızlı yolu,
-macOS Full Disk Access onboarding, WebKitGTK'da treemap performansı.
+The remaining work needs real hardware or real time (full list in TODO.md):
+installing the agent on real servers and a week of data, the Windows MFT fast
+path, macOS Full Disk Access onboarding, treemap performance on WebKitGTK.
 
-Fazlar arası kararlar kapandı ([docs/DECISIONS.md](docs/DECISIONS.md)); yeniden
-açmadan önce oradaki gerekçeyi oku.
+The decisions between phases are closed
+([docs/DECISIONS.md](docs/DECISIONS.md)); read the rationale there before
+reopening one.
 
-Kodda dikkat edilecekler:
+Things to watch out for in the code:
 
-- Snapshot telde **ham SQLite**. `Store::export_snapshot` ATTACH ile tek taramayı
-  ayrı dosyaya kopyalar; `import_snapshot` kimliği yeniden atar ama host/root/
-  `started_at` üçlüsünü korur — yinelenme kontrolü bu üçlüye dayanıyor.
-- **Dışarıdan gelen bir ağaç `Tree::from_nested`'den geçer.** ncdu içe
-  aktarımı (ve sonra gelecek her format) kendi arena düzenini kurmaz: o yol
-  yürüyüşün `TreeBuilder` + `aggregate`'ini çağırır, yoksa değişmez 2'nin ve
-  toplamanın ikinci bir uygulaması doğar. **Dizinin kendi `asize`'ı atılır**
-  (değişmez 1) — gerçek ncdu onu yazıyor, bizim dışa aktarıcımız yazmıyor,
-  yani kendi çıktımızla gidiş-dönüş testi bu hatayı göremiyor.
-  **Ve testi store'dan geçir.** Kökün ebeveyni `NO_PARENT` olmak zorunda;
-  `0` yazmak bellekte kusursuz görünen ama `save` → `load` turunu
-  `RootHasParent` ile düşen bir ağaç üretiyor ve `remove_subtree`'yi sonsuz
-  döngüye sokuyor. İki ağacı bellekte karşılaştıran bir test bunu göremez —
-  11 Eylül 2026'da göremedi ve kırık `import` yayınlandı.
-- **`store::load` bir güven sınırı.** Uzaktan indirilen snapshot da bu yoldan
-  geçiyor, bu yüzden `TreeAssembler::finish` arena değişmezlerini doğruluyor
-  (`Tree::check`).
-  Doğrulamayı atlayan bir yol ekleme: bozuk `children_start` indeks panic'i,
-  geriye dönük bir çocuk işaretçisi sonsuz döngü demek.
-- **macOS'ta listeleme iki yoldan geçiyor, ve ikisi aynı rakamı vermek
-  zorunda.** `bulk.rs` `getattrlistbulk` ile adları ve metadata'yı tek çağrıda
-  alıyor (ölçüldü: uçtan uca 2,3–2,4×); `read_dir` + `lstat` yolu hem
-  fallback hem mount içeren dizinlerin tek yolu (D1'in girdi başına koruması
-  toplu çağrıda işlemiyor). **İkinci bir metadata kaynağı sessizce
-  ayrışırsa** yıllar sonra "snapshot bozuk" diye çıkıyor —
-  `assert_same_answer_as_lstat` iki yolu alan alan karşılaştırıyor, yeni bir
-  alan eklerken oraya da bak. Dizin `nlink`'i özellikle: `ATTR_DIR_LINKCOUNT`
-  APFS'te 1, `st_nlink` 2+altdizin, ve eşitlemek için dizin başına bir
-  `lstat` ödeniyor (ölçüldü: maliyeti yok).
-- **Yapı doğrulaması değer doğrulaması değil, ve ikincisi `content_hash`.**
-  Bir `size` alanındaki bit dönmesi kusursuz bir ağaç bırakır ve yanlış rakam
-  raporlar — `Tree::check` bunu göremez. Şema v3'ten beri her tarama
-  kendi mantıksal içeriğinin SHA-256'sını taşıyor
-  (`crates/store/src/digest.rs`); `import_snapshot` gelen satırlardan yeniden
-  hesaplayıp tutmazsa **hiçbir şeyi** içe aktarmıyor, `export_snapshot`
-  bozuk olduğunu bildiği veriyi göndermiyor, `spacetrace verify` istendiğinde
-  bakıyor. `NULL` = "özet yok" (v3 öncesi snapshot), "bozuk" değil.
-  **Kimlik doğrulaması değil:** gövdeyi değiştirebilen özeti de yeniden
-  hesaplar. Tehdit modeli bozulma, saldırgan değil.
-- **`scans` tablosuna eklenen her sütun hem `create_tables`'ın hem
-  `migrate_from`'un sonuna, aynı sırayla.** `export_snapshot`
-  `INSERT INTO snap.scans SELECT * FROM main.scans` yapıyor ve `ALTER TABLE`
-  yalnızca sona ekleyebiliyor; sıralar ayrışırsa kopya her değeri yanlış
-  sütuna yazar ve hiçbir şey söylemez. Testi
-  `crates/store/tests/integrity.rs` içinde.
-- **Yol kurmak inerken yapılır, yukarı yürüyerek değil (D6).** `rel_path` tek
-  bir girdi için doğru, her girdi için yanlış: maliyeti ağacın büyüklüğü değil
-  **derinliklerin toplamı**, ve derinliği bu crate belirlemiyor — başka
-  makineden gelen bir snapshot istediği kadar derin olabilir, yani üstünde
-  döngü kurmak aracın seçmediği girdide karesel. Çok girdi için
-  `Tree::for_each_path`: inmek tampona parça ekliyor, çıkmak kesiyor, düğüm
-  başına tahsis yok. Ölçüldü: 412.983 girdide 61 ms → 4,5 ms; CSV dışa
-  aktarımı 449 → 400 ms, yol kurmayan ncdu dışa aktarımı 182 → 183 (kontrol).
-  Özyineleme değil yığın kullanıyor, `from_nested` ile aynı sebeple —
-  derinlik dosyadan geliyor; testi 50.000 seviye iniyor.
-- **CSV satır sırası katı DFS**: klasör, hemen ardından içeriği. Eskiden
-  kardeşler bir aradaydı ve içerikleri sayfalarca aşağıdaydı; D6 ile değişti
-  ve changelog'da yazılı.
-- Bir kök aynı anda yalnızca bir kez taranır (`Runner::try_claim`, HTTP'de 409).
-- Zamanlayıcı UTC + sabit offset ile çalışır; saat dilimi veritabanı yok.
-- Kapasite **boş/toplam** olarak raporlanır, "% dolu" olarak değil (K6).
-  Modül dışına `capacity_of` adıyla açılıyor (`capacity::of` değil).
-- **`ScanProgress` yalnızca sayaç değil, iptal anahtarı da.** Yürüyüş dizin
-  başına bir kez kontrol ediyor — girdi başına kontrol en sıcak döngüye paylaşımlı
-  bir atomik okuma koyardı ve okunmuş bir dizini bırakmak hiçbir şey kazandırmaz.
+- A snapshot on the wire is **raw SQLite**. `Store::export_snapshot` copies a
+  single scan into a separate file with ATTACH; `import_snapshot` reassigns
+  the id but preserves the host/root/`started_at` triple — the duplicate check
+  relies on that triple.
+- **A tree that comes from outside goes through `Tree::from_nested`.** The
+  ncdu import (and every format that comes after it) does not build its own
+  arena layout: that path calls the walk's `TreeBuilder` + `aggregate`,
+  otherwise a second implementation of invariant 2 and of aggregation is born.
+  **A directory's own `asize` is discarded** (invariant 1) — real ncdu writes
+  it, our exporter does not, so a round-trip test against our own output
+  cannot see this bug.
+  **And run the test through the store.** The root's parent must be
+  `NO_PARENT`; writing `0` produces a tree that looks flawless in memory but
+  fails the `save` → `load` round trip with `RootHasParent` and sends
+  `remove_subtree` into an infinite loop. A test that compares two trees in
+  memory cannot see this — it did not see it on 11 September 2026 and a broken
+  `import` shipped.
+- **`store::load` is a trust boundary.** A snapshot downloaded from a remote
+  goes through this path too, which is why `TreeAssembler::finish` validates
+  the arena invariants (`Tree::check`).
+  Do not add a path that skips validation: a corrupt `children_start` means an
+  index panic, a backward child pointer means an infinite loop.
+- **Listing on macOS goes through two paths, and both have to give the same
+  number.** `bulk.rs` gets the names and the metadata in a single call with
+  `getattrlistbulk` (measured: 2,3–2,4× end to end); the `read_dir` + `lstat`
+  path is both the fallback and the only path for directories that contain
+  mounts (D1's per-entry protection does not work in the bulk call). **If a
+  second metadata source silently diverges** it surfaces years later as "the
+  snapshot is corrupt" — `assert_same_answer_as_lstat` compares the two paths
+  field by field, so look there too when you add a new field. Directory
+  `nlink` especially: `ATTR_DIR_LINKCOUNT` is 1 on APFS, `st_nlink` is
+  2+subdirectories, and one `lstat` per directory is paid to reconcile them
+  (measured: it costs nothing).
+- **Structural validation is not value validation, and the second one is
+  `content_hash`.** A bit flip in a `size` field leaves a flawless tree and
+  reports the wrong number — `Tree::check` cannot see it. Since schema v3
+  every scan carries the SHA-256 of its own logical content
+  (`crates/store/src/digest.rs`); if `import_snapshot` recomputes it from the
+  incoming rows and it does not hold, it imports **nothing**,
+  `export_snapshot` does not send data it knows to be corrupt, and
+  `spacetrace verify` checks it when asked. `NULL` = "no digest" (a pre-v3
+  snapshot), not "corrupt".
+  **It is not authentication:** whoever can change the body can recompute the
+  digest too. The threat model is corruption, not an attacker.
+- **Every column added to the `scans` table goes at the end of both
+  `create_tables` and `migrate_from`, in the same order.** `export_snapshot`
+  does `INSERT INTO snap.scans SELECT * FROM main.scans` and `ALTER TABLE`
+  can only append at the end; if the orders diverge the copy writes every
+  value into the wrong column and says nothing. The test is in
+  `crates/store/tests/integrity.rs`.
+- **Paths are built on the way down, not by walking up (D6).** `rel_path` is
+  right for a single entry and wrong for every entry: its cost is not the size
+  of the tree but **the sum of the depths**, and this crate does not decide
+  the depth — a snapshot from another machine can be as deep as it likes, so
+  looping over it is quadratic on an input the tool did not choose. For many
+  entries, `Tree::for_each_path`: descending appends a segment to a buffer,
+  ascending truncates it, no allocation per node. Measured: on 412.983 entries
+  61 ms → 4,5 ms; CSV export 449 → 400 ms, and the ncdu export, which builds
+  no paths, 182 → 183 (the control). It uses a stack rather than recursion,
+  for the same reason as `from_nested` — the depth comes from the file; its
+  test descends 50.000 levels.
+- **CSV row order is strict DFS**: a folder, immediately followed by its
+  contents. It used to keep the siblings together with their contents pages
+  further down; that changed with D6 and it is written in the changelog.
+- A root is scanned only once at a time (`Runner::try_claim`, 409 over HTTP).
+- The scheduler works with UTC + a fixed offset; there is no time zone
+  database.
+- Capacity is reported as **free/total**, not as "% full" (K6). It is exposed
+  outside the module as `capacity_of` (not `capacity::of`).
+- **`ScanProgress` is not just counters, it is the cancellation switch too.**
+  The walk checks it once per directory — checking per entry would put a
+  shared atomic read in the hottest loop, and abandoning a directory that has
+  already been read gains nothing.
 
-## Bilinen eksikler
+## Known gaps
 
-Bunlara denk gelirsen bug değil, bilinen borç (tam liste TODO.md'de):
+If you run into these, they are not bugs but known debt (full list in
+TODO.md):
 
-- Windows'ta `alloc` ve hardlink dedupe **yazıldı, doğrulaması yalnızca CI'da**
-  (9 Eylül 2026). Girdi başına **bir handle** açılıyor (`std::fs::OpenOptions`,
-  `FILE_READ_ATTRIBUTES` + `BACKUP_SEMANTICS` + `OPEN_REPARSE_POINT`) ve o
-  handle üstünden `FILE_STANDARD_INFO` → `AllocationSize`,
-  `BY_HANDLE_FILE_INFORMATION` → nlink + file id + volume okunuyor.
-  **`GetCompressedFileSizeW` kullanmayı denemeyin** — sıkıştırılmamış ve sparse
-  olmayan dosyalarda mantıksal boyutu döndürüyor; CI 100.001 baytlık dosyaya
-  100.001 dedi. Maliyet: girdi başına fazladan çağrı, ölçülmüş mertebe +36%;
-  kaldıran şey B4 (`NtQueryDirectoryFileEx`). `FileIdentity::Skipped` ikinci
-  sorguyu atlıyor, handle'ı değil.
-- **btrfs/ZFS'te** reflink ve sıkıştırma yüzünden ağaç yürüyüşü gerçek
-  kullanımı yanlış raporluyor. **APFS clone'ları tekilleştiriliyor** (A3,
-  9 Eylül 2026, `fcntl(F_LOG2PHYS_EXT)`, varsayılan açık) — bu satır 11 Eylül'e
-  kadar tersini söylüyordu ve yukarıdaki değişmez 1 ile çelişiyordu; ikisi
-  aynı dosyada.
-- Tarama tüm ağacı bellekte tutuyor. Ağacın kendisi **96 bayt/girdi**,
-  100k–10M arası doğrusal ve iki platformda aynı (10M = 916 MiB).
+- `alloc` and hardlink dedupe on Windows are **written, but verified only in
+  CI** (9 September 2026). **One handle** is opened per entry
+  (`std::fs::OpenOptions`, `FILE_READ_ATTRIBUTES` + `BACKUP_SEMANTICS` +
+  `OPEN_REPARSE_POINT`) and over that handle `FILE_STANDARD_INFO` →
+  `AllocationSize` and `BY_HANDLE_FILE_INFORMATION` → nlink + file id + volume
+  are read. **Do not try to use `GetCompressedFileSizeW`** — on files that are
+  neither compressed nor sparse it returns the logical size; CI said 100.001
+  for a 100.001-byte file. The cost: an extra call per entry, measured on the
+  order of +36%; what removes it is B4 (`NtQueryDirectoryFileEx`).
+  `FileIdentity::Skipped` skips the second query, not the handle.
+- **On btrfs/ZFS** the tree walk reports real usage wrongly because of
+  reflinks and compression. **APFS clones are deduplicated** (A3,
+  9 September 2026, `fcntl(F_LOG2PHYS_EXT)`, on by default) — this line said
+  the opposite until 11 September and contradicted invariant 1 above; both are
+  in the same file.
+- The scan holds the whole tree in memory. The tree itself is **96
+  bytes/entry**, linear between 100k and 10M and the same on both platforms
+  (10M = 916 MiB).
 
-  **Çift depolama 14 Eylül 2026'da kalktı (B1-K)** ve ölçüm o gün yeniden
-  yapıldı: `/Applications` tepe 91,5 → 57,6 MB, ipucu verilince 221 → **125
-  bayt/girdi**; Linux'ta "ağaç olmayan" kısım yarıya indi. Ölçüm aracı depoda:
-  `cargo run --release -p spacetrace-scan-core --example memprobe -- scan <kök>`
-  ve karşılaştırma için `scripts/bench-walk.sh`.
+  **Double storage went away on 14 September 2026 (B1-K)** and the measurement
+  was redone that day: `/Applications` peak 91,5 → 57,6 MB, and with the hint
+  given 221 → **125 bytes/entry**; on Linux the "non-tree" part halved. The
+  measurement tool is in the repo:
+  `cargo run --release -p spacetrace-scan-core --example memprobe -- scan <root>`
+  and `scripts/bench-walk.sh` for comparison.
 
-  **Kalan fark platforma bağlı ve macOS'ta hâlâ birikiyor.** Linux'ta tepe
-  ağacın ~1,5 katı ve tekrarlı taramalarda neredeyse düz; macOS'ta libmalloc
-  parçalanmış span'ları geri vermiyor, o yüzden tepe ayırma trafiğiyle
-  büyüyor — ve trafik korpusa bağlı: `/Applications` 8 taramada +7 MiB,
-  `~/github` (aynı girdi sayısı, üç katı ad baytı) 8 taramada 205 → 445 MiB.
-  Sızıntı değil; `malloc_zone_pressure_relief` hiçbir şey değiştirmiyor.
-  Ajan etkilenmiyor (Linux). Masaüstünde "Yeniden tara" etkileniyor, ama
-  artık `expected_entries` ipucunu geçiyor. Tam ölçüm TODO.md D4.
-- Ajanda yerleşik TLS yok; ters vekil öneriliyor. **Hız sınırlama var**
-  (14 Eylül 2026, `ratelimit.rs`): istemci adresi başına token bucket,
-  auth'tan **önce** — `/health` tokensiz ve yanlış bir token da cevaba mal
-  oluyor, yani sınırlanması gereken trafik tam olarak tokenin dışında kalanı.
-  Ters vekil arkasında her istek vekilin adresinden geldiği için tek ortak
-  sınıra dönüşüyor; `X-Forwarded-For` bilinçli olarak okunmuyor.
+  **The remaining difference is platform-dependent and still accumulates on
+  macOS.** On Linux the peak is ~1,5× the tree and almost flat across repeated
+  scans; on macOS libmalloc does not give fragmented spans back, so the peak
+  grows with allocation traffic — and the traffic depends on the corpus:
+  `/Applications` +7 MiB over 8 scans, `~/github` (the same entry count, three
+  times the name bytes) 205 → 445 MiB over 8 scans. Not a leak;
+  `malloc_zone_pressure_relief` changes nothing. The agent is unaffected
+  (Linux). "Rescan" in the desktop is affected, but it now passes the
+  `expected_entries` hint. The full measurement is TODO.md D4.
+- The agent has no built-in TLS; a reverse proxy is recommended. **Rate
+  limiting exists** (14 September 2026, `ratelimit.rs`): a token bucket per
+  client address, **before** auth — `/health` takes no token and a wrong token
+  costs a response too, so the traffic that needs limiting is exactly what
+  falls outside the token. Behind a reverse proxy every request comes from the
+  proxy's address, so it collapses into a single shared limit;
+  `X-Forwarded-For` is deliberately not read.
 
-## Bu depo dışındaki bağlam
+## Context outside this repo
 
-Proje Cowork'te (claude.ai) başladı; oradaki oturum hafızası Claude Code'a
-aktarılmaz, iki sistem ayrıdır. Aktarılması gereken her şey bu depodaki
-belgelere yazıldı. Eylül 2026 pazar ve teknik araştırmasının özeti
-[docs/RESEARCH.md](docs/RESEARCH.md) içinde.
+The project started in Cowork (claude.ai); the session memory there is not
+carried over into Claude Code, the two systems are separate. Everything that
+needed carrying over was written into the documents in this repo. The summary
+of the September 2026 market and technical research is in
+[docs/RESEARCH.md](docs/RESEARCH.md).

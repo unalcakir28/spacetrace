@@ -14,9 +14,8 @@ wrong against a rule written down somewhere else.
 
 ## The list lives in CLAUDE.md, not here
 
-**Start by reading [CLAUDE.md](../../CLAUDE.md)**, sections *Bozulmaması gereken
-değişmezler* (numbered 0–9) and *Sıradaki iş → Kodda dikkat edilecekler*. It is in
-Turkish; read it anyway, it is the authority.
+**Start by reading [CLAUDE.md](../../CLAUDE.md)**, sections *Invariants that must
+not break* (numbered 0–9) and *Known gaps*. That file is the authority.
 
 Do not work from a copy. That file records at least two occasions where a second
 copy of a rule drifted and started saying the opposite of the truth (the APFS

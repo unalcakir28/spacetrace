@@ -1,292 +1,306 @@
-# Rakip analizi (Eylül 2026)
+# Competitor analysis (September 2026)
 
-9 Eylül 2026'da yapılan rakip araştırmasının ve **kendi makinemizde alınan
-ölçümlerin** kaydı. [RESEARCH.md](RESEARCH.md) Eylül 2026 başındaki pazar
-araştırmasını tutuyor; bu belge onun rakiplere odaklı, ölçümle desteklenmiş
-devamı.
+Record of the competitor research done on 9 September 2026 and of
+**measurements taken on our own machine**. [RESEARCH.md](RESEARCH.md) holds
+the market research from early September 2026; this document is its
+competitor-focused, measurement-backed continuation.
 
-> Rakip sürümleri ve fiyatları hızla değişir. Bir karar bunlardan birine
-> dayanıyorsa kullanmadan önce kaynağı yeniden kontrol et.
+> Competitor versions and prices change fast. If a decision rests on one of
+> these, recheck the source before using it.
 
-## Kanıt etiketleri
+## Evidence tags
 
-Bu belgedeki her iddia şunlardan biriyle işaretli. Karıştırmamak önemli: bir
-satıcının kendi hız iddiası ile ikilisinden okunan bir API adı aynı ağırlıkta
-değil.
+Every claim in this document is tagged with one of the following. Keeping
+them separate matters: a vendor's own speed claim and an API name read from
+its binary do not carry the same weight.
 
-| Etiket | Anlamı |
+| Tag | Meaning |
 |--------|--------|
-| `[ölçüm]` | Bu makinede biz ölçtük, aşağıdaki yöntemle tekrarlanabilir |
-| `[ikili]` | Rakibin ikilisinden/kaynak kodundan okundu |
-| `[satıcı]` | Satıcının kendi ifadesi |
-| `[kullanıcı]` | Üçüncü taraf kullanıcı raporu, kontrollü değil |
-| `[bulunamadı]` | Arandı, kaynak bulunamadı — **tahmin yürütülmedi** |
+| `[measured]` | Measured by us on this machine, reproducible with the method below |
+| `[binary]` | Read from the competitor's binary/source code |
+| `[vendor]` | The vendor's own statement |
+| `[user]` | Third-party user report, not verified |
+| `[not found]` | Searched, no source found — **no guess was made** |
 
 ---
 
-## 1. Kendi ölçümlerimiz
+## 1. Our own measurements
 
-**Ortam.** Mac15,9 (Apple Silicon, 16 çekirdek), 48 GB RAM, macOS 26.5.2, APFS.
-Hedef `/Applications` = 412.233 girdi (33.661 dizin + 378.572 dosya; `find` ile
-birebir doğrulandı). Sıcak dosya sistemi önbelleği, 5 tekrarın en iyisi.
-Soğuk önbellek ölçülmedi (`purge` root gerektiriyor).
+**Environment.** Mac15.9 (Apple Silicon, 16 cores), 48 GB RAM, macOS 26.5.2, APFS.
+Target `/Applications` = 412,233 entries (33,661 directories + 378,572 files;
+verified bit-for-bit with `find`). Warm filesystem cache, best of 5 repeats.
+Cold cache not measured (`purge` requires root).
 
-### 1.1 Yavaşlığın payları
+### 1.1 Shares of the slowdown
 
-Bir disk tarayıcısını yavaşlatan iki mekanizmayı izole etmek için aynı makinede
-dört konfigürasyon ölçüldü `[ölçüm]`:
+To isolate the two mechanisms that slow down a disk scanner, four
+configurations were measured on the same machine `[measured]`:
 
-| Konfigürasyon | Süre |
+| Configuration | Duration |
 |---------------|------|
-| Tek thread + girdi başına fazladan `stat` (Python) | 8.03 s |
-| Tek thread, fazladan syscall yok (Python) | 5.17 s |
-| `du -s` (tek thread, C) | 1.19 s |
+| Single thread + extra `stat` per entry (Python) | 8.03 s |
+| Single thread, no extra syscall (Python) | 5.17 s |
+| `du -s` (single thread, C) | 1.19 s |
 | spacetrace, `RAYON_NUM_THREADS=1` | 5.79 s |
-| **spacetrace, 8 thread** | **1.11 s** |
+| **spacetrace, 8 threads** | **1.11 s** |
 
-Çıkarılan iki pay:
+The two shares extracted:
 
-- **Paralellik: 5.2×** (5.79 s → 1.11 s, aynı ikili, tek değişken thread sayısı)
-- **Girdi başına fazladan `stat`: +36%** (5.17 s → 8.03 s, aynı dil, aynı tek
-  thread)
+- **Parallelism: 5.2×** (5.79 s → 1.11 s, same binary, thread count the only
+  variable)
+- **Extra `stat` per entry: +36%** (5.17 s → 8.03 s, same language, same
+  single thread)
 
-İkisi birlikte **7.2×**. 400k girdide 7 saniye; 4M dosyalı bir diskte 70 saniyeye
-karşı 10 saniye.
+Combined, **7.2×**. 7 seconds on 400k entries; on a disk with 4M files, 10
+seconds against 70.
 
-**Önemli ve sezgiye aykırı sonuç:** spacetrace tek thread'e indirildiğinde
-(5.79 s) Python'dan (5.17 s) **daha yavaş**. Bu iş CPU-bound değil,
-**syscall-bound** — zaman çekirdekte `stat` yapmakla geçiyor. Yani bir disk
-aracının hızı **dil seçiminden değil, paralellikten ve girdi başına syscall
-sayısından** geliyor. "Rust olduğu için hızlı" savunulabilir bir iddia değil;
-"paralel yürüdüğü için hızlı" ölçülmüş bir iddia.
+**An important and counterintuitive result:** when spacetrace is throttled
+down to a single thread (5.79 s) it is **slower** than Python (5.17 s). This
+work is not CPU-bound, it is **syscall-bound** — the time goes into doing
+`stat` in the kernel. So a disk tool's speed comes **not from the choice of
+language, but from parallelism and the number of syscalls per entry**. "Fast
+because it's Rust" is not a defensible claim; "fast because it walks in
+parallel" is a measured one.
 
-**Ve bu çıkarımın doğal sonucu ölçüldü (11 Eylül 2026, B5).** Syscall sayısı
-belirleyiciyse, onu azaltmak en büyük kazançtır. macOS'ta `getattrlistbulk`
-bir dizinin adlarını *ve* metadata'sını tek çağrıda veriyor, yani girdi başına
-`lstat` tamamen kalkıyor:
+**And the natural consequence of that inference was measured (11 September
+2026, B5).** If the syscall count is decisive, cutting it is the biggest win.
+On macOS `getattrlistbulk` returns a directory's names *and* metadata in a
+single call, which removes per-entry `lstat` entirely:
 
-| Ağaç | `readdir` + girdi başına `lstat` | `getattrlistbulk` | Kazanç |
+| Tree | `readdir` + `lstat` per entry | `getattrlistbulk` | Gain |
 |------|--------------------------------|-------------------|--------|
-| `~/github` (297.695 girdi) | 1293 ms | 556 ms | **2,33×** |
-| `/Applications` (412k girdi) | 1554 ms | 646 ms | **2,41×** |
+| `~/github` (297,695 entries) | 1293 ms | 556 ms | **2.33×** |
+| `/Applications` (412k entries) | 1554 ms | 646 ms | **2.41×** |
 
-*Yöntem:* iki gerçek ikili, dönüşümlü ve sıra her turda değişerek, 7–9 tur,
-medyan. Dağılımlar hiç örtüşmüyor (`~/github`: yeni maks 598 ms, eski min
-1225 ms). Yalnız listeleme katmanı tek thread'de ölçülürse 3,3×; uçtan uca
-2,3–2,4×, çünkü ağaç kurma ve clone sondası değişmedi. Üç kökte iki ikilinin
-çıktısı birebir aynı.
+*Method:* two real binaries, alternating with the order changed each round,
+7–9 rounds, median. The distributions do not overlap at all (`~/github`: new
+max 598 ms, old min 1225 ms). If only the listing layer is measured
+single-threaded it's 3.3×; end to end it's 2.3–2.4×, because tree building
+and the clone probe did not change. On all three roots the two binaries'
+output is bit-for-bit identical.
 
-**Bu öne geçme değil, eşitlenme.** §2'deki tablo DiskRaptor'ın macOS'ta zaten
-`getattrlistbulk` kullandığını yazıyor; TODO.md'de B5'in yanında duran
-"rakiplerin hiçbiri macOS'ta bunu yapmıyor" notu **yanlıştı** ve düzeltildi.
-Windows (B4) ve Linux (B6) karşılıkları hâlâ açık, ve o makineler elde yok.
+**This is not pulling ahead, it's catching up.** The table in §2 notes that
+DiskRaptor already uses `getattrlistbulk` on macOS; the note next to B5 in
+TODO.md saying "none of the competitors do this on macOS" was **wrong**
+and has been corrected. The Windows (B4) and Linux (B6) counterparts are
+still open, and those machines aren't on hand.
 
-### 1.2 Thread ölçeklenmesi
+### 1.2 Thread scaling
 
-| Thread | Süre | Hızlanma |
+| Threads | Duration | Speedup |
 |--------|------|----------|
 | 1 | 5.79 s | 1.0× |
 | 2 | 2.37 s | 2.4× |
 | 4 | 1.58 s | 3.7× |
 | 8 | **1.11 s** | **5.2×** |
-| 16 | 1.27 s | 4.6× ← **gerileme** |
+| 16 | 1.27 s | 4.6× ← **regression** |
 
-16 thread'te gerileme gerçek: 412k girdide iş parçası başına maliyet küçüldüğü
-için rayon'un iş-çalma koordinasyonu baskın gelmeye başlıyor.
+The regression at 16 threads is real: at 412k entries the per-work-item cost
+shrinks enough that rayon's work-stealing coordination starts to dominate.
 
-**10 Eylül 2026, ikinci ölçüm — ve en iyi thread sayısı diye bir şey yok.**
-Yukarıdaki tablo tek bir korpusta (412k girdi) alınmıştı. İki korpusta
-tekrarlandığında optimumun ağacın büyüklüğüyle *kaydığı* görüldü. M3 Max
-(12 performans + 4 verimlilik çekirdeği), serpiştirilmiş koşu, 9 örneğin
-medyanı `[ölçüm]`:
+**10 September 2026, second measurement — and there's no such thing as the
+best thread count.** The table above was taken on a single corpus (412k
+entries). Repeated on two corpora, the optimum was seen to *shift* with the
+size of the tree. M3 Max (12 performance + 4 efficiency cores), interleaved
+runs, median of 9 samples `[measured]`:
 
-| Korpus | 6 | 8 | 10 | 12 | 16 |
+| Corpus | 6 | 8 | 10 | 12 | 16 |
 |--------|---|---|----|----|----|
-| `/usr`, 50k girdi | **71 ms** | 92 | 106 | 139 | 151 |
-| `/Applications`, 412k girdi | 1541 | 1407 | 1426 | **1233 ms** | 1581 |
+| `/usr`, 50k entries | **71 ms** | 92 | 106 | 139 | 151 |
+| `/Applications`, 412k entries | 1541 | 1407 | 1426 | **1233 ms** | 1581 |
 
-Küçük ağaçta 6, büyük ağaçta 12 kazanıyor; 16 ikisinde de sonuncu.
-**Varsayılan artık `min(çekirdek, 8)`** — hiçbir korpusta en iyi değil (küçükte
-%30, büyükte %14 geride) ama ikisinde de eski varsayılanı yeniyor (%39 ve %11).
-Sabit bir sayının en iyi olması zaten mümkün değildi; `--threads` bilen
-kullanıcı için duruyor.
+6 wins on the small tree, 12 on the large one; 16 comes last on both.
+**The default is now `min(cores, 8)`** — best on neither corpus (30%
+behind on the small one, 14% on the large one) but beats the old default on
+both (by 39% and 11%). A fixed number was never going to be best on both;
+`--threads` is there for the user who knows to use it.
 
-**Yöntem notu.** İlk denemede ayarlar sırayla ölçüldü ve arka planda kalan bir
-tarama yüzünden aynı ayar iki koşuda 89 ms ve 170 ms verdi — o veri atıldı.
-Makine sessizleşmediği için ölçüm sessizliğe değil, serpiştirmeye dayandırıldı:
-her turda bütün ayarlar rastgele sırayla koşuyor, böylece sürüklenme hepsine
-eşit dağılıyor. Tur toplamları ±%5 içinde kaldı.
+**Method note.** In the first attempt the settings were measured in sequence
+and, because of a scan left running in the background, the same setting gave
+89 ms and 170 ms in two runs — that data was discarded. Since the machine
+would not go quiet, the measurement was anchored to interleaving rather than
+silence: every round runs all settings in random order, so drift is spread
+evenly across all of them. Round totals stayed within ±5%.
 
-**Bir de işe yaramayan deney.** Aralığı 1.2M girdiye taşımak için sentetik bir
-ağaç üretildi ve sonucu kullanılmadı: üreteç dizinleri birbirinin altına
-zincirlediği için derin ve dar bir ağaç çıktı, o da paralelleşmiyor. Dizin
-başına dosya sayısı tutturulmuştu ama paralellik için asıl önemli olan
-**dallanma** kaçırılmıştı. 412k üstü hâlâ ölçülmedi.
+**And an experiment that didn't pan out.** A synthetic tree was generated to
+push the range to 1.2M entries, and the result went unused: the generator
+chained directories underneath one another, producing a deep and narrow tree
+that doesn't parallelize either. Files per directory was matched, but what
+actually matters for parallelism — **branching** — was missed. Above 412k is
+still unmeasured.
 
-### 1.3 Doğruluk
+### 1.3 Accuracy
 
-`/usr/share` (19.288 dosya, 892 dizin, 0 hata) `[ölçüm]`:
+`/usr/share` (19,288 files, 892 directories, 0 errors) `[measured]`:
 
 ```
-du -s          → 265.641.984 bayt
-total_alloc    → 265.641.984 bayt   ← bit birebir
-total_size     → 524.146.086 bayt
+du -s          → 265,641,984 bytes
+total_alloc    → 265,641,984 bytes  ← bit-for-bit identical
+total_size     → 524,146,086 bytes
 ```
 
-**Düzeltme (9 Eylül 2026):** bu ölçüm **elle** alınmıştı ve ilk hâli "169 test
-geçiyor, bu değişmez #1'in canlı kanıtı" diyordu — yanlıştı. O 169 testin
-hiçbiri `du`'yu çağırmıyordu; `totals_match_the_files_on_disk` testin kendi
-yazdığı sabitlerle karşılaştırıyor ve `alloc` için tek iddiası `>= 4096`.
-Otomatik karşılaştırma **aynı gün yazıldı**:
-`crates/scan-core/tests/du_equivalence.rs` (6 test, üç platformda CI'da koşuyor,
-Windows'ta A1/A2 beklemede). Doğrulaması mutasyon testiyle yapıldı: `alloc`'u
-mantıksal boyuta eşitlemek 3 testi, dedupe'u bozmak 3 testi, dizin inode
-boyutunu mantıksal toplama eklemek 1 testi düşürüyor. Yani iddia artık
-kanıtlanmış — ama **9 Eylül'e kadar değildi.**
+**Correction (9 September 2026):** this measurement had been taken **by
+hand**, and its first version said "169 tests pass, this is live proof of
+invariant #1" — that was wrong. None of those 169 tests called `du`;
+`totals_match_the_files_on_disk` compares against constants the test wrote
+itself, and its only claim for `alloc` is `>= 4096`. The automated comparison
+**was written the same day**: `crates/scan-core/tests/du_equivalence.rs` (6
+tests, running in CI on three platforms, A1/A2 pending on Windows). It was
+verified with mutation testing: equating `alloc` to the logical size fails 3
+tests, breaking dedupe fails 3 tests, adding a directory's inode size into
+the logical total fails 1 test. So the claim is now proven — but **it wasn't
+until 9 September.**
 
-### 1.4 Bellek — hedefin çok üstünde
+### 1.4 Memory — far above target
 
-`Node` = **104 bayt** (`size_of::<Node>()` ile ölçüldü), hizalama 8.
+`Node` = **104 bytes** (measured with `size_of::<Node>()`), alignment 8.
 
-| Hedef | Girdi | Tepe RSS | Girdi başına (taban çıkarılmış) |
+| Target | Entries | Peak RSS | Per entry (baseline subtracted) |
 |-------|-------|----------|--------------------------------|
-| taban (küçük dizin) | — | 8.1 MB | — |
-| /usr | 50.132 | 26 MB | ~359 B |
-| ~/github | 120.065 | 61 MB | ~437 B |
-| /Applications | 412.233 | 122 MB | ~276 B |
+| baseline (small directory) | — | 8.1 MB | — |
+| /usr | 50,132 | 26 MB | ~359 B |
+| ~/github | 120,065 | 61 MB | ~437 B |
+| /Applications | 412,233 | 122 MB | ~276 B |
 
-104 baytın üstüne binen iki maliyet: düğüm başına ayrı heap'e giden
-`name: String` (24 bayt gövde + ayrı tahsis + malloc başlığı) ve arena
-`Vec`'inin ikiye katlanarak büyümesi (realloc anında eski + yeni tampon birlikte
-yaşıyor).
+Two costs pile on top of the 104 bytes: the `name: String` that goes to a
+separate heap allocation per node (24-byte body + separate allocation +
+malloc header), and the arena `Vec` growing by doubling (at the moment of
+realloc the old and new buffers live side by side).
 
-[RESEARCH.md §3](RESEARCH.md) hedefi **~25 B/dosya** (ncdu 2 mertebesi).
-Ölçülen 276–437 B/girdi, yani hedefin **11–17 katı**. 10M dosyaya ekstrapole:
-**~2,8 GB tepe bellek.**
+[RESEARCH.md §3](RESEARCH.md) set the target at **~25 B/file** (ncdu 2's
+order of magnitude). Measured 276–437 B/entry, i.e. **11–17 times** the
+target. Extrapolated to 10M files: **~2.8 GB peak memory.**
 
-**Düzeltme (9 Eylül 2026):** o hedef bizim alan kümemizle **ulaşılabilir değil**
-ve karşılaştırma elmayla armut — ncdu 2 düğüm başına `own_size`, `own_alloc`,
-`files`, `dirs` tutmuyor, biz tutuyoruz. Faz faz RSS probuyla alınan dağılım
-`[ölçüm]`:
+**Correction (9 September 2026):** that target is **not reachable** with our
+field set, and the comparison is apples to oranges — ncdu 2 does not keep
+`own_size`, `own_alloc`, `files`, `dirs` per node, we do. The breakdown taken
+with a phase-by-phase RSS probe `[measured]`:
 
-| Kalem | B/girdi |
+| Item | B/entry |
 |-------|---------|
-| `RawEntry` ara ağacı (yürüyüş fazı) | 88 |
+| `RawEntry` intermediate tree (walk phase) | 88 |
 | arena `Node` | 104 |
-| ad `String`'leri | ~32 |
-| parçalanma + malloc başlıkları | ~46 |
-| taban | — |
-| **toplam** | **290** |
+| name `String`s | ~32 |
+| fragmentation + malloc headers | ~46 |
+| baseline | — |
+| **total** | **290** |
 
-Yürüyüş bittiğinde RSS 77 MB, flatten bittiğinde 119 MB: **ara ağaç ile arena
-aynı anda yaşıyor** ve serbest bırakılan `RawEntry` belleği işletim sistemine
-geri dönmüyor. Yani 290'ın 192'si çift depolama, asıl iş orada. En agresif alan
-daraltmasıyla bile taban `Node` 72 B + ad ~21 B = **~93 B/girdi**. Gerçekçi
-hedef bu yüzden **dua-cli'nin 64 B'ı** mertebesi, ncdu'nun 25 B'ı değil.
+When the walk finishes RSS is 77 MB, when flatten finishes it's 119 MB: **the
+intermediate tree and the arena are alive at the same time**, and the freed
+`RawEntry` memory does not go back to the operating system. So 192 of the 290
+is double storage — that's where the real work is. Even with the most
+aggressive field-shrinking, the baseline `Node` is 72 B + name ~21 B =
+**~93 B/entry**. The realistic target is therefore the order of magnitude of
+**dua-cli's 64 B**, not ncdu's 25 B.
 
-Karşılaştırma noktaları:
+Comparison points:
 
-| Araç | Düğüm/girdi başına | Kaynak |
+| Tool | Node/entry | Source |
 |------|--------------------|--------|
-| ncdu 2.0 | dosya **25 B**, dizin **56 B** | `[satıcı]` doğrulandı |
-| ncdu 1.16 | dosya 78 B, dizin 78 B | `[satıcı]` |
-| dua-cli 2.44.0 | **64 B** arena düğümü | `[satıcı]` |
-| **spacetrace** (9 Eyl, önce) | ~276–437 B | `[ölçüm]` |
-| **spacetrace** (9 Eyl, sonra) | **231 B** (`Node` 72 B) | `[ölçüm]` |
+| ncdu 2.0 | file **25 B**, dir **56 B** | `[vendor]` verified |
+| ncdu 1.16 | file 78 B, dir 78 B | `[vendor]` |
+| dua-cli 2.44.0 | **64 B** arena node | `[vendor]` |
+| **spacetrace** (9 Sep, before) | ~276–437 B | `[measured]` |
+| **spacetrace** (9 Sep, after) | **231 B** (`Node` 72 B) | `[measured]` |
 
-`dua-cli` 2.44.0 çözümü açıkça yazmış: **64 baytlık arena düğümü + paylaşılan
-dosya adı deposu + yoğun dizin id'leri**, tepe RSS %49 aşağı (525 MB → 268 MB).
-Bizim 104 bayt + düğüm başına `String` tasarımımız tam olarak onların terk ettiği
-tasarım.
+`dua-cli` 2.44.0 wrote its solution up explicitly: **a 64-byte arena node +
+shared filename store + dense directory ids**, peak RSS down 49% (525 MB →
+268 MB). Our 104-byte + per-node `String` design is exactly the design they
+abandoned.
 
 ---
 
-## 2. Rakip yığınları
+## 2. Competitor stacks
 
-| Ürün | Dil / Yığın | Numaralandırma | Paralellik |
+| Product | Language / Stack | Enumeration | Parallelism |
 |------|-------------|----------------|------------|
-| TreeSize Free/Pro | **Delphi/VCL** `[satıcı]` | Yönetici ise **MFT**; değilse normal `[satıcı]` | 2 thread (Pro'da 32), CPU yüküne göre `[satıcı]` |
-| WizTree | `[bulunamadı]` | **MFT'yi diskten ham okuyor** `[satıcı]` | `[bulunamadı]` |
-| WinDirStat 2.x | C++ `[ikili]` | `NtQueryDirectoryFile`; **MFT ancak v2.5.0'da (Ocak 2026) ve opsiyonel** `[ikili]` | Sürücü başına çok thread (v2.0.1) `[ikili]` |
-| SpaceObServer | Delphi + MSSQL `[satıcı]` | **USN Journal** ile artımlı `[satıcı]` | Yapılandırılabilir `[satıcı]` |
-| SpaceSniffer | `[bulunamadı]` | `[bulunamadı]` | `[bulunamadı]` |
-| DaisyDisk | `[bulunamadı]` | `[bulunamadı]` | `[bulunamadı]` |
-| GrandPerspective | Objective-C `[ikili]` | `[bulunamadı]` | `[bulunamadı]` |
-| QDirStat | C++/Qt6 `[ikili]` | `readdir` + `fstatat`, **inode'a göre sıralayıp** stat `[ikili]` | Tek thread, zamanlayıcı tabanlı iş kuyruğu `[ikili]` |
-| Filelight | C++/Qt `[ikili]` | `[bulunamadı]` | `[bulunamadı]` |
-| Baobab | **Vala**/GTK `[ikili]` | GIO `enumerate_children_async` `[ikili]` | Olay döngüsü, thread havuzu değil |
-| btdu | **D** `[ikili]` | Ağaç yürüyüşü **değil** — Monte Carlo örnekleme `[satıcı]` | Çok işlemli, io_uring varyantı var |
-| ncdu 2 | **Zig** `[satıcı]` | `openat` ailesi `[satıcı]` | **Tek thread** (çok thread yol haritasında) |
-| ncdu 1.x | C | `chdir` + `opendir` | Tek thread |
-| gdu | Go `[ikili]` | goroutine paralel; analiz sırasında **GC kapalı** `[ikili]` | `--max-cores`, `--sequential` `[ikili]` |
-| dust | Rust + rayon `[ikili]` | Standart Rust FS API `[ikili]` | rayon iş-çalma |
-| dua-cli | Rust `[ikili]` | `[bulunamadı]` | "Parallel by default" `[satıcı]` |
-| dut | C `[ikili]` | DFS + binary heap `[ikili]` | `[bulunamadı]` |
-| diskus | Rust `[ikili]` | rayon üstüne özel yürüyücü `[ikili]` | rayon |
-| erdtree | Rust `[ikili]` | `[bulunamadı]` | **Ampirik 3 thread** (1:1 çekirdek yerine) `[ikili]` |
-| **FreeSize** | **.NET + Photino.Blazor** `[ikili]` | **`DirectoryInfo.GetFiles`/`GetDirectories`** `[ikili]` | **İzi yok** `[ikili]` |
-| Diskaroo | Swift (mac) + WPF/.NET 8 (Win); Linux `[bulunamadı]` `[satıcı]` | **MFT okumadığını kendisi kabul ediyor** `[satıcı]` | `[bulunamadı]` |
-| DiskRaptor | Rust + Tauri 2 `[ikili]` | jwalk (mac) / walkdir (Win, Linux) + `getattrlistbulk`, `FindFirstFileW` `[ikili]` | rayon, jwalk |
-| **spacetrace** | **Rust** | `read_dir` + `symlink_metadata` | **rayon, ölçülen 5.2×** `[ölçüm]` |
+| TreeSize Free/Pro | **Delphi/VCL** `[vendor]` | **MFT** if administrator; normal otherwise `[vendor]` | 2 threads (32 in Pro), based on CPU load `[vendor]` |
+| WizTree | `[not found]` | **Reads the MFT raw off disk** `[vendor]` | `[not found]` |
+| WinDirStat 2.x | C++ `[binary]` | `NtQueryDirectoryFile`; **MFT only from v2.5.0 (January 2026), and optional** `[binary]` | Multiple threads per drive (v2.0.1) `[binary]` |
+| SpaceObServer | Delphi + MSSQL `[vendor]` | Incremental via **USN Journal** `[vendor]` | Configurable `[vendor]` |
+| SpaceSniffer | `[not found]` | `[not found]` | `[not found]` |
+| DaisyDisk | `[not found]` | `[not found]` | `[not found]` |
+| GrandPerspective | Objective-C `[binary]` | `[not found]` | `[not found]` |
+| QDirStat | C++/Qt6 `[binary]` | `readdir` + `fstatat`, stat **sorted by inode** `[binary]` | Single thread, timer-based work queue `[binary]` |
+| Filelight | C++/Qt `[binary]` | `[not found]` | `[not found]` |
+| Baobab | **Vala**/GTK `[binary]` | GIO `enumerate_children_async` `[binary]` | Event loop, not a thread pool |
+| btdu | **D** `[binary]` | **Not** a tree walk — Monte Carlo sampling `[vendor]` | Multi-process, an io_uring variant exists |
+| ncdu 2 | **Zig** `[vendor]` | `openat` family `[vendor]` | **Single thread** (multi-thread on the roadmap) |
+| ncdu 1.x | C | `chdir` + `opendir` | Single thread |
+| gdu | Go `[binary]` | goroutines in parallel; **GC off** during analysis `[binary]` | `--max-cores`, `--sequential` `[binary]` |
+| dust | Rust + rayon `[binary]` | Standard Rust FS API `[binary]` | rayon work-stealing |
+| dua-cli | Rust `[binary]` | `[not found]` | "Parallel by default" `[vendor]` |
+| dut | C `[binary]` | DFS + binary heap `[binary]` | `[not found]` |
+| diskus | Rust `[binary]` | custom walker on top of rayon `[binary]` | rayon |
+| erdtree | Rust `[binary]` | `[not found]` | **Empirically 3 threads** (instead of 1:1 with cores) `[binary]` |
+| **FreeSize** | **.NET + Photino.Blazor** `[binary]` | **`DirectoryInfo.GetFiles`/`GetDirectories`** `[binary]` | **No trace of it** `[binary]` |
+| Diskaroo | Swift (mac) + WPF/.NET 8 (Win); Linux `[not found]` `[vendor]` | **Itself admits it does not read the MFT** `[vendor]` | `[not found]` |
+| DiskRaptor | Rust + Tauri 2 `[binary]` | jwalk (mac) / walkdir (Win, Linux) + `getattrlistbulk`, `FindFirstFileW` `[binary]` | rayon, jwalk |
+| **spacetrace** | **Rust** | `read_dir` + `symlink_metadata` | **rayon, measured 5.2×** `[measured]` |
 
-### 2.1 Özellik matrisi
+### 2.1 Feature matrix
 
-| Ürün | Geçmiş + diff | Uzak ajan | Platform | Lisans / fiyat |
+| Product | History + diff | Remote agent | Platform | License / price |
 |------|---------------|-----------|----------|----------------|
-| **spacetrace** | **✓** | **✓** | Win/mac/Linux | Apache-2.0 çekirdek |
-| SpaceObServer | ✓ tam | ✓ Windows servisi | Windows | ~$283+ `[kullanıcı]` |
-| dua-cli | **✓ v2.44.0'dan beri** | ✗ | çapraz | MIT |
-| FreeSize | ◐ Pro "Portal" `[satıcı]` | ◐ belirsiz | Win/mac/Linux | CHF 0 / **29/yıl** |
-| TreeSize Pro | ◐ kayıtlı index karşılaştırma `[satıcı]` | ◐ UNC/SSH | Windows | ücretli |
-| gdu | ◐ SQLite'a kaydet+yükle, **diff yok** `[ikili]` | ✗ | çapraz | MIT |
-| QDirStat | ◐ cache dosyası (diff değil) `[ikili]` | ✗ | Linux | GPL |
-| WizTree | ✗ | ✗ | Windows | $0 kişisel / $25+ iş |
+| **spacetrace** | **✓** | **✓** | Win/mac/Linux | Apache-2.0 core |
+| SpaceObServer | ✓ full | ✓ Windows service | Windows | ~$283+ `[user]` |
+| dua-cli | **✓ since v2.44.0** | ✗ | cross-platform | MIT |
+| FreeSize | ◐ Pro "Portal" `[vendor]` | ◐ unclear | Win/mac/Linux | CHF 0 / **29/year** |
+| TreeSize Pro | ◐ saved index comparison `[vendor]` | ◐ UNC/SSH | Windows | paid |
+| gdu | ◐ save+load to SQLite, **no diff** `[binary]` | ✗ | cross-platform | MIT |
+| QDirStat | ◐ cache file (not a diff) `[binary]` | ✗ | Linux | GPL |
+| WizTree | ✗ | ✗ | Windows | $0 personal / $25+ business |
 | WinDirStat 2.x | ✗ | ✗ | Windows | GPL-2.0 |
 | DaisyDisk | ✗ | ✗ | macOS | $9.99 |
-| Diskaroo | ✗ (kendi tablosu: "Time-based Comparison: No") `[satıcı]` | ✗ | Win/mac/Linux | $19.99 kalıcı |
-| DiskRaptor | ✗ (kaynak kodda snapshot deposu yok) `[ikili]` | ✗ | Win/mac/Linux | MIT |
-| ncdu / dust / dut / diskus | ✗ | ✗ | çapraz | açık kaynak |
-| Baobab / Filelight | ✗ | mount tabanlı | Linux | GPL |
+| Diskaroo | ✗ (its own table: "Time-based Comparison: No") `[vendor]` | ✗ | Win/mac/Linux | $19.99 lifetime |
+| DiskRaptor | ✗ (no snapshot store in the source code) `[binary]` | ✗ | Win/mac/Linux | MIT |
+| ncdu / dust / dut / diskus | ✗ | ✗ | cross-platform | open source |
+| Baobab / Filelight | ✗ | mount-based | Linux | GPL |
 
 ---
 
-## 3. FreeSize — ikili adli incelemesi
+## 3. FreeSize — binary forensics
 
-FreeSize kapalı kaynak ve teknoloji yığını hiçbir halka açık kaynakta
-yazmıyor `[bulunamadı]`. macOS `.pkg`'si (35.766.335 bayt) indirilip
-`pkgutil --expand-full` ile açıldı ve `FreeSize.app` doğrudan incelendi.
+FreeSize is closed-source and its technology stack is written nowhere public
+`[not found]`. Its macOS `.pkg` (35,766,335 bytes) was downloaded and opened
+with `pkgutil --expand-full`, and `FreeSize.app` was inspected directly.
 
-### 3.1 Yığın `[ikili]`
+### 3.1 Stack `[binary]`
 
 ```
 FreeSize.app/Contents/MacOS/
   Photino.Native.dylib, Photino.NET.dll, Photino.Blazor.dll
-  libcoreclr.dylib                              ← gömülü .NET runtime
+  libcoreclr.dylib                              ← embedded .NET runtime
   Microsoft.AspNetCore.Components.WebView.dll   ← Blazor
   libSystem.Native.dylib, FreeSize.runtimeconfig.json
   wwwroot/{index.html, css/app.css, js/app.js}
-  … 203 DLL, toplam 87 MB
+  … 203 DLLs, 87 MB total
 ```
 
-Sürüm 0.3.1.0, `com.FreeSize.FreeSize`, imza `Developer ID Application: LightNet
-(88S5ATC4M6)`, arm64-only. Windows tarafı aynı aile: `shared\Microsoft.NETCore.App`,
-`Microsoft.AspNetCore.App`, `WebView2Loader.dll`, `Microsoft Edge WebView2 Runtime`.
+Version 0.3.1.0, `com.FreeSize.FreeSize`, signed `Developer ID Application:
+LightNet (88S5ATC4M6)`, arm64-only. The Windows side is the same family:
+`shared\Microsoft.NETCore.App`, `Microsoft.AspNetCore.App`,
+`WebView2Loader.dll`, `Microsoft Edge WebView2 Runtime`.
 
-**FreeSize = .NET + [Photino.Blazor](https://www.tryphotino.io/)** — arayüz C#'ta
-Blazor ile yazılmış, işletim sisteminin kendi webview'inde çiziliyor.
+**FreeSize = .NET + [Photino.Blazor](https://www.tryphotino.io/)** — the
+interface is written in C# with Blazor, rendered in the operating system's
+own webview.
 
-Elenen alternatifler `[ikili]`: Electron değil, Qt değil, Java değil — `electron`,
-`libffmpeg`, `node_modules`, `Qt5|Qt6`, `libjvm`, `v8_context` aramaları sıfır.
-74 MB'lık Windows kurulumunun sebebi Chromium değil, gömülü CoreCLR.
+Ruled-out alternatives `[binary]`: not Electron, not Qt, not Java — searches
+for `electron`, `libffmpeg`, `node_modules`, `Qt5|Qt6`, `libjvm`,
+`v8_context` all came back zero. The reason for the 74 MB Windows install is
+not Chromium, it's the embedded CoreCLR.
 
-**Not:** Mimari ailesi bizimle **aynı** — native kabuk + OS webview, tam
-Tauri'nin yaptığı şey. Fark çatıda değil, çatının içinde ne yapıldığında.
+**Note:** its architectural family is **the same** as ours — a native shell +
+OS webview, exactly what Tauri does. The difference isn't in the frame, it's
+in what's done inside it.
 
-### 3.2 Neden yavaş — üç mekanizma
+### 3.2 Why it's slow — three mechanisms
 
-`FreeSize.Core.dll` (85 KB, tarama çekirdeğinin tamamı) metadata taraması `[ikili]`:
+`FreeSize.Core.dll` (85 KB, the entire scan core) does metadata scanning
+`[binary]`:
 
-| Aranan API | Bulundu |
+| API searched for | Found |
 |------------|---------|
 | `GetFiles`, `GetDirectories`, `DirectoryInfo` | ✓ |
 | `EnumerateFiles`, `EnumerateFileSystemInfos` | **0** |
@@ -295,190 +309,202 @@ Tauri'nin yaptığı şey. Fark çatıda değil, çatının içinde ne yapıldı
 | `SemaphoreSlim`, `ThreadPool` | **0** |
 | `EnumerationOptions`, `RecurseSubdirectories` | **0** |
 
-Referans verilen assembly'ler: `System.IO`, `System.IO.FileSystem.DriveInfo`,
+Referenced assemblies: `System.IO`, `System.IO.FileSystem.DriveInfo`,
 `System.Linq`, `System.Threading`, `System.Threading.Tasks`,
-`System.Threading.Thread` — **`System.Collections.Concurrent` yok.**
+`System.Threading.Thread` — **no `System.Collections.Concurrent`.**
 
-**① Paralellik yok.** Paralel bir dizin yürüyüşü thread-safe bir iş kuyruğu
-olmadan yazılamaz; concurrent koleksiyon referansı hiç yok. `Thread`/`Task`
-varlığı Blazor arayüzünü bloke etmemek için **tek** bir arka plan tarama
-thread'iyle birebir uyumlu. Satıcı da hiçbir yerde çok thread iddiası yapmıyor;
-aksine WizTree'nin MFT üstünlüğünü kendisi kabul ediyor `[satıcı]`.
-→ Ölçtüğümüz ceza: **5.2×**.
+**① No parallelism.** A parallel directory walk cannot be written without a
+thread-safe work queue; there is no concurrent collection reference at all.
+The presence of `Thread`/`Task` is entirely consistent with a **single**
+background scan thread meant not to block the Blazor UI. The vendor never
+claims multi-threading anywhere either; on the contrary it itself admits
+WizTree's MFT advantage `[vendor]`.
+→ Penalty we measured: **5.2×**.
 
-**② `Enumerate*` yerine `Get*`.** .NET'te `GetFiles()` dönmeden önce dizinin tüm
-`FileInfo[]` dizisini malzemeleştirir; `EnumerateFiles()` tembel akıtır.
-Microsoft'un kendi dokümanı performans için `Enumerate*`'i öneriyor. Her
-`FileInfo` heap'te bir nesne + tam yol string'i: 400k girdide 400k nesne + 400k
-string → ağır GC baskısı. `FileInfo.Length` önbelleklenmemişse dosya başına ayrı
-`stat`. → Ölçtüğümüz ceza: **+36%**.
+**② `Get*` instead of `Enumerate*`.** In .NET, `GetFiles()` materializes the
+directory's entire `FileInfo[]` array before returning; `EnumerateFiles()`
+streams lazily. Microsoft's own documentation recommends `Enumerate*` for
+performance. Every `FileInfo` is a heap object + a full path string: at 400k
+entries, 400k objects + 400k strings → heavy GC pressure. If
+`FileInfo.Length` isn't cached, a separate `stat` per file. → Penalty we
+measured: **+36%**.
 
-**③ Treemap DOM'a çiziliyor — muhtemelen en büyüğü.** `wwwroot`'ta canvas yok:
-`getContext`, `canvas`, `requestAnimationFrame`, `d3`, `OffscreenCanvas`
-aramaları **sıfır** `[ikili]`. `app.js` toplam 5.242 bayt ve tek işi kendi
-yorumuyla belli:
+**③ The treemap is drawn to the DOM — probably the biggest one.** There is no
+canvas in `wwwroot`: searches for `getContext`, `canvas`,
+`requestAnimationFrame`, `d3`, `OffscreenCanvas` all come back **zero**
+`[binary]`. `app.js` is 5,242 bytes total, and its one job is clear from its
+own comment:
 
 ```js
 // Measure an element's content box (for the squarified treemap layout).
 measure: function (el) { ... getBoundingClientRect() ... }
 ```
 
-Yani **squarified yerleşim C#'ta hesaplanıyor, her dikdörtgen Blazor tarafından
-bir DOM elementi olarak yaratılıyor**, JS sadece kutuyu ölçüyor. Buna manşet
-özelliği ekleniyor: *"the tree grows live during the scan"* `[satıcı]`. Sonuç:
-tarama sürerken büyüyen ağaç için sürekli .NET → WebView interop sınırından geçen
-Blazor render-tree diff'i ve DOM mutasyonu.
+So **the squarified layout is computed in C#, and every rectangle is created
+by Blazor as a DOM element** — JS only measures the box. On top of this comes
+the headline feature: *"the tree grows live during the scan"* `[vendor]`. The
+result: for a tree growing while the scan runs, a constant Blazor
+render-tree diff and DOM mutation crossing the .NET → WebView interop
+boundary.
 
-### 3.3 Bizim tarafla karşılaştırma
+### 3.3 Comparison with our side
 
 | | FreeSize | spacetrace |
 |---|---|---|
-| Kabuk | Photino.NET + OS webview | Tauri v2 + OS webview |
-| Çekirdek dil | C# / .NET (gömülü CoreCLR) | Rust |
-| Numaralandırma | `GetFiles` (eager dizi) | `read_dir` + `symlink_metadata` |
-| Paralellik | izi yok | rayon, **5.2×** `[ölçüm]` |
-| Yerleşim | C#'ta | Rust'ta (`crates/treemap`, 21 test) |
-| Çizim | Blazor → **DOM** | **Canvas2D**, yalnızca görünen dikdörtgenler |
-| Tarama sırasında çizim | evet (manşet özellik) | hayır |
+| Shell | Photino.NET + OS webview | Tauri v2 + OS webview |
+| Core language | C# / .NET (embedded CoreCLR) | Rust |
+| Enumeration | `GetFiles` (eager array) | `read_dir` + `symlink_metadata` |
+| Parallelism | no trace of it | rayon, **5.2×** `[measured]` |
+| Layout | in C# | in Rust (`crates/treemap`, 21 tests) |
+| Drawing | Blazor → **DOM** | **Canvas2D**, only the visible rectangles |
+| Drawing during scan | yes (headline feature) | no |
 
-### 3.4 Dürüstlük sınırı
+### 3.4 Limits of honesty
 
-Bunlar **mimari kanıt + kendi makinemizde ölçülmüş mekanizma**, ama FreeSize'ın
-kendisi ölçülmedi. Metadata'da bir API'nin yokluğu güçlü kanıt, matematiksel
-kesinlik değil (obfuscation veya generic instantiation adları saklayabilir —
-bu API'ler için olası değil ama imkânsız değil). Kesin sayı için ikili
-çalıştırılıp `sample <pid>` ile thread sayısı ve `fs_usage` ile girdi başına
-syscall ölçülmeli.
+These are **architectural evidence + a mechanism measured on our own
+machine**, but FreeSize itself was not measured. The absence of an API in
+the metadata is strong evidence, not mathematical certainty (obfuscation or
+generic instantiation could hide names — unlikely for these APIs, but not
+impossible). For an exact number the binary would have to be run and thread
+count measured with `sample <pid>` and syscalls per entry with `fs_usage`.
 
-Ayrıca: FreeSize v0.3.1, Haziran 2026 güncellemeli, **hiçbir yerde tek kullanıcı
-yorumu bulunamadı** `[bulunamadı]` (Reddit, HN, AlternativeTo, G2, Capterra,
-Softpedia ayrı ayrı arandı). Yani hız sorunu büyük olasılıkla "olgunlaşmamış
-ürün" hikâyesinin parçası, kalıcı bir mimari tercih değil — bir sonraki
-sürümlerinde düzeltebilirler.
+Also: FreeSize v0.3.1, last updated June 2026, **not a single user review was
+found anywhere** `[not found]` (Reddit, HN, AlternativeTo, G2, Capterra,
+Softpedia each searched separately). So the speed problem is most likely part
+of an "immature product" story, not a permanent architectural choice — they
+may fix it in a later version.
 
-### 3.5 Satıcı ve konumlandırma
+### 3.5 Vendor and positioning
 
-lightnet multimedia GmbH, Graben/İsviçre (UID CHE-435.553.655). Ürün dört
-üründen biri. Konumlandırma "Swiss made", "no tracking".
+lightnet multimedia GmbH, Graben/Switzerland (UID CHE-435,553,655). The
+product is one of four. Positioning: "Swiss made", "no tracking".
 
-| Kademe | Fiyat | Kapsam `[satıcı]` |
+| Tier | Price | Scope `[vendor]` |
 |--------|-------|-------------------|
-| Free | CHF 0 | Sınırsız tarama, treemap + sunburst + heatmap |
-| Pro | **CHF 29/yıl** | + arka plan izleme, **"FreeSize Portal & history"**, **"Multiple devices, centrally"** |
+| Free | CHF 0 | Unlimited scanning, treemap + sunburst + heatmap |
+| Pro | **CHF 29/year** | + background monitoring, **"FreeSize Portal & history"**, **"Multiple devices, centrally"** |
 
-Portal metni birebir: *"All your devices at a glance: history, trends and usage
-of your volumes — hosted in Switzerland."* Portal kayıt arkasında olduğu için
-gerçek derinliği (kaba kullanım grafiği mi, gerçek snapshot diff mi)
-`[bulunamadı]`. **Ama pazarlama metni bizim konumlandırmamızla doğrudan
-örtüşüyor** ve barındırma İsviçre bulutunda — self-host değil.
+The Portal text, verbatim: *"All your devices at a glance: history, trends
+and usage of your volumes — hosted in Switzerland."* Because the Portal sits
+behind registration, its actual depth (a rough usage graph, or a real
+snapshot diff) `[not found]`. **But the marketing text overlaps directly
+with our own positioning**, and hosting is on the Swiss cloud — not
+self-hosted.
 
 ---
 
-## 4. Nerede iyiyiz, nerede kötüyüz
+## 4. Where we're good, where we're bad
 
-### 4.1 Gerçek üstünlükler
+### 4.1 Real advantages
 
-**① Tek üründe CLI + masaüstü + filo panosu, aynı snapshot formatıyla.**
-Tablodaki hiç kimse üçünü birden yapmıyor. Teknik dayanağı: `store::load`
-snapshot'ın nereden geldiğini bilmiyor (K4).
+**① CLI + desktop + fleet dashboard in one product, with the same snapshot
+format.** Nobody in the table does all three. The technical basis:
+`store::load` doesn't know where the snapshot came from (K4).
 
-**② Açık kaynak + self-host + filo geçmişi kombinasyonu.** Bunu yapan tek diğer
-ürün SpaceObServer: Windows-only, MSSQL, ~$283+. FreeSize'ın portalı İsviçre
-bulutu. Homelab/selfhosted kitlesi için bu ayrım belirleyici.
+**② The combination of open source + self-host + fleet history.** The only
+other product doing this is SpaceObServer: Windows-only, MSSQL, ~$283+.
+FreeSize's portal is the Swiss cloud. For the homelab/self-hosted audience
+this distinction is decisive.
 
-**③ Ölçü dürüstlüğü — kategoride kimsenin konuşmadığı konu.** `SizeBasis`
-(değişmez #6), K6 (yüzde değil boş/toplam), K7 (dayanağı zayıfsa tahmin
-söylenmez). Rakiplerin hiçbirinin belgesinde bu ayrımlar `[bulunamadı]`.
-Kıyasla WizTree kendi FAQ'sinde toplamının Windows'un rakamından "neredeyse her
-zaman biraz az" olduğunu kabul ediyor `[satıcı]`.
+**③ Measurement honesty — a subject nobody else in the category talks
+about.** `SizeBasis` (invariant #6), K6 (free/total, not percentage), K7 (no
+guess is stated when the basis is weak). None of the competitors'
+documentation has these distinctions `[not found]`. By comparison, WizTree's
+own FAQ admits its total is "almost always a little under" Windows's own
+figure `[vendor]`.
 
-**④ macOS/Linux'ta paralel yürüyüş.** ncdu 2 hâlâ tek thread. Ölçülen 5.2×.
+**④ Parallel walk on macOS/Linux.** ncdu 2 is still single-threaded. Measured
+5.2×.
 
-### 4.2 Gerçek zayıflıklar
+### 4.2 Real weaknesses
 
-| Zayıflık | Kim daha iyi |
+| Weakness | Who does better |
 |----------|--------------|
-| **Windows MFT hızlı yolu yok** | WizTree, TreeSize (yönetici), WinDirStat 2.5.0 |
-| ~~Windows `alloc` yanlış + hardlink dedupe kapalı~~ → **9 Eylül 2026'da yazıldı, CI onayı bekliyor.** Kalan sapma: Windows'ta dizin blokları `alloc`'a girmiyor | TreeSize, WizTree, WinDirStat 2.5.0 |
-| ~~APFS clone tekilleştirme yok~~ → **9 Eylül 2026'da kapandı** (`F_LOG2PHYS_EXT`, varsayılan açık) | **DaisyDisk 4.34** (clone'un ilk görünümünü sayıp kalanına 0 bayt veriyor) |
-| **Bellek hedefin 11–17 katı** | dua-cli (64 B), ncdu 2 (25 B) |
-| ~~Snapshot bütünlük kontrolü yok~~ → **10 Eylül 2026'da kapandı** (şema v3, içerik SHA-256'sı; import reddediyor, `spacetrace verify` denetliyor) | dua-cli (SHA-256) |
-| **Artımlı yeniden tarama yok** | SpaceObServer (USN Journal) |
-| **HDD/ağ için mod yok** | gdu (`--sequential`), QDirStat (inode sıralaması) |
-| **Thread sayısı ayarlanmıyor** | erdtree (ampirik 3), TreeSize (CPU yüküne göre) |
-| **Kod imzalama yok** | FreeSize, Diskaroo, TreeSize, WizTree — hepsi imzalı |
-| **Sıfır kullanıcı, sıfır dağıtım varlığı** | hepsi |
-| **Sunburst/heatmap görünümü yok** | FreeSize, Filelight |
-| **JSON içe aktarma yok** (dışa aktarma var) | ncdu |
+| **No Windows MFT fast path** | WizTree, TreeSize (admin), WinDirStat 2.5.0 |
+| ~~Windows `alloc` wrong + hardlink dedupe off~~ → **written on 9 September 2026, awaiting CI confirmation.** Remaining gap: on Windows, directory blocks don't enter `alloc` | TreeSize, WizTree, WinDirStat 2.5.0 |
+| ~~No APFS clone deduplication~~ → **closed on 9 September 2026** (`F_LOG2PHYS_EXT`, on by default) | **DaisyDisk 4.34** (counts a clone's first appearance and gives the rest 0 bytes) |
+| **Memory is 11–17× the target** | dua-cli (64 B), ncdu 2 (25 B) |
+| ~~No snapshot integrity check~~ → **closed on 10 September 2026** (schema v3, content SHA-256; import rejects it, `spacetrace verify` audits it) | dua-cli (SHA-256) |
+| **No incremental rescan** | SpaceObServer (USN Journal) |
+| **No mode for HDD/network** | gdu (`--sequential`), QDirStat (inode ordering) |
+| **The thread count does not adapt** | erdtree (empirically 3), TreeSize (based on CPU load) |
+| **No code signing** | FreeSize, Diskaroo, TreeSize, WizTree — all signed |
+| **Zero users, zero distribution presence** | all of them |
+| **No sunburst/heatmap view** | FreeSize, Filelight |
+| **No JSON import** (export exists) | ncdu |
 
-### 4.3 Eylül 2026'da kaybedilen iki farklılaştırıcı
+### 4.3 Two differentiators lost in September 2026
 
-Bunlar bu araştırmanın en önemli çıktısı, çünkü **mevcut belgelerdeki
-konumlandırmayı yanlış hâle getiriyorlar.**
+These are the most important output of this research, because **they make
+the positioning in the existing documents wrong.**
 
-**① `dua-cli` v2.44.0 (30 Ağustos 2026) diff'i yakaladı.**
-`dua interactive --export before.dua`, sonra `dua diff OLD NEW` — "additions,
-removals, and signed size changes as a compact, colored context tree". Format
-`DUASNAP\0`, zlib akış sıkıştırması, SHA-256 bütünlük. Release sayfasından
-doğrulandı. **"İki zaman noktasını karşılaştır" artık tek başına
-farklılaştırıcı değil**; MIT lisanslı bir CLI'da ücretsiz var. Bize kalan
-**uzak ajan + filo**.
+**① `dua-cli` v2.44.0 (30 August 2026) caught up on diff.**
+`dua interactive --export before.dua`, then `dua diff OLD NEW` —
+"additions, removals, and signed size changes as a compact, colored context
+tree". Format `DUASNAP\0`, zlib stream compression, SHA-256 integrity.
+Verified from the release page. **"Compare two points in time" is no longer
+a differentiator on its own**; it's free in an MIT-licensed CLI. What's left
+for us is **remote agent + fleet**.
 
-**② FreeSize Pro tam bizim cümlemizi kuruyor**, CHF 29/yıl.
+**② FreeSize Pro builds exactly our sentence**, CHF 29/year.
 
-[WHY.md](WHY.md)'deki şu cümle **artık yanlış**: *"Uzak makine + tarama geçmişi
-yalnızca SpaceObServer'da var ve $600+/yıl; altında hiçbir şey yok."*
-
----
-
-## 5. Konumlandırma sonuçları
-
-**En kritik karar: hızı manşet yapmamak.** Hız manşeti bizi WizTree'yle Windows'ta
-MFT dövüşüne sokar ve o dövüş şu an kaybediliyor (§4.2). Ayrıca §1.1'in gösterdiği
-gibi "Rust olduğu için hızlı" ölçümle desteklenmiyor.
-
-Manşet sırası:
-
-1. **"Diskin dolmasını bekleme — neyin büyüdüğünü söyleriz."** Rakiplerin tamamı
-   "şu an ne var" sorusunu cevaplıyor; bizim cevabımız "geçen haftadan beri ne
-   değişti". Somut hâli: *"Sunucun 4 gün sonra dolacak ve suçlu
-   `/var/log/nginx`."*
-2. **"Sunucuların dâhil. Ajan açık kaynak, veriler sende kalıyor."** FreeSize'ın
-   karşılığı İsviçre bulutu; SpaceObServer'ın karşılığı $283 + MSSQL + Windows.
-3. **"Rakamlar doğru — ve bunu ispatlıyoruz."** `du` ile birebir eşleşmeyi
-   göstermek (yan yana ekran görüntüsü) kategoride kimsenin yapmadığı bir güven
-   hamlesi. Yanına K6.
-4. **"Sunucuda CLI, laptop'ta treemap, ekipte pano — aynı snapshot."**
-
-**Kullanılmaması gerekenler:** "en hızlı" (kanıtlanamıyor), "Windows'ta çalışır"
-(MFT ve `alloc` düzelene kadar riskli), "ücretsiz" (K2'yi bulanıklaştırır).
+The following sentence in [WHY.md](WHY.md) is **now wrong**: *"Remote machine +
+scan history only exists in SpaceObServer, and it is $600+/year; there is
+nothing underneath it."*
 
 ---
 
-## 6. Kaynaklar
+## 5. Positioning conclusions
 
-Ölçümler bu makinede alındı ve §1'deki yöntemle tekrarlanabilir. Rakip
-kaynakları:
+**The most critical decision: don't headline speed.** A speed headline puts
+us into an MFT fight with WizTree on Windows, and that fight is currently
+being lost (§4.2). Also, as §1.1 shows, "fast because it's Rust" isn't backed
+by measurement.
+
+Headline order:
+
+1. **"Don't wait for the disk to fill up — we tell you what's growing."** All
+   the competitors answer the question "what's here now"; our answer is
+   "what's changed since last week". Concretely: *"Your server will be full
+   in 4 days and the culprit is `/var/log/nginx`."*
+2. **"Your servers are included. The agent is open source, your data stays
+   with you."** FreeSize's counterpart is the Swiss cloud; SpaceObServer's
+   counterpart is $283 + MSSQL + Windows.
+3. **"The numbers are correct — and we prove it."** Showing an exact match
+   with `du` (a side-by-side screenshot) is a trust move nobody in the
+   category makes. K6 goes alongside it.
+4. **"CLI on the server, treemap on the laptop, dashboard for the team — the
+   same snapshot."**
+
+**What not to use:** "fastest" (can't be proven), "works on Windows" (risky
+until MFT and `alloc` are fixed), "free" (blurs K2).
+
+---
+
+## 6. Sources
+
+Measurements were taken on this machine and are reproducible with the method
+in §1. Competitor sources:
 
 - **FreeSize:** [freesize.ch](https://freesize.ch/en/),
   [treesize-alternative](https://freesize.ch/en/treesize-alternative.html),
   [wiztree-alternative](https://freesize.ch/en/wiztree-alternative.html),
-  imprint; `get.freesize.ch/dl.php` üzerinden indirilen ikililer
+  imprint; binaries downloaded via `get.freesize.ch/dl.php`
 - **dua-cli:** [v2.44.0 release](https://github.com/Byron/dua-cli/releases/tag/v2.44.0)
 - **ncdu 2:** [dev.yorhel.nl/doc/ncdu2](https://dev.yorhel.nl/doc/ncdu2)
 - **TreeSize:** [features](https://www.jam-software.com/treesize/features.shtml),
-  [NTFS notları](https://manuals.jam-software.com/treesize/EN/notesonntfs.html),
-  [tarama seçenekleri](https://manuals.jam-software.de/treesize/EN/scan_options.html);
-  Delphi doğrulaması [Embarcadero blog](https://blogs.embarcadero.com/powerful-file-and-disk-space-manager-software-for-windows-is-built-in-delphi/)
+  [NTFS notes](https://manuals.jam-software.com/treesize/EN/notesonntfs.html),
+  [scan options](https://manuals.jam-software.de/treesize/EN/scan_options.html);
+  Delphi confirmation from the [Embarcadero blog](https://blogs.embarcadero.com/powerful-file-and-disk-space-manager-software-for-windows-is-built-in-delphi/)
 - **WizTree:** [about](https://www.diskanalyzer.com/about), [faq](https://diskanalyzer.com/faq)
-- **WinDirStat:** [discussions/218](https://github.com/windirstat/windirstat/discussions/218) (maintainer açıklaması), GitHub release API
-- **SpaceObServer:** [ajan](https://www.jam-software.com/spaceobserver/spaceobserveragent.shtml),
-  [tarama seçenekleri](https://manuals.jam-software.com/spaceobserver/EN/scan_options.html)
-- **DaisyDisk APFS clone:** [4.34 sürüm notu](https://daisydiskapp.com/blog/daisydisk-4-34-released)
+- **WinDirStat:** [discussions/218](https://github.com/windirstat/windirstat/discussions/218) (maintainer's explanation), GitHub release API
+- **SpaceObServer:** [agent](https://www.jam-software.com/spaceobserver/spaceobserveragent.shtml),
+  [scan options](https://manuals.jam-software.com/spaceobserver/EN/scan_options.html)
+- **DaisyDisk APFS clone:** [4.34 release notes](https://daisydiskapp.com/blog/daisydisk-4-34-released)
 - **QDirStat:** [DirReadJob.cpp](https://github.com/shundhammer/qdirstat/blob/master/src/DirReadJob.cpp)
 - **gdu:** [README](https://github.com/dundee/gdu/blob/master/README.md)
 - **dut:** [codeberg](https://codeberg.org/201984/dut)
 - **erdtree:** [CHANGELOG](https://github.com/solidiquis/erdtree/blob/master/CHANGELOG.md)
 - **btdu:** [README](https://github.com/CyberShadow/btdu/blob/master/README.md)
-- **Diskaroo:** [bravely.dev/diskaroo](https://bravely.dev/diskaroo), vs/wiztree ve vs/treesize karşılaştırma sayfaları
+- **Diskaroo:** [bravely.dev/diskaroo](https://bravely.dev/diskaroo), the vs/wiztree and vs/treesize comparison pages
 - **DiskRaptor:** [github.com/SunMe1977/DiskRaptor](https://github.com/SunMe1977/DiskRaptor)

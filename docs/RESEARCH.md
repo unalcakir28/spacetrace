@@ -1,174 +1,188 @@
-# Araştırma özeti (Eylül 2026)
+# Research summary (September 2026)
 
-Projenin kararları 6 Eylül 2026'da yapılan pazar ve teknik araştırmaya dayanıyor.
-Bu belge o araştırmanın **karar veren** kısmını depoda tutar; ürün gerekçesi için
-[WHY.md](WHY.md), tasarım için [ARCHITECTURE.md](ARCHITECTURE.md).
+The project's decisions rest on market and technical research done on 6
+September 2026. This document keeps the **decision-driving** part of that
+research in the repository; for product rationale see [WHY.md](WHY.md), for
+design see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-**9 Eylül 2026'da revize edildi.** Rakiplere odaklı, kendi makinemizde alınmış
-ölçümlerle desteklenen ve her iddiası kanıt etiketli devamı
-[COMPETITORS.md](COMPETITORS.md) içinde. Aşağıda o incelemenin **düzelttiği**
-yerler açıkça işaretli — eski hâli silinmedi, çünkü hangi kararın hangi bilgiyle
-verildiği kaybolursa kararı yeniden değerlendirmek imkânsızlaşıyor.
+**Revised on 9 September 2026.** A competitor-focused follow-up, backed by
+measurements taken on our own machine and with every claim tagged with
+evidence, is in [COMPETITORS.md](COMPETITORS.md). Below, the spots that
+review **corrected** are marked explicitly — the old version wasn't deleted,
+because if which decision was made with which information is lost, it becomes
+impossible to re-evaluate the decision.
 
-> Fiyatlar, sürümler ve mağaza politikaları hızla değişir. Bir karar bunlardan
-> birine dayanıyorsa kullanmadan önce kaynağı yeniden kontrol et.
+> Prices, versions and store policies change fast. If a decision rests on one
+> of these, re-check the source before using it.
 
-## 1. Rakipler ve fiyat çıpaları
+## 1. Competitors and price anchors
 
-| Ürün | Platform | Fiyat | Not |
+| Product | Platform | Price | Note |
 |------|----------|-------|-----|
-| TreeSize Free / Personal / Pro | Windows | $0 / $50 kalıcı / $49.20 yıl | Pro'da SSH-UNC-bulut tarama; **kalıcı lisans yalnızca Personal'da kaldı**. Düzeltme: **Free bile yönetici olarak koşarsa MFT okuyor** |
-| SpaceObServer | Windows + sunucu | $600/instance/yıl + kullanıcı | Veritabanı destekli, kurumsal. **USN Journal ile artımlı tarama** — en yakın mimari rakip |
-| WizTree | Windows | Kişisel $0, iş $25–1.800 | NTFS MFT okur; uzak tarama **yok** |
-| WinDirStat 2.x | Windows | GPL | Düzeltme: 2024'teki hız kazancı **sürücü başına çok thread**'di; MFT ancak **v2.5.0'da (Ocak 2026)** ve opsiyonel |
-| DaisyDisk | macOS | $9.99 kalıcı, 5 Mac | Mac'te duygusal fiyat çıpası. **APFS clone'larını tekilleştiriyor** (4.34) — bizde yok |
-| FreeSize | Win/mac/Linux | $0, Pro CHF 29/yıl | **.NET + Photino.Blazor** (ikili incelendi); Pro'da "Portal & history, multiple devices centrally" |
-| Diskaroo | Win/mac/Linux | $19.99 kalıcı | Ayrı native kod tabanları (Swift + WPF) |
+| TreeSize Free / Personal / Pro | Windows | $0 / $50 lifetime / $49.20/year | SSH-UNC-cloud scanning in Pro; **the lifetime license only remains on Personal**. Correction: **even Free reads the MFT if run as administrator** |
+| SpaceObServer | Windows + server | $600/instance/year + user | Database-backed, enterprise. **Incremental scanning via USN Journal** — the closest architectural competitor |
+| WizTree | Windows | Personal $0, business $25–1,800 | Reads the NTFS MFT; remote scanning is **not** available |
+| WinDirStat 2.x | Windows | GPL | Correction: the 2024 speed gain was **many threads per drive**; MFT only arrived in **v2.5.0 (January 2026)** and is optional |
+| DaisyDisk | macOS | $9.99 lifetime, 5 Macs | An emotional price anchor on Mac. **Deduplicates APFS clones** (4.34) — we don't have this |
+| FreeSize | Win/mac/Linux | $0, Pro CHF 29/year | **.NET + Photino.Blazor** (binary examined); Pro has "Portal & history, multiple devices centrally" |
+| Diskaroo | Win/mac/Linux | $19.99 lifetime | Separate native codebases (Swift + WPF) |
 | DiskRaptor | Win/mac/Linux | MIT | Rust + Tauri |
-| **dua-cli** | çapraz | MIT | **v2.44.0 (30 Ağu 2026): `--export` + `dua diff`** — geçmiş karşılaştırması artık ücretsiz bir CLI'da |
-| ncdu 2 / gdu / dust | Linux/TUI | ücretsiz | Sunucularda fiili standart |
+| **dua-cli** | cross-platform | MIT | **v2.44.0 (30 Aug 2026): `--export` + `dua diff`** — history comparison now free in a CLI |
+| ncdu 2 / gdu / dust | Linux/TUI | free | The de facto standard on servers |
 
-**Karar için önemli olan iki nokta.**
+**Two points that matter for the decision.**
 
-**(a) Masaüstü treemap kategorisi 2025–26'da üç yeni ürünle doldu, biri
-ücretsiz** — oraya dördüncü olarak girmek savunulamaz. Bu hâlâ geçerli.
+**(a) The desktop treemap category filled up with three new products in
+2025–26, one of them free** — entering as a fourth there is indefensible.
+This still holds.
 
-**(b)** İlk hâli şöyleydi: *"Uzak makine + tarama geçmişi yalnızca
-SpaceObServer'da var ve $600+/yıl; altında hiçbir şey yok."* **Bu cümle 9 Eylül
-2026'da yanlışlandı** — aynı ay içinde iki gelişme oldu
+**(b)** The original version said: *"Remote machine + scan history only exist
+in SpaceObServer, and it's $600+/year; there's nothing beneath it."* **This
+sentence was falsified on 9 September 2026** — two developments happened in
+the same month
 ([COMPETITORS.md §4.3](COMPETITORS.md)):
 
-- `dua-cli` v2.44.0 (30 Ağustos 2026) `--export` + `dua diff` ile geçmiş
-  karşılaştırmasını MIT lisansı altında ücretsiz verdi.
-- FreeSize Pro (CHF 29/yıl) *"tüm cihazlarınız tek bakışta: geçmiş, trendler"*
-  diyen bir portal açtı.
+- `dua-cli` v2.44.0 (30 August 2026) gave history comparison for free under
+  the MIT license with `--export` + `dua diff`.
+- FreeSize Pro (CHF 29/year) launched a portal that says *"all your devices
+  at a glance: history, trends"*.
 
-Yani boşluk "hiç kimse yok" değil, **"açık kaynak + self-host + filo geçmişi bir
-arada yok"**. Kalan farklılaştırıcı bu üçlünün kesişimi; tek başına "iki zaman
-noktasını karşılaştır" değil. Fiyat hipotezi de bu daralmayı hesaba katmak
-zorunda ([WHY.md](WHY.md) → Konumlandırma).
+So the gap isn't "nobody", it's **"open source + self-host + fleet history
+together, nobody"**. The remaining differentiator is the intersection of this
+trio; not, on its own, "compare two points in time". The price hypothesis has
+to account for this narrowing too ([WHY.md](WHY.md) → Positioning).
 
-**Lisans penceresi:** JAM Software 2025'te TreeSize'ı aboneliğe çevirdi, Temmuz
-2026'da kalıcı lisans sahiplerine güncelleme vermeyi kesti. Tepki büyük oldu;
-kalıcı lisans seçeneği sunmak kendi başına bir edinim argümanı.
+**License window:** JAM Software moved TreeSize to a subscription in 2025,
+and in July 2026 cut off updates for lifetime license holders. The backlash
+was large; offering a lifetime license option is, on its own, an acquisition
+argument.
 
-## 2. Masaüstü framework karşılaştırması
+## 2. Desktop framework comparison
 
-Mobil kapsamdan çıktıktan sonra (bkz. §5) sıralama:
+After dropping mobile scope (see §5), the ranking:
 
-| Framework | Win/mac/Linux | Kurulum boyutu | 100k dikdörtgen | Not |
+| Framework | Win/mac/Linux | Install size | 100k rectangles | Note |
 |-----------|---------------|----------------|-----------------|-----|
-| **Tauri v2 + Rust** | 5 / 5 / 4 | **3–15 MB** | Canvas/WebGL, WebView farkları | Rust'ı süreç içinde çağırır, FFI köprüsü yok. **Seçilen.** |
-| Avalonia 12 | 5 / 5 / 5 | ~orta (NativeAOT) | Skia, piksel-aynı | Uçtan uca C#; **yedek plan** |
-| Flutter + FRB | 5 / 5 / 5 | 20–80 MB | Impeller, batched canvas | Kozu "beş platform tek kod"du; mobil çıkınca gerekçesi kalmadı |
-| Qt/QML | 5 / 5 / 5 | orta | En iyi | Lisans $618+/yıl, C++ ekibi yok |
-| Electron | 5 / 5 / 5 | 50–150 MB | orta | Tauri aynı UI'ı 10× küçük paketle veriyor |
-| .NET MAUI | 4 / 3 / **1** | — | — | Linux resmen desteklenmiyor |
+| **Tauri v2 + Rust** | 5 / 5 / 4 | **3–15 MB** | Canvas/WebGL, WebView differences | Calls Rust in-process, no FFI bridge. **Selected.** |
+| Avalonia 12 | 5 / 5 / 5 | ~medium (NativeAOT) | Skia, pixel-identical | End-to-end C#; **fallback plan** |
+| Flutter + FRB | 5 / 5 / 5 | 20–80 MB | Impeller, batched canvas | Its selling point was "five platforms, one codebase"; lost its rationale once mobile dropped |
+| Qt/QML | 5 / 5 / 5 | medium | Best | License $618+/year, no C++ team |
+| Electron | 5 / 5 / 5 | 50–150 MB | medium | Tauri gives the same UI in a 10× smaller package |
+| .NET MAUI | 4 / 3 / **1** | — | — | Linux is officially unsupported |
 
-Tauri'nin bilinen riski Linux'taki **WebKitGTK**: treemap üç WebView'da da test
-edilmeli (Faz 3 çıkış kriteri).
+Tauri's known risk is **WebKitGTK** on Linux: the treemap has to be tested on
+all three WebViews (Phase 3 exit criterion).
 
-## 3. Hızlı tarama teknikleri (Faz 3 için)
+## 3. Fast scanning techniques (for Phase 3)
 
-Şu an tek taşınabilir arka uç var (`read_dir` + `symlink_metadata`). Hız
-beklentisi MFT okuyan WizTree ile belirlenmiş durumda; Windows'ta hızlı yol
-olmadan çıkmak kaybetmek demek.
+There is currently only one portable backend (`read_dir` +
+`symlink_metadata`). The speed expectation is set by the MFT-reading WizTree;
+shipping on Windows without a fast path means losing.
 
 ### Windows
-- **MFT doğrudan okuma:** NTFS Master File Table'ı diskten ham okur, OS'i atlar.
-  Kullanıcı raporu: WinDirStat 18 dk → WizTree ~14 s. Yönetici hakkı gerekir;
-  ReFS'te MFT yok; ağ/FAT sürücülerde normal enumerasyona düşülür.
+- **Direct MFT reading:** reads the NTFS Master File Table raw from disk,
+  bypassing the OS. User report: WinDirStat 18 min → WizTree ~14 s. Requires
+  administrator rights; ReFS has no MFT; network/FAT drives fall back to
+  normal enumeration.
   Crate: [`usn-journal-rs`](https://github.com/wangfu91/usn-journal-rs)
-  (MFT enumerasyonu + USN change journal ile **artımlı** yeniden tarama),
+  (MFT enumeration + **incremental** rescanning via the USN change journal),
   [`ntfs-reader`](https://lib.rs/crates/ntfs-reader).
-- **Yetkisiz yol:** `NtQueryDirectoryFileEx`, 64 KB+ buffer,
-  `FileIdBothDirectoryInformation` — boyut ve file id tek çağrıda gelir, hardlink
-  dedupe için dosya başına ek syscall gerekmez.
-  `FindFirstFileEx` + `FIND_FIRST_EX_LARGE_FETCH` ölçümde duvar saatini ~2×
-  düşürüyor ([ölçüm](https://blog.s-schoener.com/2024-06-09-find-first-large-fetch/)).
+- **The unprivileged path:** `NtQueryDirectoryFileEx`, a 64 KB+ buffer,
+  `FileIdBothDirectoryInformation` — size and file id arrive in a single
+  call, no extra per-file syscall needed for hardlink dedup.
+  `FindFirstFileEx` + `FIND_FIRST_EX_LARGE_FETCH` cuts wall-clock time by
+  ~2× in measurements
+  ([measurement](https://blog.s-schoener.com/2024-06-09-find-first-large-fetch/)).
 
 ### macOS
-- `getattrlistbulk`: boyut/tarih gerektiğinde `readdir + lstat`'tan belirgin
-  hızlı. `dumac` bununla `du`'dan 6.39× hızlı
-  ([ölçüm](https://healeycodes.com/maybe-the-fastest-disk-usage-program-on-macos)).
+- `getattrlistbulk`: markedly faster than `readdir + lstat` when size/date
+  are needed. `dumac` is 6.39× faster than `du` with it
+  ([measurement](https://healeycodes.com/maybe-the-fastest-disk-usage-program-on-macos)).
   Crate: [`getattrlistbulk-rs`](https://github.com/quivent/getattrlistbulk-rs).
-- **APFS tuzağı:** clone'lar blok paylaşır, Finder onlarca GB sapabilir.
-  DaisyDisk clone'un yalnızca ilk görünümünü sayıyor. Snapshot'lar taramayla
-  görünmez; `tmutil listlocalsnapshots` gerekir.
-- **Mac App Store'a girme.** Sandbox'lı uygulamaya Full Disk Access verilse bile
-  App Sandbox denetimlerini aşmıyor (Apple DTS). DaisyDisk'in MAS sürümünde
-  "yönetici olarak tara" yok. Developer ID + notarization ile mağaza dışından
-  dağıt.
+- **The APFS trap:** clones share blocks, Finder can be off by tens of GB.
+  DaisyDisk counts only the first appearance of a clone. Snapshots are
+  invisible to a scan; `tmutil listlocalsnapshots` is needed.
+- **Getting onto the Mac App Store.** Even if a sandboxed app is granted Full
+  Disk Access, it doesn't bypass App Sandbox controls (Apple DTS). DaisyDisk's
+  MAS version has no "scan as administrator". Distribute outside the store
+  with Developer ID + notarization.
 
 ### Linux
-- `getdents64` + `statx`, thread başına DFS. `dut` sıcak önbellekte `du`'dan
-  6.87×, dust/dua/gdu'dan 2.8–3.75× hızlı ([dut](https://codeberg.org/201984/dut)).
-- io_uring'de `getdents` yok; yalnızca toplu `statx` için işe yarar.
-- **btrfs/ZFS:** snapshot, reflink, sıkıştırma ve dedup ağaç yürüyüşünü yanlış
-  kılar. Doğrusu için [`btdu`](https://github.com/CyberShadow/btdu) gibi örnekleme
-  gerekir.
+- `getdents64` + `statx`, DFS per thread. `dut` is 6.87× faster than `du` on
+  a warm cache, 2.8–3.75× faster than dust/dua/gdu
+  ([dut](https://codeberg.org/201984/dut)).
+- io_uring has no `getdents`; only useful for batched `statx`.
+- **btrfs/ZFS:** snapshots, reflinks, compression and dedup make a tree walk
+  wrong. The correct approach needs sampling, like
+  [`btdu`](https://github.com/CyberShadow/btdu).
 
-### Genel
-SSD'de work-stealing paralel DFS, HDD/ağda 1–2 thread. Bellek hedefi ncdu 2'nin
-mertebesi: **~25 B/dosya** (3.8M dosya = 162 MB).
+### General
+Work-stealing parallel DFS on SSD, 1–2 threads on HDD/network. Memory target
+on the order of ncdu 2's: **~25 B/file** (3.8M files = 162 MB).
 
-**Ölçüm (9 Eylül 2026), iki taraf da hedefin dışında:** bellekte gerçek tepe
-**276–437 B/girdi**, yani hedefin 11–17 katı (10M dosyaya ekstrapole ~2,8 GB).
-**Ama ~25 B hedefi de yanlış konmuş:** ncdu 2 düğüm başına `own_size`,
-`own_alloc`, `files`, `dirs` tutmuyor, biz tutuyoruz — en agresif daraltmayla
-taban ~93 B/girdi. Gerçekçi hedef dua-cli'nin **64 B**'ı.
-Paralellik tarafı tutuyor — 1 → 8 thread arası **5.2×** — ama **16 thread'te
-gerileme var**, yani "HDD/ağda 1–2 thread" kuralının yanına "SSD'de de çekirdek
-sayısı kadar değil" yazmak gerekiyor. Ayrıntı ve yöntem
-[COMPETITORS.md §1](COMPETITORS.md).
+**Measurement (9 September 2026), both sides off target:** real peak memory
+is **276–437 B/entry**, i.e. 11–17× the target (extrapolated to ~2.8 GB at
+10M files). **But the ~25 B target was also set wrong:** ncdu 2 doesn't keep
+`own_size`, `own_alloc`, `files`, `dirs` per node — we do — so with the most
+aggressive shrinking the floor is ~93 B/entry. The realistic target is
+dua-cli's **64 B**.
+The parallelism side holds — **5.2×** between 1 and 8 threads — but **there's
+a regression at 16 threads**, so next to the "1–2 threads on HDD/network"
+rule we need to add "not core-count-many on SSD either". Detail and method
+in [COMPETITORS.md §1](COMPETITORS.md).
 
-## 4. Treemap render (Faz 3)
+## 4. Treemap rendering (Phase 3)
 
-- **Squarified treemap** (Bruls, Huizing, van Wijk 2000): çocukları azalan
-  sırala, satıra eklerken en kötü en-boy oranı iyileşiyorsa devam et, aksi hâlde
-  satırı sabitle ve kalanla yinele. [PDF](https://vanwijk.win.tue.nl/stm.pdf).
-  ~300 satırlık Rust ile kendin yaz; chart kütüphanesine bağlanma.
-- **Cushion treemap** (van Wijk 1999, SequoiaView → WinDirStat): dikdörtgen başına
-  parabolik tümsek, hiyerarşi boyunca biriken yüzey katsayıları, sabit ışık
-  vektörü. [PDF](https://vanwijk.win.tue.nl/ctm.pdf). GPU'da fragment shader'a
-  birebir oturur; ucuz yaklaşım radyal gradient overlay.
-- **100k+ dikdörtgen için:** layout'u zoom başına bir kez hesapla (Rust, düz
-  dizi) → **LOD**: ~4–6 px²'den küçükleri bölmeyi bırak (gerçek ağaçta herhangi
-  bir zoom'da görünür dikdörtgen binlerle sınırlı) → quadtree ile **culling** →
-  **toplu çizim** (WebGL instanced quad). Hit-test'i widget ağacıyla değil aynı
-  uzamsal indeksle yap.
+- **Squarified treemap** (Bruls, Huizing, van Wijk 2000): sort children
+  descending, keep adding to a row while the worst aspect ratio improves,
+  otherwise fix the row and repeat with what's left.
+  [PDF](https://vanwijk.win.tue.nl/stm.pdf). Write it yourself in ~300 lines
+  of Rust; don't tie it to a charting library.
+- **Cushion treemap** (van Wijk 1999, SequoiaView → WinDirStat): a parabolic
+  bump per rectangle, surface coefficients accumulating through the
+  hierarchy, a fixed light vector.
+  [PDF](https://vanwijk.win.tue.nl/ctm.pdf). Fits a GPU fragment shader
+  one-to-one; a cheap approximation is a radial gradient overlay.
+- **For 100k+ rectangles:** compute the layout once per zoom (Rust, flat
+  array) → **LOD**: stop subdividing below ~4–6 px² (at any zoom, the number
+  of visible rectangles in a real tree is bounded to the thousands) →
+  **culling** with a quadtree → **batched drawing** (WebGL instanced quad).
+  Do hit-testing with the same spatial index, not the widget tree.
 
-## 5. Mobil neden kapsam dışı
+## 5. Why mobile is out of scope
 
-- **iOS:** uygulama yalnızca kendi sandbox'ını görür; başka yerler Files'tan
-  seçilen klasörün alt ağacıyla sınırlı (security-scoped bookmark). Ayarlar →
-  iPhone Depolama'daki uygulama başına hesap için public API yok.
-- **Android:** tam tarama `MANAGE_EXTERNAL_STORAGE` ister;
-  [Play politikasının](https://support.google.com/googleplay/android-developer/answer/10467955)
-  izinli listesinde (dosya yöneticisi, yedekleme, antivirüs, belge yönetimi,
-  arama, şifreleme, cihaz taşıma) **disk analizörü yok**. İzin alınsa bile
-  `Android/data` ve `Android/obb` kapalı. DiskUsage tam bu yüzden Play'den kalktı.
+- **iOS:** the app only sees its own sandbox; anything else is limited to the
+  subtree of a folder picked from Files (security-scoped bookmark). There's
+  no public API for the Settings → iPhone Storage per-app accounting.
+- **Android:** a full scan needs `MANAGE_EXTERNAL_STORAGE`; the [Play
+  policy's](https://support.google.com/googleplay/android-developer/answer/10467955)
+  allow-list (file manager, backup, antivirus, document management, search,
+  encryption, device transfer) **has no disk analyzer**. Even with the
+  permission granted, `Android/data` and `Android/obb` stay closed. That's
+  exactly why DiskUsage was pulled from Play.
 
-## 6. Dağıtım ve imzalama maliyetleri
+## 6. Distribution and signing costs
 
-| Kanal | Maliyet | Not |
+| Channel | Cost | Note |
 |-------|---------|-----|
-| Apple Developer Program | $99/yıl | Notarization zorunlu; MAS'a girme (§3) |
-| Windows: Azure Artifact Signing | $9.99/ay | **Türkiye'den bireysel alınamıyor** (ABD/Kanada bireyler, ABD/CA/AB/UK kuruluşlar) |
-| Windows: OV sertifika | $150–300/yıl | Gerçekçi yol. EV artık SmartScreen'i atlamıyor |
-| Microsoft Store | Birey $0 | MSIX'i Microsoft yeniden imzalar: SmartScreen uyarısı yok. MFT için `runFullTrust` gerekir |
-| Linux: AppImage / AUR / deb / rpm | $0 | Kısıtsız, disk analizörüne uygun |
-| Linux: Flatpak / Snap | $0 | Sandbox sorun: Filelight Flatpak'i "işe yaramaz" raporlandı. `--filesystem=host` + gerekçe gerekir |
+| Apple Developer Program | $99/year | Notarization required; getting onto MAS (§3) |
+| Windows: Azure Artifact Signing | $9.99/month | **Not available to individuals from Turkey** (US/Canada individuals, US/CA/EU/UK organizations) |
+| Windows: OV certificate | $150–300/year | The realistic path. EV no longer bypasses SmartScreen |
+| Microsoft Store | Individual $0 | Microsoft re-signs the MSIX: no SmartScreen warning. Needs `runFullTrust` for MFT |
+| Linux: AppImage / AUR / deb / rpm | $0 | Unrestricted, suits a disk analyzer |
+| Linux: Flatpak / Snap | $0 | Sandbox trouble: Filelight's Flatpak was reported "useless". Needs `--filesystem=host` + justification |
 
-## 7. İncelenmeye değer projeler
+## 7. Projects worth studying
 
-Kod okurken referans: [dua-cli](https://github.com/Byron/dua-cli) (jwalk, TUI;
-ayrıca **64 B arena düğümü + paylaşılan ad deposu** ve SHA-256 bütünlüklü
-`DUASNAP` snapshot formatı — TODO'daki B1 ve A5 için hazır referans),
-[dut](https://codeberg.org/201984/dut) (en hızlı Linux walker),
+Reference while reading code: [dua-cli](https://github.com/Byron/dua-cli)
+(jwalk, TUI; also a **64 B arena node + shared name store** and the
+SHA-256-integrity `DUASNAP` snapshot format — a ready reference for TODO's B1
+and A5),
+[dut](https://codeberg.org/201984/dut) (the fastest Linux walker),
 [gdu](https://github.com/dundee/gdu) (Go, JSON export),
-[ncdu 2](https://dev.yorhel.nl/doc/ncdu2) (bellek modeli),
-[QDirStat](https://github.com/shundhammer/qdirstat) (C++ treemap referansı),
-[Czkawka](https://github.com/qarmin/czkawka) (tek çekirdek + çok arayüz deseni,
-duplicate hattı),
-[SquirrelDisk](https://github.com/adileo/squirreldisk) (Tauri; ölü ama okunabilir).
+[ncdu 2](https://dev.yorhel.nl/doc/ncdu2) (memory model),
+[QDirStat](https://github.com/shundhammer/qdirstat) (C++ treemap reference),
+[Czkawka](https://github.com/qarmin/czkawka) (single core + many UIs pattern,
+duplicate-finding pipeline),
+[SquirrelDisk](https://github.com/adileo/squirreldisk) (Tauri; dead but
+readable).
