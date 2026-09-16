@@ -172,6 +172,32 @@ Bunlar sessizce bozulabilir ve testler dışında fark edilmez:
   `tasks/` (`todo.md`, `lessons.md`) gitignore'da — oturum çalışma notları,
   otorite değil. Bir işi "kapandı" diye işaretlerken `TODO.md`'ye yaz.
 
+## Depoda duran Claude araçları
+
+Bu dosyadaki kuralların bir kısmı artık `.claude/` altında kendini uyguluyor
+(gerekçe: `9f09332`). Hepsi depoda, klonla birlikte geliyor.
+
+| Araç | Ne zaman |
+|------|----------|
+| `invariant-guard` (ajan) | Yukarıdaki değişmezlere dokunan her diff: scan-core, store, diff, dupes, treemap |
+| `downstream-api-guard` (ajan) | Genel API değişti ve `main`'e push edilecek — desktop ile hub'ı buradaki CI görmüyor |
+| `code-reviewer` (ajan) | Sıradan gözden geçirme, commit'ten önce |
+| `test-writer` (ajan) | Yeni test; depodaki üslubu okuyup eşliyor |
+| `changelog-entry` (beceri) | Kullanıcıya görünen değişiklik: beş dilde girdi, sonra `CHANGELOG.md` üretimi |
+| `release` (beceri) | Sürüm kesme; tam sıra [docs/RELEASING.md](docs/RELEASING.md) |
+| `preflight` (beceri) | Push öncesi CI'ın koştuğu her şey, ucuz olan önce |
+
+**`preflight`'ı model kendi çağıramaz** (`disable-model-invocation`), kullanıcı
+`/preflight` yazar — o yüzden `main`'e push etmeden önce çalıştırılmasını öner.
+
+İki hook `.claude/settings.json` ile devrede: `CHANGELOG.md`'ye Edit/Write
+bloklanıyor (üretilen dosya; Bash yönlendirmesi bilerek serbest, sürüm
+prosedürü onu kullanıyor), ve oturum sonunda `crates/*/src` değişmişken
+`changelog.json` değişmemişse oturum başına bir kez soruluyor. Üçüncüsü,
+`.claude/hooks/rustfmt-on-edit.sh`, depoda duruyor ama yalnızca izlenmeyen
+`settings.local.json`'dan bağlanıyor — bir klonun rustfmt ve jq kurmuş olmasını
+şart koşmasın diye. Kendi makinende istiyorsan bağlantıyı sen ekle.
+
 ## Crate'ler
 
 | Crate | Sorumluluk |
