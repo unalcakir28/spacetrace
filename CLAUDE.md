@@ -204,7 +204,7 @@ Bu dosyadaki kuralların bir kısmı artık `.claude/` altında kendini uyguluyo
 `/preflight` yazar — o yüzden `main`'e push etmeden önce çalıştırılmasını öner.
 
 **Dört depoya birden takılan araçlar ayrı duruyor.** `spacetrace-tools`
-plugin'i (`spacetrace-tooling/`, bu deponun yanında, git deposu değil)
+plugin'i (`spacetrace-tooling/`, bu deponun yanında, kendi private deposu)
 `doc-drift-auditor`, `core-pin-guard`, bir `code-reviewer` ve bir `test-writer`
 veriyor; hepsi `spacetrace-tools:` ile adlandırıldığı için buradaki aynı adlı
 ajanlarla çakışmıyor ve **buradakiler daha keskin olduğu için yerinde kalıyor**.
