@@ -1005,3 +1005,31 @@ fn a_phase_that_only_probes_clones_is_not_a_stall() {
         "the clone probe is work, not a stall"
     );
 }
+
+/// A tree deep enough that the walk used to run out of stack and **abort the
+/// process** — not fail the scan, abort it, which in the agent took the HTTP
+/// service and the scheduler down with it.
+///
+/// The cliff was at 210 levels with the default thread stack. 400 is well past
+/// it and still inside `PATH_MAX` on the platforms these tests run on, which is
+/// what stops this from being a test about path length instead.
+#[test]
+fn a_deeply_nested_tree_does_not_abort_the_process() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut path = dir.path().to_path_buf();
+    for _ in 0..400 {
+        path.push("d");
+        fs::create_dir(&path).unwrap();
+    }
+    fs::write(path.join("leaf.txt"), vec![b'x'; 7]).unwrap();
+
+    let (tree, stats) = run(dir.path(), ScanOptions::default());
+
+    assert_eq!(stats.errors, 0, "nesting this deep is legal, not an error");
+    assert_eq!(stats.files, 1, "the one leaf at the bottom");
+    assert_eq!(stats.dirs, 401, "400 levels plus the root");
+    assert_eq!(tree.total_size(), 7, "the walk reached the bottom");
+
+    let root = tree.node(tree.root());
+    assert_eq!(root.dirs, 400, "subdirectories, excluding the root itself");
+}

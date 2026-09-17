@@ -23,6 +23,26 @@ const MAX_REPORTED_ERRORS: usize = 64;
 /// user reads.
 const CLONE_MIN_BYTES: u64 = 64 * 1024;
 
+/// Stack for each walk thread.
+///
+/// The walk recurses once per directory level, so the stack is what bounds the
+/// depth it survives — and rayon hands its workers the ordinary thread default,
+/// which a real tree can exhaust. Nesting about 210 levels used to abort the
+/// process, taking a running agent down with it. This is deliberately far more
+/// than `MAX_WALK_DEPTH` can spend, so the guard below is what ends a descent
+/// and the stack never is.
+const WALK_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// How deep the walk will go, whatever the caller asked for.
+///
+/// Not a reporting choice — `ScanOptions::max_depth` is that one, and it
+/// defaults to unlimited. This is the bound that keeps a pathological tree from
+/// becoming a crash: past it the directory is recorded as an error, exactly
+/// like one that could not be read, and the scan carries on. A tree this deep
+/// is already past what the system can name — 1024 levels exceeds `PATH_MAX` on
+/// macOS before a single component is longer than one character.
+const MAX_WALK_DEPTH: usize = 1024;
+
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     /// Directory names to skip entirely (e.g. `node_modules`, `.git`).
@@ -551,6 +571,7 @@ fn walk_pool(threads: Option<usize>) -> std::io::Result<rayon::ThreadPool> {
     let count = threads.filter(|n| *n > 0).unwrap_or_else(default_threads);
     rayon::ThreadPoolBuilder::new()
         .num_threads(count)
+        .stack_size(WALK_STACK_BYTES)
         .thread_name(|i| format!("spacetrace-walk-{i}"))
         .build()
         .map_err(std::io::Error::other)
@@ -962,7 +983,21 @@ fn place(
         // Ordered so the cheap tests run first: `is_excluded` has to recover
         // the name from the path, and there is no reason to pay for that on a
         // file or when nothing is excluded at all.
+        // Kept separate from the caller's own limit, and checked first: this one
+        // is not a preference, and a tree that trips it has to leave a trace
+        // rather than quietly stopping short of its own contents.
+        let too_deep = is_dir && depth >= MAX_WALK_DEPTH;
+        if too_deep {
+            ctx.note_error(
+                &path,
+                &std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("nested deeper than {MAX_WALK_DEPTH} levels; not descended"),
+                ),
+            );
+        }
         let descend = is_dir
+            && !too_deep
             && ctx.opts.max_depth.is_none_or(|max| depth < max)
             && (!ctx.opts.one_filesystem || meta.dev == ctx.root_dev)
             && !is_excluded(&path, &ctx.opts.exclude_names);

@@ -24,6 +24,7 @@ because anyone can install them.
 ### Fixed
 
 - `spacetrace dupes` listed the same duplicates in a different order every time it ran, so comparing two reports showed differences that were not there. The order now follows the paths, which do not change between runs.
+- A directory tree nested past about 210 levels no longer aborts the scan. The walk recurses once per level and its threads had the ordinary default stack, so a deep enough tree overflowed it and the process died outright — in the agent that took the HTTP API and the scheduler with it, and no snapshot was written. The walk threads now get a 16 MiB stack and stop at 1024 levels, recording the directory as unreadable and carrying on; a tree deeper than the operating system can name is reported the same way, with its path and its reason.
 
 ## 0.7.0 — 2026-09-14
 
