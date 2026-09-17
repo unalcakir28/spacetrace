@@ -190,7 +190,9 @@ crates/
 ├── dupes/       Identical contents: size → prefix → BLAKE3, with a cache trait
 ├── cli/         the spacetrace binary
 ├── agent/       the spacetrace-agent binary: scheduler + HTTP service
-└── treemap/     squarified layout with level-of-detail, for the desktop app
+├── treemap/     squarified layout with level-of-detail, for the desktop app
+├── changelog/   the one changelog source, in five locales, and its generator
+└── buildinfo/   commit, channel and build time, stamped in at compile time
 ```
 
 The tree is stored as an **arena** whose children occupy a contiguous index
@@ -221,7 +223,7 @@ Verified: on `/usr` (141k files), `/usr/share` and `/etc`, both totals match `du
 ## Development
 
 ```bash
-cargo test --workspace     # 150 tests
+cargo test --workspace     # the whole suite, on a real filesystem
 cargo clippy --workspace --all-targets
 cargo fmt --all
 ```
