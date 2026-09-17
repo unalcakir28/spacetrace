@@ -430,6 +430,49 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       **The order is therefore after A.**
       *Competitor:* WizTree (raw MFT), TreeSize Free (administrator),
       WinDirStat 2.5.0.
+
+      **Entry note** *(17 September 2026, written before the Windows
+      session, from a macOS checkout — nothing here is measured.)*
+      Settle these in order; the first answer sets the size of the job.
+
+      1. **Does the enumeration carry sizes?** The `FSCTL_ENUM_USN_DATA`
+         walk is expected to yield a file reference number, a parent
+         reference number and a name — which reconstructs the *tree* but
+         says nothing about *bytes*. If size and allocated size are not
+         in the records, they have to come from parsing the `$DATA`
+         attribute out of the raw MFT, and that is a different and much
+         larger job than B5 was. Measure this first, on a real volume,
+         before any design work — it decides whether B4 is a week or a
+         weekend.
+      2. **It probably does not plug in where B5 does.** The macOS fast
+         path enters at `bulk_list(dir) -> Option<Vec<NamedMeta>>` in
+         `crates/scan-core/src/scan.rs`: one call per directory,
+         returning `None` to fall back. The MFT is read **per volume**,
+         not per directory — the table is enumerated once and the tree
+         is joined on parent references. So B4 is an alternative
+         *source* for a whole root, not a faster listing inside the
+         existing walk, and it wants its own entry point above the walk.
+         Forcing it into `bulk_list` is the wrong shape.
+      3. **The differential test is not optional.** B5's real risk was a
+         second metadata path silently diverging, not speed — the same
+         thing `store::digest` warns about in its own header. Whatever
+         B4 produces must be compared field for field against the normal
+         walk, the Windows counterpart of `assert_same_answer_as_lstat`:
+         hardlinks, reparse points, junctions, a sparse file, a
+         compressed file, and a directory larger than one batch.
+      4. **The fallback matrix is part of the feature, not a caveat.**
+         No administrator, ReFS, FAT/exFAT, network drive → the normal
+         path, with nothing conditional leaking out to the caller.
+         Windows metadata already costs an open handle per entry
+         (`FileIdentity` in `crates/scan-core/src/meta.rs` exists for
+         exactly that reason), and elevation is not the common case, so
+         the normal path stays the one most users hit. B4 does not
+         excuse leaving it slow.
+
+      Same trip, while the machine is there: **B7** is the same API
+      family and belongs directly after this, and the desktop's treemap
+      performance on the Windows WebView is still unverified (Phase 3) —
+      cheap, and only doable here.
 - [x] **B5 macOS `getattrlistbulk` fast path** — done *(11 September
       2026)*. No separate crate was needed: `libc` already exposes
       `getattrlistbulk`. Instead of `readdir` per directory +
