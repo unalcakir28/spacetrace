@@ -135,6 +135,20 @@ async fn health_needs_no_token_and_leaks_nothing() {
     // Monitoring should not be able to read the machine's layout.
     assert!(body.get("roots").is_none(), "health must not list roots");
     assert!(body.get("host").is_none(), "health must not name the host");
+
+    // The field set is pinned, not just checked for absences: docs/AGENT.md
+    // writes it out, and the two drifted apart once already — the document
+    // claimed `status` and `version` alone long after `commit` and `channel`
+    // were added. A new field here should be a deliberate act that updates
+    // both, not something a reader discovers with curl.
+    let mut fields: Vec<&str> = body
+        .as_object()
+        .expect("health is a JSON object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["channel", "commit", "status", "version"]);
 }
 
 #[tokio::test]

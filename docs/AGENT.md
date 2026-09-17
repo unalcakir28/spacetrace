@@ -182,7 +182,7 @@ All routes except `/health` require `Authorization: Bearer <token>`.
 
 | Method | Route | Purpose |
 |--------|-------|---------|
-| GET | `/health` | Liveness and version. No token, and deliberately reveals nothing else |
+| GET | `/health` | Liveness and which build. No token, and nothing about the machine or what it scans |
 | GET | `/status` | Host, uptime, configured roots, running scans with their counters, snapshot count |
 | GET | `/scans` | Every snapshot's metadata, newest first |
 | GET | `/scans/{id}` | One snapshot's metadata |
@@ -291,8 +291,11 @@ snapshot already present with the same host, root and start time is skipped.
 - **The token is compared without an early exit**, so a wrong token takes the
   same time to reject regardless of how much of it was right.
 - **`/health` is unauthenticated** so a container healthcheck or uptime monitor
-  works without being given the token. It returns only `status` and `version` —
-  no hostname, no roots.
+  works without being given the token. It returns `status`, `version`, `commit`
+  and `channel` — which build is running, and nothing else. No hostname, no
+  roots, no paths, nothing about what the machine holds. The commit is there on
+  purpose: every continuous build shares a version number, so it is the only
+  way to identify a box without handing out the token.
 - **Ad-hoc scans are off by default.** With them on, anyone holding the token can
   enumerate any directory the agent's user can read.
 - **The agent never deletes anything** outside its own snapshot database, and
