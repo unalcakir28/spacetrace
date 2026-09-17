@@ -17,3 +17,4 @@ tasks/
 website/node_modules/
 website/dist/
 website/.astro/
+.qa/evidence/
