@@ -210,6 +210,7 @@ Some of the rules in this file now enforce themselves under `.claude/`
 |------|------|
 | `invariant-guard` (agent) | Any diff that touches the invariants above: scan-core, store, diff, dupes, treemap |
 | `downstream-api-guard` (agent) | The public API changed and it is going to be pushed to `main` — CI here does not see desktop or hub |
+| `security-reviewer` (agent) | The agent and the CLI against their threat model: a near-root service, its token, and the two paths that open bytes off the network |
 | `code-reviewer` (agent) | Ordinary review, before a commit |
 | `test-writer` (agent) | A new test; it reads the repo's style and matches it |
 | `changelog-entry` (skill) | A user-visible change: an entry in five locales, then generating `CHANGELOG.md` |
@@ -229,7 +230,9 @@ The ones relevant here: `doc-drift-auditor` (what a diff turned false in the
 docs) and `workspace-audit` (the same thing across all five repos).
 `code-reviewer` and `test-writer` have plugin versions too, but **the agents
 with the same names here are sharper and stay in place** — the prefix prevents
-the collision.
+the collision. `security-reviewer` shares a name without being the same agent:
+the plugin's reads the hub's credentials and dashboard, this one reads a service
+running with near-root privileges on somebody else's server.
 
 **The full list is not kept here**, it is in the plugin's README; keeping an
 inventory in four places produces exactly the drift this file exists to hunt.
