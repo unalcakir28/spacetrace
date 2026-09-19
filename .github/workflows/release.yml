@@ -1,35 +1,21 @@
 name: Release
 
-# Two channels out of one pipeline.
+# One channel: a `v*` tag, and nothing else.
 #
-#   push to main   -> the `continuous` pre-release, rebuilt and replaced in
-#                     place, so "the latest build" always has a fixed URL
-#   push of a v*   -> a normal, permanent release with generated notes
+# This used to build `main` on every push as well, into a rolling `continuous`
+# pre-release. That channel is gone — 19 September 2026. It cost a five-target
+# build per push for something the download page only ever fell back to, and
+# the artifacts it left behind filled the account's Actions storage and took a
+# real release down with it. A build now happens when a version is named.
 #
-# The asset names carry the channel (`spacetrace-continuous-…`) rather than a
-# commit, because install.sh builds the file name from the version it was given
-# and the download page links to one URL that must not move.
+# There is no `paths-ignore` either, and that is deliberate. It only ever ran
+# on pushes, so with `main` gone its single remaining effect would be to skip a
+# *tag* push whose commit happened to touch only documentation — silently
+# publishing nothing. That was already the first trap in the release skill.
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-    # A docs-only commit does not change a binary, and a five-target build is
-    # not free.
-    #
-    # CHANGELOG.md is named individually rather than covered by `*.md`, because
-    # it is not documentation: it is compiled into the binary and it is the
-    # release notes. A changelog-only push must produce a build, or the
-    # continuous release keeps describing the version before it. The filter
-    # applies to tag pushes too, which is how tagging a changelog-only commit
-    # would otherwise run nothing at all.
-    paths-ignore:
-      - "docs/**"
-      - "README.md"
-      - "TODO.md"
-      - "CLAUDE.md"
-      - "tasks/**"
-      - ".gitignore"
   workflow_dispatch:
     inputs:
       tag:
@@ -38,8 +24,8 @@ on:
       publish:
         description: >-
           Publish the result. Off by default, so a dispatch is a dry run.
-          Turn it on to release a tag by hand — which is the way out if the
-          paths-ignore filter above skipped a tag push.
+          Turn it on to release a tag by hand, or to build a version that is
+          not a real tag at all.
         type: boolean
         default: false
 
@@ -56,8 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.pick.outputs.version }}
-      rolling: ${{ steps.pick.outputs.rolling }}
-      channel: ${{ steps.pick.outputs.channel }}
     steps:
       - uses: actions/checkout@v5
       - id: pick
@@ -69,20 +53,9 @@ jobs:
           tagged=false
           if [ -n "${INPUT_TAG:-}" ]; then
             version="$INPUT_TAG"
-            rolling=false
-          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+          else
             version="$GITHUB_REF_NAME"
-            rolling=false
             tagged=true
-          else
-            version=continuous
-            rolling=true
-          fi
-
-          if [ "$rolling" = true ]; then
-            channel=continuous
-          else
-            channel=release
           fi
 
           # A tag that disagrees with the manifest ships a binary that lies
@@ -101,9 +74,7 @@ jobs:
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "rolling=$rolling" >> "$GITHUB_OUTPUT"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-          echo "Building as $version (rolling=$rolling, channel=$channel)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Building as $version" >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: ${{ matrix.target }}
@@ -160,7 +131,7 @@ jobs:
         # commit stamped above a half-truth.
         env:
           SPACETRACE_GIT_SHA: ${{ github.sha }}
-          SPACETRACE_CHANNEL: ${{ needs.meta.outputs.channel }}
+          SPACETRACE_CHANNEL: release
         run: |
           export SPACETRACE_BUILD_DATE="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           if [ "${{ matrix.cross }}" = "true" ]; then
@@ -213,6 +184,13 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
           if-no-files-found: error
+          # One day, not the 90-day default. This only has to survive until
+          # `publish` downloads it later in the same run; the durable copies
+          # are the release assets. At the default, this workflow's output
+          # from every push sat for three months — the desktop repo's did
+          # exactly that until it filled the account's 0.5 GB Actions storage
+          # and took a release down with it.
+          retention-days: 1
 
       - uses: actions/upload-artifact@v4
         if: matrix.arch != ''
@@ -223,6 +201,13 @@ jobs:
           # is lost.
           path: image
           if-no-files-found: error
+          # One day, not the 90-day default. This only has to survive until
+          # `publish` downloads it later in the same run; the durable copies
+          # are the release assets. At the default, this workflow's output
+          # from every push sat for three months — the desktop repo's did
+          # exactly that until it filled the account's 0.5 GB Actions storage
+          # and took a release down with it.
+          retention-days: 1
 
   publish:
     name: publish ${{ needs.meta.outputs.version }}
@@ -264,35 +249,7 @@ jobs:
             | sort -k2 > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Publish the rolling build
-        if: needs.meta.outputs.rolling == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Deleted and recreated rather than edited, so the tag follows main and
-        # an asset dropped from the matrix cannot linger as a stale download.
-        run: |
-          cat > notes.md <<EOF
-          Built from \`main\` at \`${GITHUB_SHA:0:7}\` on $(date -u '+%Y-%m-%d %H:%M UTC').
-
-          This is the newest code, not a release: it has passed CI and nothing else.
-          For something stable, use the latest \`v*\` release.
-
-          \`\`\`sh
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | SPACETRACE_VERSION=continuous sh
-          \`\`\`
-
-          ## Landed since the last release
-          EOF
-          cargo run -q -p spacetrace-changelog -- unreleased --component cli >> notes.md
-          gh release delete continuous --cleanup-tag --yes || true
-          gh release create continuous artifacts/* \
-            --target "$GITHUB_SHA" \
-            --prerelease \
-            --title "Continuous build (main)" \
-            --notes-file notes.md
-
       - name: Publish the release
-        if: needs.meta.outputs.rolling == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.meta.outputs.version }}
@@ -328,13 +285,8 @@ jobs:
         env:
           IMAGE: ghcr.io/${{ github.repository }}
           VERSION: ${{ needs.meta.outputs.version }}
-          ROLLING: ${{ needs.meta.outputs.rolling }}
         run: |
-          if [ "$ROLLING" = "true" ]; then
-            echo "list=${IMAGE}:main,${IMAGE}:edge" >> "$GITHUB_OUTPUT"
-          else
-            echo "list=${IMAGE}:${VERSION},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
-          fi
+          echo "list=${IMAGE}:${VERSION},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v6
         with:

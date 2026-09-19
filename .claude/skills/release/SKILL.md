@@ -160,7 +160,28 @@ pushed:
 cargo update -p spacetrace-scan-core -p spacetrace-store -p spacetrace-changelog
 ```
 
-### Step 5 — verify the artifact, not the workflow
+### Step 5 — rebuild the site
+
+**A release is not finished until the site shows it.** The changelog is copied
+into the site at build time, so a release in this repository does not reach
+`spacetrace.teknobakkall.com` until the site is rebuilt. It used to happen on a
+six-hourly timer; that was removed on 19 September 2026 and this step replaces
+it. If nobody does it, the download page keeps offering the previous version
+and nothing warns anyone.
+
+```bash
+gh workflow run pages.yml --repo unalcakir28/spacetrace-website
+```
+
+If this release moved the newest tag for a component, the site's **static
+download fallback** has to move with it — `CHANNELS[…].fallback` and the
+matching `fallbackName` strings in `spacetrace-website/src/data/releases.ts`.
+Those are the `href`s baked into the HTML before the releases API answers, and
+the `curl` line under the checksums. Left behind, they point at a real older
+release; pointed at a tag that does not exist, every download button 404s.
+`download-contract` is the skill that checks both ends.
+
+### Step 6 — verify the artifact, not the workflow
 
 A green workflow means it built. It does not mean the right thing was
 published, and this is where releases actually go wrong.
@@ -193,10 +214,16 @@ gh release edit v0.7.1 --repo unalcakir28/spacetrace --latest
 
 ## Traps that have actually cost time here
 
-- **`paths-ignore` applies to tag pushes.** Tagging a commit that only touched
-  `docs/` or `*.md` runs no release workflow at all. A real release commit
-  always touches `Cargo.toml` / `package.json` / `tauri.conf.json`, so this
-  only bites when retagging. Way out: `workflow_dispatch` with `publish: true`.
+- **`paths-ignore` used to apply to tag pushes**, so tagging a commit that only
+  touched `docs/` or `*.md` ran no release workflow at all. The filters were
+  removed from all three release workflows on 19 September 2026, when `main`
+  stopped triggering them and skipping a tag push became their only remaining
+  effect. Do not put one back. Way out if a tag ever runs nothing anyway:
+  `workflow_dispatch` with `publish: true`.
+- **Only a `v*` tag builds.** Pushing to `main` publishes nothing, in any of the
+  three repositories, and the site does not rebuild on a timer. If a release
+  looks like it did not happen, check that the tag was actually pushed before
+  looking anywhere else.
 - **`RELEASE_TOKEN` expiry fails the publish step with 403**, in the desktop and
   hub repos only. Re-issue and `gh secret set RELEASE_TOKEN --repo …`.
 - **A green CI in desktop or hub proves nothing about this repo's changelog.**

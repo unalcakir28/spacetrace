@@ -60,22 +60,22 @@ if [ "$VERSION" = "latest" ]; then
     # this downloaded the hub and then failed for having no `spacetrace` in it.
     #
     # The CLI's releases are the ones tagged `v<digit>`; `desktop-v…` and
-    # `hub-v…` are not ours and neither are the rolling `continuous` tags. The
-    # list comes back newest first.
+    # `hub-v…` are not ours. The list comes back newest first.
     #
     # stderr discarded: before the first tagged release this endpoint answers
     # an empty list, which is an expected path handled below, not news.
     VERSION=$(fetch "https://api.github.com/repos/${REPO}/releases?per_page=100" 2>/dev/null |
         grep -o '"tag_name" *: *"v[0-9][^"]*"' |
         sed 's/.*"\(v[^"]*\)"$/\1/' | head -n 1)
-    # `releases/latest` only ever names a non-prerelease, so before the first
-    # tagged release it returns nothing at all. Falling back to the rolling
-    # build rather than dying is what makes the documented one-liner work from
-    # day one — but it is not a release, so say so out loud.
+    # This used to fall back to the rolling `continuous` build so the
+    # documented one-liner worked before the first tagged release. That channel
+    # was removed on 19 September 2026 — there are only tagged releases now —
+    # so there is nothing to fall back to, and saying so is better than
+    # building a download URL around an empty version and reporting a 404.
     if [ -z "$VERSION" ]; then
-        VERSION=continuous
-        echo "No tagged release yet: installing the continuous build of main." >&2
-        echo "It has passed CI and nothing else. Set SPACETRACE_VERSION=v… for a release." >&2
+        echo "No release found for ${REPO}." >&2
+        echo "Set SPACETRACE_VERSION=v… to name one explicitly." >&2
+        exit 1
     fi
 fi
 
