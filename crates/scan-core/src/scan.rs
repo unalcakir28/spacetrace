@@ -7,9 +7,9 @@ use std::time::Duration;
 use rayon::prelude::*;
 
 use crate::capacity::Capacity;
-use crate::live::LiveTree;
 use crate::meta::{display_name, EntryKind, FileIdentity, NamedMeta, RawMeta};
 use crate::mounts::Mounts;
+use crate::partial::PartialTree;
 use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
 
 /// How many failing paths we keep for the report before we only count them.
@@ -254,12 +254,15 @@ pub struct ScanProgress {
     phase: AtomicU8,
     /// Set by [`ScanProgress::cancel`] and read once per directory.
     cancelled: AtomicBool,
-    /// The root's children, filling in as the walk runs.
+    /// The arena the walk is filling, so a caller can read the tree as it
+    /// stands rather than waiting for the whole disk.
     ///
     /// On `ScanProgress` rather than returned by `scan`, because the whole
     /// point is to be readable *while* the scan is running, and the progress
-    /// object is the one thing a caller already holds during that time.
-    pub live: LiveTree,
+    /// object is the one thing a caller already holds during that time. What it
+    /// hands back is an ordinary [`Tree`](crate::Tree), so a caller already able
+    /// to draw a finished scan needs nothing new to draw a running one.
+    pub partial: PartialTree,
     /// Directories whose listing has started and not finished.
     ///
     /// This exists for one failure: a mount that stops answering. The walk
@@ -430,6 +433,9 @@ struct Ctx {
     hardlinks_deduped: AtomicU64,
     errors: Mutex<Vec<(PathBuf, String)>>,
     progress: Arc<ScanProgress>,
+}
+
+impl Ctx {
     /// The arena, written to directly by whichever thread finished listing a
     /// directory.
     ///
@@ -439,19 +445,15 @@ struct Ctx {
     /// short critical section per directory — one for every `readdir`, next to
     /// the two this walk already takes per directory for `reading`.
     ///
+    /// It lives on the progress object rather than here so that the caller can
+    /// read the tree while it is being built; a reader takes this same lock for
+    /// the length of one memcpy and no longer (see [`PartialTree`]).
+    ///
     /// **Nothing that can block goes inside this lock.** No rayon call, no
     /// live-view publish, no `claim_inode`: the section is a memcpy of one
     /// directory's names and a run of node writes, and it stays that way.
-    builder: Mutex<TreeBuilder>,
-}
-
-impl Ctx {
     fn builder(&self) -> std::sync::MutexGuard<'_, TreeBuilder> {
-        // A panicking walker must not take the scan's arena down with it; the
-        // same reasoning as `ScanProgress::reading`.
-        self.builder
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.progress.partial.lock()
     }
 
     /// Ask a mount point for its metadata, with the configured patience.
@@ -638,6 +640,10 @@ fn scan_with(
         nlink: 1,
     });
 
+    // Handed over before the walk starts, because from here on the arena is
+    // shared: the walk writes into it and the caller reads copies of it.
+    progress.partial.install(builder, root_path.clone());
+
     let ctx = Ctx {
         root_dev: root_meta.dev,
         opts,
@@ -647,7 +653,6 @@ fn scan_with(
         hardlinks_deduped: AtomicU64::new(0),
         errors: Mutex::new(Vec::new()),
         progress: Arc::clone(&progress),
-        builder: Mutex::new(builder),
     };
     if let Some(e) = root_failure {
         ctx.note_error(&root_path, &e);
@@ -655,7 +660,7 @@ fn scan_with(
 
     if root_meta.kind == EntryKind::Dir {
         progress.dirs.fetch_add(1, Ordering::Relaxed);
-        pool.install(|| walk(&root_path, root_id, 1, &ctx, None));
+        pool.install(|| walk(&root_path, root_id, 1, &ctx));
     } else {
         progress.files.fetch_add(1, Ordering::Relaxed);
         progress.bytes.fetch_add(root_meta.alloc, Ordering::Relaxed);
@@ -671,10 +676,10 @@ fn scan_with(
         ));
     }
 
-    let mut builder = ctx
-        .builder
-        .into_inner()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Taken back rather than copied: the finished tree is built from these
+    // exact nodes, and once they are gone a snapshot answers `None` — which is
+    // what a refresh still in flight has to be told.
+    let mut builder = progress.partial.take();
     progress.enter_phase(Phase::Finishing);
     let clones_deduped = if ctx.opts.dedupe_clones {
         // On the same pool: this probes one file at a time over `fcntl`, so it
@@ -793,7 +798,7 @@ fn identity_needed(opts: &ScanOptions, is_dir: bool) -> FileIdentity {
 /// caller put it there, which is why the children it adds are guaranteed to sit
 /// at a higher index. Nothing is returned: the tree is the shared arena, not
 /// something assembled from what the recursion hands back.
-fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx, branch: Option<u32>) {
+fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
     // Checked before the syscall, so a cancelled scan stops issuing I/O
     // immediately instead of draining whatever rayon had already queued.
     if ctx.progress.is_cancelled() {
@@ -829,7 +834,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx, branch: Option<u
                 pending.push((path, name_off, name_len, item.meta));
             }
             drop(listing);
-            return place(parent_id, depth, ctx, &names, pending, branch);
+            return place(parent_id, depth, ctx, &names, pending);
         }
     }
 
@@ -891,7 +896,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx, branch: Option<u
     // Listing done; the recursion that follows is not what hangs.
     drop(listing);
 
-    place(parent_id, depth, ctx, &names, pending, branch)
+    place(parent_id, depth, ctx, &names, pending)
 }
 
 /// Account for one directory's entries, write them into the arena as a block,
@@ -911,33 +916,13 @@ fn place(
     ctx: &Ctx,
     names: &str,
     pending: Vec<(PathBuf, u32, u16, RawMeta)>,
-    branch: Option<u32>,
 ) {
-    // The root's own listing is where the live view's branches come from, and
-    // it has to happen before anything is attributed: every byte found under a
-    // child needs a branch id to be added to.
-    let roots = (branch.is_none() && depth == 1).then(|| {
-        ctx.progress
-            .live
-            .install(pending.iter().map(|(path, _, _, meta)| {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                (name, meta.kind == EntryKind::Dir)
-            }))
-    });
-
     let mut children: Vec<NewNode<'_>> = Vec::with_capacity(pending.len());
-    let mut subdirs: Vec<(NodeId, PathBuf, Option<u32>)> = Vec::new();
+    let mut subdirs: Vec<(NodeId, PathBuf)> = Vec::new();
     // Counted up here and published once per directory rather than once per
     // entry. The watcher only needs the numbers to be moving (`StallWatch`),
     // and they move thousands of times a second either way.
     let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
-    // What this directory holds directly, for the live view. Subtree totals
-    // are not summed here: the recursion publishes for the levels below, and
-    // adding them again would count every byte once per ancestor.
-    let (mut live_size, mut live_alloc, mut live_files) = (0u64, 0u64, 0u64);
 
     for (index, (path, name_off, name_len, meta)) in pending.into_iter().enumerate() {
         let is_dir = meta.kind == EntryKind::Dir;
@@ -963,23 +948,6 @@ fn place(
             bytes += alloc;
         }
 
-        // A child of the root carries its own branch; anything deeper carries
-        // the one it inherited. `roots` can be empty when the branches were
-        // already installed by an earlier scan on the same progress object, in
-        // which case nothing is attributed and the live view stays as it was.
-        match &roots {
-            Some(ids) => {
-                if let Some(&id) = ids.get(index) {
-                    ctx.progress.live.add(id, size, alloc, u64::from(!is_dir));
-                }
-            }
-            None => {
-                live_size += size;
-                live_alloc += alloc;
-                live_files += u64::from(!is_dir);
-            }
-        }
-
         // Ordered so the cheap tests run first: `is_excluded` has to recover
         // the name from the path, and there is no reason to pay for that on a
         // file or when nothing is excluded at all.
@@ -1002,11 +970,7 @@ fn place(
             && (!ctx.opts.one_filesystem || meta.dev == ctx.root_dev)
             && !is_excluded(&path, &ctx.opts.exclude_names);
         if descend {
-            let child_branch = match &roots {
-                Some(ids) => ids.get(index).copied(),
-                None => branch,
-            };
-            subdirs.push((index as NodeId, path, child_branch));
+            subdirs.push((index as NodeId, path));
         }
 
         let from = name_off as usize;
@@ -1034,12 +998,6 @@ fn place(
     if bytes > 0 {
         ctx.progress.bytes.fetch_add(bytes, Ordering::Relaxed);
     }
-    if roots.is_none() {
-        if let Some(id) = branch {
-            ctx.progress.live.add(id, live_size, live_alloc, live_files);
-        }
-    }
-
     // The one critical section: this directory's names and its run of nodes.
     // Everything that could block has already happened.
     let start = ctx.builder().push_block(parent_id, children.into_iter());
@@ -1047,11 +1005,9 @@ fn place(
     if subdirs.is_empty() {
         return;
     }
-    subdirs
-        .into_par_iter()
-        .for_each(|(index, path, child_branch)| {
-            walk(&path, start + index, depth + 1, ctx, child_branch);
-        });
+    subdirs.into_par_iter().for_each(|(index, path)| {
+        walk(&path, start + index, depth + 1, ctx);
+    });
 }
 
 /// The platform's one-call directory listing, where there is one.

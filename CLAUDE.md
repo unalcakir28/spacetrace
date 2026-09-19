@@ -18,7 +18,7 @@ tool X do this" is [docs/COMPETITORS.md](docs/COMPETITORS.md).
 ## Commands
 
 ```bash
-cargo test --workspace                   # 402 tests, all must pass
+cargo test --workspace                   # 410 tests, all must pass
 cargo clippy --workspace --all-targets   # must be warning-free
 cargo fmt --all
 cargo build --release                    # binary: target/release/spacetrace

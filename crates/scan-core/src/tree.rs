@@ -468,6 +468,12 @@ pub(crate) struct NewNode<'a> {
 /// which is what makes the arena invariants structural rather than remembered:
 /// a caller cannot push a child without saying whose child it is, and cannot
 /// push a directory's children in two pieces.
+///
+/// `Default` is an empty arena, which is what a [`PartialTree`] holds before a
+/// walk installs one and what it is left with after the walk takes it back.
+///
+/// [`PartialTree`]: crate::partial::PartialTree
+#[derive(Debug, Default)]
 pub(crate) struct TreeBuilder {
     pub(crate) nodes: Vec<Node>,
     names: String,
@@ -608,6 +614,44 @@ impl TreeBuilder {
             p.files += files;
             p.dirs += dirs + u32::from(is_dir);
         }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// The arena as it stands, copied.
+    ///
+    /// Deliberately not aggregated: this runs under the lock the walk pushes
+    /// directories through, so it is kept to a memcpy and the pass that turns
+    /// the copy into a tree happens afterwards, with the lock released
+    /// ([`TreeBuilder::into_partial`]).
+    pub(crate) fn copy(&self) -> TreeBuilder {
+        TreeBuilder {
+            nodes: self.nodes.clone(),
+            names: self.names.clone(),
+        }
+    }
+
+    /// Turn a copy into a tree of what has been read so far.
+    ///
+    /// The same aggregation a finished scan gets, on a smaller arena — every
+    /// child is already after its parent, so the one reverse pass reaches a
+    /// node only once everything below it has been added in. Unlike
+    /// [`TreeBuilder::finish`] it answers `None` rather than asserting on an
+    /// empty arena: a snapshot can be asked for before the root is pushed, or
+    /// after the walk has taken its nodes back, and neither is a fault.
+    pub(crate) fn into_partial(mut self, root_path: PathBuf) -> Option<Tree> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        self.aggregate();
+        debug_assert_eq!(
+            Tree::check(&self.nodes),
+            Ok(()),
+            "a half-filled arena is still a tree, or the walk broke an invariant"
+        );
+        Some(Tree::new(self.nodes, self.names, root_path))
     }
 
     pub(crate) fn finish(mut self, root_path: PathBuf) -> Tree {

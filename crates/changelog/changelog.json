@@ -501,7 +501,138 @@
       ]
     },
     "desktop": {
-      "unreleased": [],
+      "unreleased": [
+        {
+          "kind": "added",
+          "text": {
+            "de": "Ein laufender Scan wird jetzt beim Füllen gezeigt: dieselbe Ordnerliste, dieselbe Karte und derselbe Inspektor wie bei einem fertigen Scan, über einem Baum, der jede Sekunde wächst. Bisher stand bis zum Ende des Scans nur ein Prozentsatz auf dem Bildschirm. Jede Zahl darin ist das bisher Gelesene, deshalb ist die Ansicht als „unvollständig“ gekennzeichnet und weder Löschen noch Speichern ist darin erlaubt; was Sie geöffnet, ausgewählt oder herangezoomt haben, übersteht die Aktualisierungen und den Moment, in dem der Scan endet.",
+            "en": "A running scan is now shown as it fills in: the same folder list, map and inspector a finished scan gets, over a tree that grows every second. Until now the screen held nothing but a percentage until the scan ended. Every figure in it is what has been read so far, so the view is marked partial and neither deleting nor saving is allowed while it runs; what you have opened, selected or zoomed into survives the refreshes and the moment the scan lands.",
+            "fr": "Une analyse en cours s'affiche désormais à mesure qu'elle se remplit : la même liste de dossiers, la même carte et le même inspecteur qu'une analyse terminée, sur une arborescence qui grandit chaque seconde. Jusqu'ici, l'écran n'affichait qu'un pourcentage jusqu'à la fin de l'analyse. Chaque chiffre correspond à ce qui a été lu jusqu'à présent : la vue est donc marquée comme partielle, et ni la suppression ni l'enregistrement n'y sont autorisés ; ce que vous avez ouvert, sélectionné ou agrandi survit aux rafraîchissements et à l'instant où l'analyse se termine.",
+            "it": "Una scansione in corso viene ora mostrata mentre si riempie: lo stesso elenco di cartelle, la stessa mappa e lo stesso ispettore di una scansione completata, su un albero che cresce ogni secondo. Finora lo schermo mostrava solo una percentuale fino alla fine della scansione. Ogni cifra è ciò che è stato letto finora, quindi la vista è contrassegnata come parziale e non è consentito né eliminare né salvare mentre è in corso; ciò che avete aperto, selezionato o ingrandito sopravvive agli aggiornamenti e al momento in cui la scansione termina.",
+            "tr": "Süren tarama artık dolarken gösteriliyor: bitmiş bir taramanınkiyle aynı klasör listesi, aynı harita ve aynı inceleme paneli, her saniye büyüyen bir ağaç üzerinde. Şimdiye kadar tarama bitene dek ekranda bir yüzdeden başka bir şey yoktu. İçindeki her rakam şu ana kadar okunanı gösterdiği için görünüm kısmi olarak işaretleniyor ve tarama sürerken ne silmeye ne de kaydetmeye izin veriliyor; açtığınız, seçtiğiniz ya da yakınlaştırdığınız şey hem tazelemelerden hem de taramanın bittiği andan sağ çıkıyor."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Die Vorschau, die ein erster Scan zeichnete, blieb den ganzen Scan über leer: ihre Zeichenfläche konnte keine Höhe bekommen, sodass sie nie etwas anforderte und nur die Überschrift „Oberste Ebene wird gelesen“ stehen blieb.",
+            "en": "The preview a first scan drew stayed blank for the whole scan: its drawing area could not take a height, so it never asked for anything and nothing but the heading \"Reading the top level\" was left on screen.",
+            "fr": "L'aperçu dessiné par une première analyse restait vide pendant toute l'analyse : sa zone de dessin ne pouvait prendre aucune hauteur, elle ne demandait donc jamais rien et il ne restait à l'écran que le titre « Lecture du niveau supérieur ».",
+            "it": "L'anteprima disegnata da una prima scansione restava vuota per tutta la scansione: la sua area di disegno non poteva assumere un'altezza, quindi non chiedeva mai nulla e sullo schermo restava solo l'intestazione «Lettura del livello superiore».",
+            "tr": "İlk taramanın çizdiği önizleme tarama boyunca boş kalıyordu: çizim alanı yükseklik alamadığı için hiçbir şey istemiyor, ekranda \"Üst seviye okunuyor\" başlığından başka bir şey kalmıyordu."
+          }
+        },
+        {
+          "kind": "changed",
+          "text": {
+            "de": "Die Kopfleiste trug vierzehn Schaltflächen und brach bei der Breite, in der das Fenster tatsächlich öffnet, auf drei Zeilen um — und schob damit die Karte nach unten. Jede Bedienung sitzt jetzt bei dem, was sie ändert: oben nur noch die App und woher ein Baum kommt, die Aktionen für den offenen Scan hinter dem ⋯ neben seinem Pfad, und Form und Farbe der Karte an der Karte selbst. Welches Maß gilt, wählen Sie durch Klick auf die Summe, die Sie sehen wollen: beide stehen ohnehin dort, die gewählte hell und unterstrichen. „Zoom zurücksetzen“ ist entfallen — der erste Eintrag im Pfad über der Karte tat schon dasselbe.",
+            "en": "The top bar carried fourteen buttons and wrapped onto three lines at the width the window actually opens at, pushing the map down. Every control now sits beside the thing it changes: the bar holds the app and where a tree comes from, the actions for the open scan are behind the ⋯ next to its path, and the map's shape and colouring are on the map. Which measure the figures are in is chosen by clicking the total you want — both are printed either way, the chosen one bright and underlined. \"Reset zoom\" is gone; the first step of the path above the map already did it.",
+            "fr": "La barre supérieure comptait quatorze boutons et passait à trois lignes à la largeur à laquelle la fenêtre s'ouvre réellement, repoussant la carte vers le bas. Chaque commande se trouve désormais à côté de ce qu'elle modifie : la barre porte l'application et la provenance de l'arborescence, les actions sur l'analyse ouverte sont derrière le ⋯ à côté de son chemin, et la forme et la couleur de la carte sont sur la carte. La mesure utilisée se choisit en cliquant sur le total voulu : les deux sont affichés de toute façon, celui retenu en clair et souligné. « Réinitialiser le zoom » a disparu ; le premier élément du chemin au-dessus de la carte le faisait déjà.",
+            "it": "La barra superiore conteneva quattordici pulsanti e andava a capo su tre righe alla larghezza a cui la finestra si apre davvero, spingendo la mappa in basso. Ora ogni comando sta accanto a ciò che modifica: la barra porta l'applicazione e la provenienza dell'albero, le azioni sulla scansione aperta stanno dietro il ⋯ accanto al suo percorso, e forma e colore della mappa stanno sulla mappa. La misura in cui sono espresse le cifre si sceglie facendo clic sul totale desiderato: entrambi sono stampati comunque, quello scelto chiaro e sottolineato. «Reimposta zoom» non c'è più: il primo passo del percorso sopra la mappa faceva già lo stesso.",
+            "tr": "Üst çubukta on dört düğme vardı ve pencerenin gerçekte açıldığı genişlikte üç satıra taşarak haritayı aşağı itiyordu. Artık her denetim, değiştirdiği şeyin yanında: çubukta yalnızca uygulama ve ağacın nereden geldiği var, açık taramaya ait işlemler yolunun yanındaki ⋯ altında, haritanın şekli ve rengi ise haritanın üzerinde. Rakamların hangi ölçüde olduğunu, istediğiniz toplama tıklayarak seçiyorsunuz: ikisi de zaten yazılı, seçili olan parlak ve altı çizili. \"Yakınlaştırmayı sıfırla\" kaldırıldı; haritanın üstündeki yolun ilk adımı zaten aynı işi yapıyordu."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Die Karte legte sich über die Detailspalte rechts, sobald die Ordnerliste breit genug gezogen war — oder das Fenster schmal genug —, dass für die Karte weniger Platz blieb, als ihre eigene Legende breit ist. Die beiden Seitenspalten weichen jetzt zurück, die Karte behält eine Mindestbreite, und keine der drei überlappt die andere mehr.",
+            "en": "The map painted over the details column on the right as soon as the folder list was dragged wide enough — or the window made narrow enough — that the map was left with less room than its own key is wide. The two side panes now give way, the map keeps a minimum width, and none of the three overlaps another.",
+            "fr": "La carte se superposait à la colonne de détails à droite dès que la liste des dossiers était élargie — ou la fenêtre rétrécie — au point de laisser à la carte moins de place que la largeur de sa propre légende. Les deux panneaux latéraux cèdent désormais du terrain, la carte conserve une largeur minimale et aucun des trois ne recouvre les autres.",
+            "it": "La mappa si sovrapponeva alla colonna dei dettagli a destra non appena l'elenco delle cartelle veniva allargato — o la finestra ristretta — al punto da lasciare alla mappa meno spazio della larghezza della sua stessa legenda. Ora i due pannelli laterali cedono, la mappa mantiene una larghezza minima e nessuno dei tre si sovrappone agli altri.",
+            "tr": "Klasör listesi yeterince genişletildiğinde — ya da pencere yeterince daraltıldığında — haritaya kendi göstergesinin genişliğinden az yer kalıyor ve harita sağdaki ayrıntı sütununun üzerine taşıyordu. Artık iki yan panel geri çekiliyor, harita en az bir genişliği koruyor ve üçü birbirinin üzerine binmiyor."
+          }
+        },
+        {
+          "kind": "changed",
+          "text": {
+            "de": "Die Ordnerliste startet schmaler. Über die Hälfte ihrer Breite ging für die Zahlenspalte drauf; diese wurde um 16px enger gefasst — nur Abstände und die Länge des Balkens, keine Zahl sagt weniger als vorher — und die Startbreite ist mit ihr gesunken. Eine selbst eingestellte Breite wird weiterhin gemerkt; ein Doppelklick auf den Trenner setzt sie zurück.",
+            "en": "The folder list starts narrower. More than half its width went to the figures column; that column was tightened by 16px — gaps and the length of the bar, no figure says less than it did — and the starting width came down with it. A width you set yourself is still remembered, and double-clicking the divider resets it.",
+            "fr": "La liste des dossiers démarre plus étroite. Plus de la moitié de sa largeur revenait à la colonne des chiffres ; celle-ci a été resserrée de 16px — les espaces et la longueur de la barre, aucun chiffre n'en dit moins qu'avant — et la largeur de départ a suivi. Une largeur que vous définissez reste mémorisée, et un double-clic sur le séparateur la réinitialise.",
+            "it": "L'elenco delle cartelle parte più stretto. Più della metà della sua larghezza andava alla colonna delle cifre; quella colonna è stata ristretta di 16px — spaziature e lunghezza della barra, nessuna cifra dice meno di prima — e la larghezza iniziale è scesa con lei. Una larghezza impostata da voi resta memorizzata e un doppio clic sul divisore la reimposta.",
+            "tr": "Klasör listesi daha dar açılıyor. Genişliğinin yarısından fazlasını rakam sütunu alıyordu; o sütun 16px daraltıldı — yalnızca boşluklar ve çubuğun uzunluğu, hiçbir rakam eskisinden az şey söylemiyor — ve başlangıç genişliği de onunla birlikte düştü. Kendi ayarladığınız genişlik yine hatırlanıyor, ayıracı çift tıklayınca sıfırlanıyor."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Sobald über der Karte ein Fehler gemeldet wurde, fiel die Karte in sich zusammen: der Fehlerstreifen übernahm den Platz, der ihr zustand. Sie verschwand also genau in dem Moment, in dem das Fenster erklären wollte, was schiefgelaufen war.",
+            "en": "The map collapsed as soon as an error was reported above it: the error strip took the space that belonged to the map. It disappeared at exactly the moment the window was trying to explain what had gone wrong.",
+            "fr": "La carte s'effondrait dès qu'une erreur était signalée au-dessus d'elle : le bandeau d'erreur prenait la place qui lui revenait. Elle disparaissait donc au moment précis où la fenêtre tentait d'expliquer ce qui n'allait pas.",
+            "it": "La mappa collassava non appena veniva segnalato un errore sopra di essa: la striscia dell'errore occupava lo spazio che spettava alla mappa. Spariva proprio nel momento in cui la finestra cercava di spiegare cosa fosse andato storto.",
+            "tr": "Haritanın üstünde bir hata bildirildiği anda harita çöküyordu: hata şeridi, haritaya ait olan yeri alıyordu. Yani pencere tam da neyin ters gittiğini anlatmaya çalışırken harita kayboluyordu."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Die Karte ist deutlich schneller geworden, ohne ein Detail zu verlieren. Die Maus darüber zu bewegen ließ das ganze Fenster stocken: jede Bewegung zeichnete alle rund 112.000 Rechtecke neu, nur um einen dünnen Rahmen zu versetzen — 39,4 ms pro Bewegung, jetzt 0,13 ms. Das Bild selbst wird als einige Dutzend Pfade gezeichnet statt mit einem Aufruf pro Kachel (40,6 ms auf 21,4 ms), und die Koordinaten gehen kürzer über die Grenze, was die Antwort einer Karte von 10,4 MB auf 5,2 MB bringt.",
+            "en": "The map got substantially faster without losing any detail. Moving the pointer across it made the whole window stutter: every move repainted all ~112,000 rectangles in order to shift one thin outline — 39.4 ms per move, now 0.13 ms. The picture itself is drawn as a few dozen paths rather than one call per tile (40.6 ms down to 21.4 ms), and the coordinates cross the boundary in shorter form, taking a map's response from 10.4 MB to 5.2 MB.",
+            "fr": "La carte est nettement plus rapide, sans rien perdre en détail. Déplacer le pointeur faisait saccader toute la fenêtre : chaque déplacement redessinait les quelque 112 000 rectangles pour décaler un fin contour — 39,4 ms par déplacement, désormais 0,13 ms. L'image elle-même est tracée en quelques dizaines de chemins au lieu d'un appel par tuile (40,6 ms ramenées à 21,4 ms), et les coordonnées traversent la frontière sous une forme plus courte, ce qui fait passer la réponse d'une carte de 10,4 Mo à 5,2 Mo.",
+            "it": "La mappa è diventata molto più veloce senza perdere alcun dettaglio. Muovere il puntatore faceva scattare l'intera finestra: ogni movimento ridisegnava tutti i circa 112.000 rettangoli per spostare un sottile contorno — 39,4 ms per movimento, ora 0,13 ms. L'immagine stessa viene disegnata con qualche decina di tracciati invece di una chiamata per tassello (da 40,6 ms a 21,4 ms), e le coordinate attraversano il confine in forma più breve, portando la risposta di una mappa da 10,4 MB a 5,2 MB.",
+            "tr": "Harita, hiçbir ayrıntı kaybetmeden belirgin biçimde hızlandı. İşaretçiyi üzerinde gezdirmek pencerenin tamamını takılmaya sokuyordu: her hareket, ince bir çerçeveyi oynatmak için yaklaşık 112.000 dikdörtgenin hepsini yeniden çiziyordu — hareket başına 39,4 ms, şimdi 0,13 ms. Resmin kendisi de karo başına bir çağrı yerine birkaç düzine yol olarak çiziliyor (40,6 ms'den 21,4 ms'ye) ve koordinatlar sınırı daha kısa biçimde geçiyor; bu da bir haritanın yanıtını 10,4 MB'tan 5,2 MB'a indiriyor."
+          }
+        },
+        {
+          "kind": "changed",
+          "text": {
+            "de": "Das Fenster lässt sich nicht mehr so klein ziehen, dass man damit nicht mehr arbeiten kann. Die Mindestgröße ist jetzt 1080 × 700 statt 900 × 600: bei der alten war die Karte kleiner als die Ordnerliste daneben.",
+            "en": "The window can no longer be made too small to work in. The smallest size is now 1080 by 700 rather than 900 by 600: at the old one the map ended up smaller than the folder list beside it.",
+            "fr": "La fenêtre ne peut plus être réduite au point de devenir inutilisable. La taille minimale passe de 900 × 600 à 1080 × 700 : avec l'ancienne, la carte finissait plus petite que la liste de dossiers à côté d'elle.",
+            "it": "La finestra non può più essere rimpicciolita al punto da non poterci lavorare. La dimensione minima ora è 1080 × 700 invece di 900 × 600: con quella precedente la mappa finiva per essere più piccola dell'elenco delle cartelle accanto.",
+            "tr": "Pencere artık içinde çalışılamayacak kadar küçültülemiyor. En küçük boyut 900 × 600 yerine 1080 × 700: eskisinde harita, yanındaki klasör listesinden daha küçük kalıyordu."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Scans öffnen sich jetzt in Tabs. Der Start-Tab bleibt links und wird nie geschlossen, ein weiterer Scan kostet also nicht mehr den, den Sie gerade lesen; jeder Scan bekommt einen eigenen Tab, und dazwischen lässt sich frei wechseln. Einen Tab zu schließen gibt seinen Speicher zurück — ein Scan mit einer Million Einträgen sind rund hundert Megabyte, solange er offen ist.",
+            "en": "Scans now open in tabs. Home stays on the left and is never closed, so starting another scan no longer means losing the one you are reading; each scan gets a tab of its own and they can be switched between freely. Closing a tab gives its memory back — a scan of a million entries is about a hundred megabytes for as long as it is open.",
+            "fr": "Les analyses s'ouvrent désormais dans des onglets. L'accueil reste à gauche et ne se ferme jamais : lancer une autre analyse ne coûte plus celle que vous êtes en train de lire. Chaque analyse a son onglet et l'on passe librement de l'une à l'autre. Fermer un onglet rend sa mémoire — une analyse d'un million d'entrées pèse une centaine de mégaoctets tant qu'elle reste ouverte.",
+            "it": "Le scansioni ora si aprono in schede. La home resta a sinistra e non si chiude mai, quindi avviare un'altra scansione non significa più perdere quella che stai leggendo; ogni scansione ha una scheda propria e si passa liberamente dall'una all'altra. Chiudere una scheda restituisce la sua memoria — una scansione da un milione di voci è circa un centinaio di megabyte finché resta aperta.",
+            "tr": "Taramalar artık sekmelerde açılıyor. Ana sayfa solda kalıyor ve hiç kapanmıyor; böylece yeni bir tarama başlatmak, okumakta olduğunuzu kaybetmek anlamına gelmiyor. Her tarama kendi sekmesini alıyor ve sekmeler arasında serbestçe geçilebiliyor. Bir sekmeyi kapatmak belleği geri veriyor — bir milyon girdilik tarama, açık kaldığı sürece yaklaşık yüz megabayt."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Der Startbildschirm listet die Laufwerke auf. Ein ganzes Dateisystem zu scannen war immer möglich und hatte nirgends einen Knopf: man musste wissen, dass die Ordnerauswahl auch die Wurzel eines Laufwerks annimmt. Jedes Laufwerk wird mit seinem freien Platz gezeigt, externe eingeschlossen.",
+            "en": "The opening screen lists the disks. Scanning a whole filesystem was always possible and had no button anywhere: you had to know that the folder chooser accepts the root of a drive. Each disk is shown with its free space, external drives included.",
+            "fr": "L'écran d'accueil liste les disques. Analyser un système de fichiers entier était déjà possible et n'avait de bouton nulle part : il fallait savoir que le sélecteur de dossier accepte la racine d'un disque. Chaque disque est affiché avec son espace libre, les disques externes compris.",
+            "it": "La schermata iniziale elenca i dischi. Scansionare un intero file system era già possibile e non aveva un pulsante da nessuna parte: bisognava sapere che il selettore di cartelle accetta la radice di un disco. Ogni disco è mostrato con il suo spazio libero, quelli esterni inclusi.",
+            "tr": "Açılış ekranı artık diskleri listeliyor. Bütün bir dosya sistemini taramak zaten mümkündü ama hiçbir yerde butonu yoktu: klasör seçicinin bir sürücünün kökünü kabul ettiğini bilmeniz gerekiyordu. Her disk boş alanıyla birlikte gösteriliyor, harici sürücüler dahil."
+          }
+        },
+        {
+          "kind": "changed",
+          "text": {
+            "de": "Erneut scannen, Snapshot speichern und Verlauf stecken nicht länger hinter einer einzigen unbeschrifteten Schaltfläche. Sie stehen benannt in der Zeile, die sagt was geöffnet ist, sie stehen unten im Rechtsklick-Menü, und der Verlauf — der einzige, der keinen offenen Scan braucht — steht zusätzlich auf dem Startbildschirm.",
+            "en": "Rescan, Save snapshot and History are no longer hidden behind a single unlabelled button. They are named buttons on the line that says what is open, they are at the foot of the right-click menu, and History — the only one that does not need a scan open first — is on the opening screen too.",
+            "fr": "Relancer l'analyse, Enregistrer un instantané et Historique ne sont plus cachés derrière un seul bouton sans libellé. Ce sont des boutons nommés sur la ligne qui indique ce qui est ouvert, ils figurent au bas du menu contextuel, et Historique — le seul qui n'exige pas une analyse ouverte — est aussi sur l'écran d'accueil.",
+            "it": "Ripeti scansione, Salva istantanea e Cronologia non sono più nascosti dietro un unico pulsante senza etichetta. Sono pulsanti con un nome sulla riga che dice cosa è aperto, sono in fondo al menu contestuale, e Cronologia — l'unico che non richiede una scansione aperta — è anche nella schermata iniziale.",
+            "tr": "Yeniden tara, Anlık görüntü kaydet ve Geçmiş artık etiketsiz tek bir butonun arkasında gizli değil. Açık olanı gösteren satırda adlarıyla birer buton olarak duruyorlar, sağ tık menüsünün altında da varlar; Geçmiş — önce bir tarama açık olmasını gerektirmeyen tek komut — ayrıca açılış ekranında."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Die Links Website und Quellcode im Über-Fenster sowie der Changelog-Link im Update-Hinweis taten nichts. Die Berechtigung, mit der diese App eine Adresse an den Browser übergibt, lässt ohne eine ihr übergebene Liste keine Adresse durch — und es gab keine; der Fehlschlag wurde an jeder Aufrufstelle verworfen, sodass ein Knopf, der nie funktionieren konnte, genauso aussah wie einer, der es tat.",
+            "en": "The Website and Source code links in the About panel, and the changelog link in the update notice, did nothing. The permission that lets this app hand an address to the browser allows no address unless it is given a list, and it had none; the failure was then discarded at every call site, so a button that was never going to work looked exactly like one that was.",
+            "fr": "Les liens Site web et Code source du panneau À propos, ainsi que le lien du journal des modifications dans le bandeau de mise à jour, ne faisaient rien. L'autorisation qui permet à cette application de confier une adresse au navigateur ne laisse passer aucune adresse tant qu'on ne lui donne pas une liste, et elle n'en avait aucune ; l'échec était ensuite ignoré à chaque appel, si bien qu'un bouton qui ne pouvait pas fonctionner ressemblait exactement à un bouton qui fonctionnait.",
+            "it": "I collegamenti Sito web e Codice sorgente nel pannello Informazioni, e il collegamento al registro delle modifiche nella barra di aggiornamento, non facevano nulla. Il permesso che consente a questa app di passare un indirizzo al browser non lascia passare alcun indirizzo finché non gli si fornisce un elenco, e non ne aveva nessuno; l'errore veniva poi scartato a ogni chiamata, così un pulsante che non avrebbe mai funzionato era identico a uno che funzionava.",
+            "tr": "Hakkında panelindeki Web sitesi ve Kaynak kodu bağlantıları ile güncelleme şeridindeki değişiklik günlüğü bağlantısı hiçbir şey yapmıyordu. Uygulamanın tarayıcıya adres iletmesini sağlayan izin, kendisine bir liste verilmedikçe hiçbir adrese geçit vermiyor ve liste boştu; hata da her çağrı yerinde yutuluyordu, dolayısıyla hiçbir zaman çalışmayacak bir buton çalışan bir butondan ayırt edilemiyordu."
+          }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Ein Rechtsklick überall dort, wo die App kein eigenes Menü hat, öffnete das der Web-Ansicht mit dem Eintrag Neu laden — der jeden offenen Scan verwarf und eher wie ein Absturz aussah als wie etwas Gewolltes. Dieses Menü ist jetzt überall unterdrückt außer in Textfeldern, wo es der einzige Weg zu Kopieren und Einfügen ist.",
+            "en": "Right-clicking anywhere the app had no menu of its own brought up the web view's, offering Reload — which threw away every open scan and looked like a crash rather than something anyone asked for. That menu is now suppressed everywhere except in text fields, where it is the only route to copy and paste.",
+            "fr": "Un clic droit là où l'application n'a pas de menu à elle ouvrait celui de la vue web, avec Recharger — qui jetait toutes les analyses ouvertes et ressemblait à un plantage plutôt qu'à une action demandée. Ce menu est désormais supprimé partout sauf dans les champs de texte, où il est le seul accès au copier-coller.",
+            "it": "Il clic destro ovunque l'app non avesse un menu proprio apriva quello della vista web, con Ricarica — che buttava via ogni scansione aperta e sembrava un crash più che qualcosa di richiesto. Quel menu ora è soppresso ovunque tranne nei campi di testo, dove è l'unica via per copia e incolla.",
+            "tr": "Uygulamanın kendi menüsünün olmadığı her yerde sağ tık, web görünümünün menüsünü açıyor ve Yeniden Yükle sunuyordu — bu da açık bütün taramaları siliyor, istenmiş bir şeyden çok çökme gibi görünüyordu. O menü artık metin alanları dışında her yerde bastırılıyor; metin alanlarında kopyala-yapıştırın tek yolu olduğu için duruyor."
+          }
+        }
+      ],
       "releases": [
         {
           "version": "0.7.0",

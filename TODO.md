@@ -632,8 +632,20 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       stays is a decision that needs context this crate doesn't have.
       *Competitor:* DiskRaptor (xxh3), WinDirStat 2.5.0, Czkawka.
 - [x] **C5 Tree that grows live during a scan (desktop)** — done
-      *(11 September 2026)*. `scan-core/src/live.rs` + `LiveMap.tsx` on
-      the desktop.
+      *(11 September 2026)*, **and replaced *(19 September 2026)***.
+      `scan-core/src/live.rs` and `LiveMap.tsx` are both deleted; a
+      running scan now hands back an ordinary `Tree` through
+      `ScanProgress::partial` and the window draws it with the same
+      `Treemap` it draws a finished scan with.
+      **What the replacement cost the argument below:** the single-level
+      decision was sound for a structure built alongside the arena, and
+      wrong once the arena itself could be read. `PartialTree` publishes
+      no second structure at all — it takes a consistent view of the
+      nodes the walk has already written — so "a structure that grows on
+      disk for squares that can never be seen" stopped being the choice
+      on offer. Everything else here still holds and is kept because it
+      is the reasoning, not the code.
+      The original entry follows.
       **A single level, and that's a decision, not a rough draft**: a
       treemap doesn't draw a floor under minimum area, so the only part
       still readable while a scan is flying is the top level, and the
@@ -651,7 +663,9 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       **The same `squarify` routine** draws both the live preview and the
       finished map (made public in the treemap crate), so the picture
       doesn't rearrange itself once the scan finishes — the handoff is a
-      data change, not an algorithm change.
+      data change, not an algorithm change. *(The replacement goes
+      further: it is the same `layout` call on the same kind of tree, so
+      there is no handoff left to get wrong.)*
       **Only while the window is idle**: a rescan doesn't touch a map
       that's currently being read, because this app's rule is "work never
       takes the window out of your hands".
