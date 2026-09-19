@@ -136,7 +136,7 @@ check runs on tag pushes only, and a `workflow_dispatch` bypasses it entirely.
 
 ### Step 3 — commit and push here
 
-Turkish commit message, body says **why** (repo convention). State which
+English commit message, body says **why** (repo convention). State which
 components were closed and whether the schema ordering applied. Commit and push
 are pre-authorised in this project; tagging is not — confirm the tag with the
 user if the version was not already agreed.
