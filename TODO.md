@@ -1198,28 +1198,84 @@ ready.
       [unalcakir28/spacetrace-website](https://github.com/unalcakir28/spacetrace-website).
       Done in the same move as the domain, because the repository name was
       part of the URL.
-- [ ] **`robots.txt` and `llms.txt`** — both are now possible since the
-      domain arrived. They go into `public/` in the site repository.
-      `llms.txt` is the emerging convention for introducing the project to
-      AI agents.
-- [ ] **JSON-LD structured data** (currently 0). The `SoftwareApplication`
-      schema is the machine-readable answer to "what is this, which OS,
-      which license, is it free" questions. Should be generated per page and
-      per language. Note: astro.build's own site doesn't have it either, so
-      it's not a universal practice — putting it ahead of `og:image` would
-      be too presumptuous.
-- [ ] **`og:image` and Twitter card** (neither exists). Right now every
-      share on LinkedIn/X/Slack/Discord shows up as a bare link. A 1200×630
-      image is needed; the treemap itself is the natural candidate.
-      astro.build has one.
+- [x] **`robots.txt` and `llms.txt`** — done *(21 September 2026)*, both in
+      `public/` in the site repository. `robots.txt` is allow-all and the
+      `Sitemap:` line is the only reason it exists; eleven AI crawlers are
+      named explicitly, which changes no behaviour today because the wildcard
+      already permits them, and makes narrowing it later a decision about each
+      one rather than a silent drop. `llms.txt` carries **no version number**:
+      nothing would keep it true, so it points at the download and changelog
+      pages, which are generated from the release itself.
+- [x] **JSON-LD structured data** — done *(21 September 2026)*,
+      `src/data/structuredData.ts`. One `@graph` per page with `@id`
+      cross-references: `Organization` and `WebSite` (one node for the domain,
+      not one per language) plus `WebPage` everywhere, `BreadcrumbList` off the
+      home page, `SoftwareApplication` on the three component pages.
+
+      **Three things it deliberately does not say.** No `softwareVersion`,
+      which would be a third place a release has to be bumped and the only one
+      nothing guards. No `offers` on desktop or hub: the desktop is free *while
+      it is in phase 3* and the hub is commercial, and structured data cannot
+      say "for now", so a price there would be a claim that expires quietly —
+      the CLI, which is Apache-2.0 and will stay free, prices itself. No
+      `FAQPage` and no invented `sameAs`, because the guide has no real
+      question-and-answer structure and the project has no social account.
+
+      `operatingSystem` differs per component: the hub ships Linux and macOS
+      binaries and no Windows one. Copying the desktop's list across was the
+      easy mistake.
+- [x] **`og:image` and Twitter card** — done *(21 September 2026)*. One
+      1200×630 card, `public/og.png`, rendered from `scripts/og-card.html` so
+      it uses the site's own palette and typography rather than a copy of them
+      in a design tool. `twitter:card` is `summary_large_image`, with no
+      `twitter:title` or `twitter:description` — X falls back to the Open Graph
+      ones — and no `twitter:site`, because there is no account to name.
+
+      **One image for every page and language, on purpose.** The
+      page-specific part of a share is already carried by the translated
+      `og:title` and `og:description`. Seven per-page cards would each bake a
+      page name into pixels, and no check can read text out of a PNG, so a
+      renamed route would leave a wrong image behind with nothing to catch it.
 - [ ] **Google Search Console + Bing Webmaster Tools registration and
-      sitemap submission.** This is the real answer to "fastest indexing"
-      and it's an account task, not a code task. Bing also feeds ChatGPT
-      search.
-- [ ] Minor: `og:locale` isn't in the `en_US` format the OG spec wants (it
-      says `en`); Google Fonts is fetched as an external stylesheet —
-      serving the woff2 files ourselves removes one render-blocking
-      third-party request.
+      sitemap submission.** Still open, and still an account task rather than a
+      code one — but the code side is now ready: `VERIFICATION` in
+      `src/data/seo.ts` renders `google-site-verification` and `msvalidate.01`
+      when a token is pasted in, and **no tag at all when the string is empty**,
+      because an empty meta tag is a failed verification that looks like a
+      finished one. Bing imports a verified property straight from Search
+      Console, so the Google token alone is usually enough. Bing also feeds
+      ChatGPT search.
+- [x] ~~Minor: `og:locale` isn't in the `en_US` format the OG spec wants~~ →
+      fixed *(21 September 2026)* with a second map, `OG_LOCALES`.
+      `LOCALE_TAGS` keeps the bare codes, which are what `hreflang` and the
+      `lang` attribute correctly want; the two are separate on purpose, and
+      collapsing them breaks one of them silently, because a scraper ignores
+      the short form without complaining. The other four languages are now
+      declared as `og:locale:alternate`.
+- [ ] Minor: Google Fonts is fetched as an external stylesheet — serving the
+      woff2 files ourselves removes one render-blocking third-party request.
+      **Kept separate from the work above** *(21 September 2026)*: that was
+      discoverability, this is performance, and they share nothing but the
+      `<head>` they live in.
+
+**A guard came with it**, because every failure in this area is silent: a
+dropped `og:image` turns a share back into a bare link and the page looks
+identical, a relative one is ignored rather than rejected, a JSON-LD typo is
+skipped rather than reported, and a renamed route leaves `llms.txt` handing a
+404 to exactly the crawlers it exists to serve. `scripts/verify-seo.mjs`
+(`yarn verify:seo`, in the Pages workflow) reads the built `dist/`, like the
+site's other two verification scripts and for the same reason. Measured by
+mutation: dropping `og:image`, shortening `og:locale` to `en`, putting
+non-JSON in the `ld+json` script and renaming a route inside `llms.txt` were
+four for four.
+
+**What was already right** (the 9 September audit above) carried the rest, and
+re-measured on `dist` for this work: of 36 built pages, **31 carry no React
+island at all** and the 5 that do are the home page in its five languages,
+where the treemap demo lives. That is what makes any of this reach GPTBot,
+ClaudeBot and PerplexityBot — none of them runs JavaScript, so a static graph
+in the markup is the only form they ever see. Had this been an SPA, all of the
+above would have been invisible to them.
 
 Setting expectations: the technical side ensures **there's nothing blocking
 indexing** and makes the content maximally readable. Climbing the rankings
