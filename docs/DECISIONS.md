@@ -204,8 +204,8 @@ thresholds sit explicitly in `spacetrace-hub/src/trend.rs` as `MIN_SAMPLES`,
 
 The desktop and hub are built in their own (private) repositories, but the
 resulting installer files are published to **this repository's** releases:
-under the `desktop-continuous` / `desktop-v*` and `hub-continuous` /
-`hub-v*` tags.
+under the `desktop-v*` and `hub-v*` tags. (There were `desktop-continuous`
+and `hub-continuous` tags too until K9 was reversed; see below.)
 
 **Why.** A private repository's release assets cannot be downloaded without
 authentication. Per K2 the desktop and hub are private, but a marketing
@@ -245,6 +245,32 @@ Because the `releases/latest` endpoint does not return a pre-release,
 `install.sh` falls back to `continuous` when there is no stable release, and
 prints that it did. Otherwise the documented one-line install command
 wouldn't work until the first stable tag.
+
+**19 September 2026: reversed. The channel is gone in all three
+repositories.** A `v*` tag is now the only thing that triggers a release
+workflow anywhere; a push to `main` publishes nothing.
+
+Three things it got wrong. It cost a full multi-platform build on every push,
+and on the private desktop repository — where macOS runner minutes bill at
+10x — that was the single most expensive job in the account, for a channel
+the download page only ever *fell back* to. Its `upload-artifact` copies sat
+for the default 90 days and filled the account's 0.5 GB of Actions storage,
+which then failed a real release: all three platforms built, nothing
+uploaded, `publish` skipped. And the fixed URL the decision was built
+around turned out to be the cheap half of the problem — a rolling tag never
+goes stale because it is republished constantly, so nothing ever forced the
+site's static links to be checked.
+
+What replaced it: the site's static download links name a real version tag
+(`CHANNELS[…].fallback` in the website repository), so they now have to move
+with each release or they 404; `retention-days: 1` on every
+`upload-artifact`, because the durable copy is the release asset; and no
+`paths-ignore` in any of the three release workflows, since with `main` gone
+its one remaining effect would be to skip a *tag* push whose commit touched
+only documentation.
+
+The `install.sh` fallback above is also gone; it kept the comment explaining
+why, so nobody adds it back for the same reason.
 
 ---
 

@@ -59,12 +59,15 @@ POSIX `sh`, because it also has to run on NAS firmware whose shell is busybox.
 Prebuilt archives for Linux (musl, x86_64 and aarch64), macOS (both
 architectures) and Windows are on the
 [download page](https://spacetrace.teknobakkall.com/download/) and in
-[releases](https://github.com/unalcakir28/spacetrace/releases). Two channels:
+[releases](https://github.com/unalcakir28/spacetrace/releases). One channel:
 
 | Channel | Tag | What it is |
 |---------|-----|------------|
 | stable | `v*` | A tagged release |
-| continuous | `continuous` | The newest `main`, rebuilt on every push. Passed CI and nothing else |
+
+A `v*` tag is the only thing that builds anything; a push to `main` publishes
+nothing. There used to be a `continuous` channel rebuilt from `main` on every
+push, removed on 19 September 2026.
 
 The agent's container image is `ghcr.io/unalcakir28/spacetrace` (amd64 and
 arm64).

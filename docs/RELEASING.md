@@ -35,21 +35,25 @@ them breaks the site.**
 
 | Tag | Content | Trigger |
 |--------|--------|------------|
-| `continuous` | CLI + agent, latest `main` | push to this repository |
 | `v*` | CLI + agent, stable | `v*` tag in this repository |
-| `desktop-continuous` | Desktop installers | push to the desktop repository |
 | `desktop-v*` | Desktop, stable | `v*` tag in the desktop repository |
-| `hub-continuous` | Hub binaries | push to the hub repository |
 | `hub-v*` | Hub, stable | `v*` tag in the hub repository |
+| `desktop-latest` | One `latest.json`, the desktop update manifest | every desktop release |
 
-`continuous` releases are **deleted and recreated**, not edited: this way the
-tag tracks `main` and an asset dropped from the matrix doesn't stay behind as
-a dead link on the download page. There's a brief 404 window; acceptable for
-the continuous channel.
+**A `v*` tag is the only trigger, in all three repositories**, since
+19 September 2026. A push to `main` publishes nothing anywhere.
 
-Asset names carry the version (`spacetrace-continuous-x86_64-apple-darwin.tar.gz`)
+Each of the three used to also publish a rolling pre-release from `main` on
+every push — `continuous`, `desktop-continuous`, `hub-continuous` — deleted and
+recreated each time so the tag tracked `main`. That went because it cost a full
+multi-platform build per push, with macOS runner minutes billing at 10x on the
+private desktop repository, for a channel the download page only ever fell back
+to; and because its 90-day artifacts filled the account's 0.5 GB of Actions
+storage and then failed a real release.
+
+Asset names carry the version (`spacetrace-v0.9.0-x86_64-apple-darwin.tar.gz`)
 because `install.sh` builds the file name from the given version. So
-`SPACETRACE_VERSION=continuous` works with no changes at all.
+`SPACETRACE_VERSION=v0.9.0` works with no changes at all.
 
 ## Container images
 
@@ -173,9 +177,9 @@ Desktop and hub tags appear in this repository as `desktop-v0.2.0` /
 Dry run: give a tag name via `workflow_dispatch`. The build runs, the publish
 step is skipped — unless you check the `publish` box.
 
-Manual publishing with `publish: true` is the way out of the case where the
-`paths-ignore` filter skips a tag push (see below). The tag is created at the
-tip of the default branch in the target repository.
+Manual publishing with `publish: true` is the way out of the case where a tag
+push ran no workflow at all. The tag is created at the tip of the default
+branch in the target repository.
 
 ### If the schema version is bumping: desktop and hub first, then CLI
 

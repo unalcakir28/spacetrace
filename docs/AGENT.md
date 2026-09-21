@@ -360,8 +360,8 @@ snapshot already present with the same host, root and start time is skipped.
   works without being given the token. It returns `status`, `version`, `commit`
   and `channel` — which build is running, and nothing else. No hostname, no
   roots, no paths, nothing about what the machine holds. The commit is there on
-  purpose: every continuous build shares a version number, so it is the only
-  way to identify a box without handing out the token.
+  purpose: every build between two tags shares a version number, so it is the
+  only way to identify a box without handing out the token.
 - **Ad-hoc scans are off by default.** With them on, anyone holding the token can
   enumerate any directory the agent's user can read.
 - **The agent never deletes anything** outside its own snapshot database, and
