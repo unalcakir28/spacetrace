@@ -1707,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "spacetrace-agent"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1731,11 +1731,11 @@ dependencies = [
 
 [[package]]
 name = "spacetrace-buildinfo"
-version = "0.8.0"
+version = "0.9.0"
 
 [[package]]
 name = "spacetrace-changelog"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1743,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "spacetrace-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1764,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "spacetrace-diff"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "serde",
  "spacetrace-scan-core",
@@ -1773,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "spacetrace-dupes"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "blake3",
  "rayon",
@@ -1784,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "spacetrace-scan-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "libc",
  "rayon",
@@ -1795,7 +1795,7 @@ dependencies = [
 
 [[package]]
 name = "spacetrace-store"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "gethostname",
@@ -1810,7 +1810,7 @@ dependencies = [
 
 [[package]]
 name = "spacetrace-treemap"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "serde",
  "spacetrace-scan-core",
