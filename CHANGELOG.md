@@ -10,6 +10,12 @@ Versions marked *development milestone* were never tagged and have no
 downloadable files. They are recorded because the work happened, not
 because anyone can install them.
 
+## Unreleased
+
+### Added
+
+- The agent can now serve its API over HTTPS itself: `tls_cert_file` and `tls_key_file` under `[server]` in the configuration, both or neither. Until now that needed a reverse proxy in front, which on a NAS with no domain name of its own meant putting the token and the file inventory on the network in plaintext. A self-signed certificate is enough; the client is told which one to trust with `ca_file` in `remotes.toml`. Where a domain name exists a reverse proxy is still the better answer, because it renews certificates and the agent does not: a renewed certificate takes a restart. The certificate needs the address clients use as a subject alternative name.
+
 ## 0.8.0 — 2026-09-19
 
 ### Added

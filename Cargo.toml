@@ -52,6 +52,21 @@ zstd = "0.14"
 # binary onto NAS boxes whose CA bundle may be absent or years stale.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots", "json", "blocking"] }
 
+# Server-side TLS in the agent (D2). None of these three is a new crate in the
+# graph: reqwest already pulls rustls and tokio-rustls, axum already pulls hyper
+# and hyper-util. The lines only name them so the accept loop can use them
+# directly. Features are exactly the set those crates already enable — in
+# particular `logging` stays off — so declaring them adds nothing to the build.
+rustls = { version = "0.23", default-features = false, features = ["std", "aws-lc-rs", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs", "tls12"] }
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["server", "service", "tokio"] }
+# Test-only. The TLS tests need a certificate, and a checked-in one expires and
+# breaks CI on a date nobody picked. `aws_lc_rs` rather than rcgen's default
+# `ring`: aws-lc-rs is already compiled through rustls and ring is not, so this
+# stays free.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
+
 [profile.release]
 opt-level = 3
 lto = "thin"

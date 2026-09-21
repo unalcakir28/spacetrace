@@ -8,4 +8,5 @@ pub mod ratelimit;
 pub mod runner;
 pub mod scheduler;
 pub mod serve;
+pub mod tls;
 pub mod update;

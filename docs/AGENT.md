@@ -101,6 +101,8 @@ failing silently.
 | `server.max_upload_bytes` | 512 MiB | Largest snapshot `POST /snapshots` accepts |
 | `server.rate_limit_per_minute` | `120` | Requests per minute one client address may make; `0` switches it off |
 | `server.rate_limit_burst` | `60` | Requests allowed at once before the rate applies |
+| `server.tls_cert_file` | — | PEM certificate chain, leaf first; set with `tls_key_file` to serve HTTPS |
+| `server.tls_key_file` | — | PEM private key for that certificate |
 | `roots[].path` | required | Absolute path to scan |
 | `roots[].schedule` | — | Five-field cron; omit to scan only on request |
 | `roots[].label` | — | Free text stored with the snapshot |
@@ -119,6 +121,61 @@ who can reach the port.
 
 Unknown keys are rejected at startup. A typo that silently does nothing on a
 machine nobody watches is worse than a failure to start.
+
+Setting one of `tls_cert_file` and `tls_key_file` without the other is refused
+at startup too. Serving plaintext on a port its operator has decided is HTTPS
+is the one failure this feature must not have.
+
+### TLS
+
+Nothing is required here: the agent listens on loopback by default, and for
+anything with a domain name a reverse proxy in front remains the better answer
+— Caddy and Traefik renew certificates and the agent does not.
+
+What this is for is the case with no proxy and no public name, a NAS or a home
+server reached across a LAN. Point the agent at a certificate and a key and it
+serves HTTPS instead of HTTP:
+
+```toml
+[server]
+listen = "0.0.0.0:7878"
+tls_cert_file = "/etc/spacetrace/agent.pem"
+tls_key_file = "/etc/spacetrace/agent.key"
+```
+
+A self-signed certificate is a chain of one and works. Generate it naming the
+address clients will use — **as a subject alternative name**, because no
+current TLS client falls back to the common name, and a certificate without a
+matching SAN is rejected by every one of them:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -keyout /etc/spacetrace/agent.key -out /etc/spacetrace/agent.pem -subj "/CN=nas.lan" -addext "subjectAltName=DNS:nas.lan,IP:192.168.1.10"
+```
+
+Keep the key unreadable to anyone else (`chmod 600`), and remember the agent
+reads both files at startup: a renewed certificate takes a restart.
+
+Then tell the client to trust it, in `remotes.toml`:
+
+```toml
+[remotes.nas]
+url = "https://nas.lan:7878"
+token = "..."
+ca_file = "/home/you/.config/spacetrace/nas.pem"
+```
+
+`ca_file` is the agent's certificate, copied to the client. For a self-signed
+certificate naming it here *is* pinning: it is trusted for this remote and for
+nothing else, and no public authority can issue a certificate this client would
+accept in its place. A certificate from a public authority needs no `ca_file`
+at all.
+
+`ca_file` is only read for a remote named in `remotes.toml`. A bare
+`--remote https://…` URL carries no trust configuration, so an agent with its
+own certificate has to be given an entry in that file.
+
+The agent neither generates nor renews certificates, and there is no ACME
+client: on a box with no public DNS name there is nothing for ACME to prove.
 
 ### Cron expressions
 
@@ -169,9 +226,13 @@ Remotes can be saved so the URL and token do not have to be typed. In
 [remotes.nas]
 url = "https://nas.example.com"
 token = "..."
+# ca_file = "/path/to/agent.pem"   # only for an agent serving its own TLS
 ```
 
 Then `spacetrace --remote nas diff --path /var`.
+
+`ca_file` is explained under [TLS](#tls); it is needed only when the agent's
+certificate was not issued by a public authority.
 
 `scan`, `prune` and `rm` refuse to run with `--remote`: they act on local state,
 and the agent deletes nothing.
@@ -287,7 +348,12 @@ snapshot already present with the same host, root and start time is skipped.
 ## Security notes
 
 - **Loopback by default.** Exposing a filesystem inventory to the network should
-  be a deliberate edit. Put a reverse proxy with TLS in front of it.
+  be a deliberate edit. Either put a reverse proxy with TLS in front of it, or
+  give the agent a certificate of its own — see [TLS](#tls). Plaintext across a
+  network puts both the bearer token and the inventory on the wire.
+- **The token is the only credential.** TLS here encrypts and authenticates the
+  *server*; it does not authenticate clients. There is no mTLS, and a valid
+  token from any address is accepted.
 - **The token is compared without an early exit**, so a wrong token takes the
   same time to reject regardless of how much of it was right.
 - **`/health` is unauthenticated** so a container healthcheck or uptime monitor

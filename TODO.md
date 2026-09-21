@@ -75,7 +75,8 @@ in [docs/DECISIONS.md](docs/DECISIONS.md); summary:
   - [x] `POST /scans` (202 + background scan), `POST /snapshots` (receiving endpoint)
   - [x] Bearer token validation (constant-time comparison), file/env/config
   - [x] Body size limit, clean shutdown on SIGTERM
-  - [ ] Optional built-in TLS — a reverse proxy is recommended for now (→ **D2**)
+  - [x] Optional built-in TLS — **D2 done** (21 September 2026); a reverse
+        proxy is still the recommendation where a domain name exists
 - [x] `agent push <url>` — send the snapshot to the hub/another agent (zstd)
 - [x] Concurrent scan lock (the same root is not scanned twice → 409)
 - [x] Rate limiting — **D3 done** (14 September 2026); the reason for deferring it
@@ -435,16 +436,43 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       session, from a macOS checkout — nothing here is measured.)*
       Settle these in order; the first answer sets the size of the job.
 
-      1. **Does the enumeration carry sizes?** The `FSCTL_ENUM_USN_DATA`
-         walk is expected to yield a file reference number, a parent
-         reference number and a name — which reconstructs the *tree* but
-         says nothing about *bytes*. If size and allocated size are not
-         in the records, they have to come from parsing the `$DATA`
-         attribute out of the raw MFT, and that is a different and much
-         larger job than B5 was. Measure this first, on a real volume,
-         before any design work — it decides whether B4 is a week or a
-         weekend.
-      2. **It probably does not plug in where B5 does.** The macOS fast
+      1. ~~**Does the enumeration carry sizes?**~~ **Answered: no.**
+         *(21 September 2026, from the Win32 ABI — this one did not need
+         the volume, because a structure layout is not
+         machine-dependent.)* `USN_RECORD_V2` and `USN_RECORD_V3` carry,
+         in full: `RecordLength`, `MajorVersion`, `MinorVersion`,
+         `FileReferenceNumber`, `ParentFileReferenceNumber`, `Usn`,
+         `TimeStamp`, `Reason`, `SourceInfo`, `SecurityId`,
+         `FileAttributes`, `FileNameLength`, `FileNameOffset`,
+         `FileName`. No size, no allocated size, no end-of-file offset.
+         The enumeration reconstructs the *tree* and says nothing about
+         *bytes*.
+
+         **So B4 is the larger job, and it is not the job this item's
+         title describes.** Three routes to the bytes, and two are dead:
+         an open handle per entry is what we already do (`FileIdentity`,
+         measured ~+36%, the cost B4 exists to remove), and
+         `OpenFileById` + `GetFileInformationByHandleEx` is the same
+         handle under a different name. The one route that avoids the
+         per-entry handle is parsing the raw MFT: `FSCTL_GET_NTFS_VOLUME_DATA`
+         for the record size and the `$MFT` location, then
+         `$STANDARD_INFORMATION` and `$DATA` per record. That is what
+         WizTree does. Names and parents live in `$FILE_NAME` in the same
+         records, so **once the MFT is parsed, `FSCTL_ENUM_USN_DATA` is
+         redundant for B4** — it stays relevant only to B7.
+
+         What still wants the real volume is the parser, not this
+         question: fixups (an unapplied update sequence array is silently
+         wrong every 512 bytes), resident versus non-resident `$DATA`,
+         `$ATTRIBUTE_LIST` for fragmented records, and the DOS/Win32
+         namespace flags in `$FILE_NAME` (ignore them and every file
+         appears twice). None of that is a type error, so `cargo check`
+         against the msvc target cannot catch any of it — which is why
+         `mftprobe.rs` is written **on** the Windows machine, first thing
+         that trip, not before it. B5's own note below records what
+         writing this kind of code blind costs.
+      2. **It does not plug in where B5 does** — no longer a guess, it
+         follows from the answer above. The macOS fast
          path enters at `bulk_list(dir) -> Option<Vec<NamedMeta>>` in
          `crates/scan-core/src/scan.rs`: one call per directory,
          returning `None` to fall back. The MFT is read **per volume**,
@@ -533,6 +561,29 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       Strategically the biggest speed gain. *Competitor:* **SpaceObServer**
       — our closest architectural competitor, and ahead right at this
       point.
+
+      **B7 does not depend on B4** *(21 September 2026)*. B4's blocker is
+      that the USN records carry no sizes (see its note above), and B7
+      does not need them to: the journal says *which* files changed, and
+      the size of those few comes from the ordinary per-entry path. The
+      handle cost that makes B4 expensive is proportional to the changed
+      set here, not to the volume. So B7 wants the journal only for what
+      the journal actually provides, and needs no MFT parser.
+
+      "Directly after B4" in the order below is therefore **logistics,
+      not a dependency** — the same machine, the same trip, the same API
+      family. B7 can be taken first, and on this reading it is the
+      cheaper of the two.
+
+      What it does need, and neither exists yet: a **journal cursor
+      persisted per scan** (journal ID plus next USN — a `scans` column,
+      so invariant "new column at the end of both `create_tables` and
+      `migrate_from`" applies), and a way to **build the new tree from
+      the previous snapshot plus a delta**. The second one is the real
+      design question, because arena ids are not stable across scans
+      (invariant 2) — the delta cannot patch an arena in place, it has to
+      feed `TreeBuilder`. A stale or rolled-over journal ID must fall
+      back to a full scan, silently and always.
 
 ### C. Feature gaps
 
@@ -820,8 +871,57 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       called when disabled) — but producing an actually-hung mount needs a
       second machine.
 
-- [ ] **D2 Built-in TLS in the agent** — a reverse proxy is currently
-      recommended (also in Phase 2).
+- [x] **D2 Built-in TLS in the agent** — done *(21 September 2026)*.
+      `crates/agent/src/tls.rs`. `server.tls_cert_file` plus
+      `server.tls_key_file`, both or neither; half a pair is refused at config
+      load, because the alternative is serving plaintext on a port its
+      operator has decided is HTTPS. A reverse proxy stays the recommendation
+      wherever a domain name exists — Caddy renews certificates and the agent
+      does not.
+
+      **No new dependency, and that decided the shape.** rustls and
+      tokio-rustls already arrive through `reqwest`, hyper and hyper-util
+      through `axum`; declaring them added nothing. `cargo tree -p
+      spacetrace-agent --edges normal` is byte-identical before and after
+      (195 entries). `rcgen` is a dev-dependency only, on the `aws_lc_rs`
+      feature rather than its default `ring`, because aws-lc-rs is already
+      compiled through rustls and ring is not.
+
+      **Handshakes had to come off the accept path.**
+      `axum::serve::Listener::accept` is awaited one connection at a time, so
+      doing the handshake inside it serialises every new connection behind the
+      slowest: a peer that opens a socket and never sends a ClientHello would
+      block all other clients for the whole handshake timeout. `TlsListener`
+      therefore runs handshakes in their own tasks and queues only finished
+      streams over an mpsc of depth 64 — the queue is backpressure, not a
+      buffer for load.
+
+      **The rate limiter was the real trap.** It keys on the peer address,
+      which axum supplies through `ConnectInfo` — and axum implements
+      `Connected` only for its own `TcpListener`. The orphan rule forbids
+      adding it for `SocketAddr`, and the available trick (wrapping the
+      listener in a no-op `tap_io` to borrow axum's blanket impl) reads as
+      dead code to the next person, whose deletion would leave the limiter
+      with no address and no compile error to say so. Hence a local
+      `serve::PeerAddr`, which makes both listeners provably produce the same
+      key. `the_rate_limiter_still_sees_the_peer_address_over_tls` is the test
+      that fails if this regresses.
+
+      **Client side is `ca_file` in `remotes.toml`, and no fingerprint
+      pinning.** For a self-signed certificate the two are the same trust
+      decision — naming the certificate as the only root for that remote *is*
+      pinning it — and a fingerprint would need `use_preconfigured_tls` and a
+      custom `ServerCertVerifier` written twice, in the CLI and in the agent,
+      to buy nothing. `ca_file` is read only for a named remote; a bare
+      `--remote https://…` URL carries no trust configuration.
+
+      **Out of scope, deliberately:** mTLS (the token stays the only client
+      credential), ACME (a box with no public DNS name has nothing for ACME to
+      prove), certificate generation by the agent, and trust options for
+      `agent push`, whose target is a hub and therefore has a domain and a
+      proxy. Eleven new tests: four in `tls.rs` on the errors an operator has
+      to act on, two in `config.rs` on the half-configured refusal, five in
+      `tests/api.rs` over a real TLS socket.
 - [x] **D3 Rate limiting in the agent** — done *(14 September 2026)*.
       `crates/agent/src/ratelimit.rs`, a hand-written token bucket, no new
       dependency (same rationale as the cron parser).
@@ -1031,9 +1131,9 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
 | 5 | ~~B2~~ ✅, **B3 ← next up** | Cheap and measured — B2 is done (10 September 2026); B3 needs a real HDD or a network drive |
 | ~~6~~ | ~~C3, D1~~ | Both done |
 | 7 | B4, ~~B5~~ ✅, B6 | Platform-specific fast paths — B5 is done (11 September 2026); B4 needs a Windows machine, B6 a Linux machine |
-| 8 | B7 | The biggest strategic win, but also the biggest job |
+| 8 | B7 | The biggest strategic win. Listed after B4 for the machine, not for a dependency — and since 21 September 2026 it reads as the cheaper of the two, because it needs no MFT parser |
 | 9 | ~~C1–C9~~ ✅ | Feature parity completed *(11 September 2026)* |
-| 10 | E3, E4, D2, D3 | Release prep (E5 left out of scope) |
+| 10 | E3, E4, ~~D2~~ ✅, ~~D3~~ ✅ | Release prep (E5 left out of scope). D3 done 14 September 2026, D2 on 21 September; E3 needs money and E4 needs a release to package |
 | ~~last~~ ✅ | ~~B1-K~~ | Double storage. Research was done and **the problem had been framed wrong**: the arena didn't want BFS, it wanted two properties. The intermediate tree was removed, speed is the same, peak memory is -37% on `/Applications`. **Done (14 September 2026)** |
 
 ---

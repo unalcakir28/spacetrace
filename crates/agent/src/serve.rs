@@ -10,11 +10,13 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use axum::body::{Body, Bytes};
+use axum::extract::connect_info::Connected;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::serve::IncomingStream;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use spacetrace_store::{ScanId, Store};
@@ -77,24 +79,75 @@ pub fn router(runner: Arc<Runner>, config: &Config, token: String) -> Router {
 }
 
 pub async fn serve(runner: Arc<Runner>, config: &Config, token: String) -> Result<()> {
+    // Read the certificate before binding. A bad path or a mismatched key
+    // should be a refusal to start, not a listener that is already accepting
+    // when the problem surfaces.
+    let tls = match (&config.server.tls_cert_file, &config.server.tls_key_file) {
+        (Some(cert), Some(key)) => Some(crate::tls::server_config(cert, key)?),
+        // `Config::validate` has already refused the half-configured case, so
+        // this arm is genuinely "no TLS asked for".
+        _ => None,
+    };
+
     let app = router(runner, config, token);
+
     let listener = tokio::net::TcpListener::bind(config.server.listen)
         .await
         .with_context(|| format!("binding {}", config.server.listen))?;
     let addr = listener.local_addr()?;
-    eprintln!("spacetrace-agent listening on http://{addr}");
 
     // `into_make_service_with_connect_info` rather than the plain form: the
     // rate limiter keys on the peer address, and without this axum has no
     // address to hand it.
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .context("http server failed")?;
+    match tls {
+        Some(tls) => {
+            eprintln!("spacetrace-agent listening on https://{addr}");
+            let listener = crate::tls::TlsListener::spawn(listener, tls)?;
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<PeerAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .context("https server failed")?;
+        }
+        None => {
+            eprintln!("spacetrace-agent listening on http://{addr}");
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<PeerAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .context("http server failed")?;
+        }
+    }
     Ok(())
+}
+
+/// The peer address, as a type this crate owns.
+///
+/// Extracting `ConnectInfo<SocketAddr>` would be shorter, and axum provides
+/// that for its own `TcpListener`. It does not for a custom listener, and the
+/// orphan rule forbids adding it: `Connected` is axum's trait and `SocketAddr`
+/// is std's type. The available trick — wrapping the listener in a no-op
+/// `tap_io` to borrow axum's blanket implementation — reads as dead code to
+/// the next person, and deleting it would leave the rate limiter with no
+/// address to key on and no compile error to say so. A local type makes both
+/// listeners provably produce the same key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerAddr(pub SocketAddr);
+
+impl Connected<IncomingStream<'_, tokio::net::TcpListener>> for PeerAddr {
+    fn connect_info(stream: IncomingStream<'_, tokio::net::TcpListener>) -> Self {
+        PeerAddr(*stream.remote_addr())
+    }
+}
+
+impl Connected<IncomingStream<'_, crate::tls::TlsListener>> for PeerAddr {
+    fn connect_info(stream: IncomingStream<'_, crate::tls::TlsListener>) -> Self {
+        PeerAddr(*stream.remote_addr())
+    }
 }
 
 async fn shutdown_signal() {
@@ -127,7 +180,7 @@ async fn shutdown_signal() {
 
 async fn rate_limit(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(PeerAddr(peer)): ConnectInfo<PeerAddr>,
     request: Request,
     next: Next,
 ) -> Response {

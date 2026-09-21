@@ -107,6 +107,35 @@ pub struct ServerConfig {
     /// connections together; what the limit is for is a sustained stream.
     #[serde(default = "default_rate_burst")]
     pub rate_limit_burst: u32,
+
+    /// PEM certificate chain to serve. Setting this and `tls_key_file`
+    /// switches the listener from HTTP to HTTPS; leaving both unset keeps
+    /// plaintext, which is still the default because the documented
+    /// deployment puts a reverse proxy in front.
+    ///
+    /// The chain is served leaf-first, as TLS requires. A self-signed
+    /// certificate is a chain of one and works here — see docs/AGENT.md for
+    /// how the client is then told to trust it.
+    #[serde(default)]
+    pub tls_cert_file: Option<PathBuf>,
+
+    /// Private key for `tls_cert_file`, PEM, PKCS#8 or PKCS#1 or SEC1.
+    ///
+    /// A separate key file rather than one combined PEM: the key wants
+    /// different permissions from the certificate, and an operator who has to
+    /// split them cannot accidentally serve the key as the chain.
+    #[serde(default)]
+    pub tls_key_file: Option<PathBuf>,
+}
+
+impl ServerConfig {
+    /// Whether the listener should speak TLS.
+    ///
+    /// Both halves or neither — `Config::validate` refuses the half state, so
+    /// by the time anything asks this question the answer is unambiguous.
+    pub fn tls_enabled(&self) -> bool {
+        self.tls_cert_file.is_some() && self.tls_key_file.is_some()
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -173,6 +202,8 @@ impl Default for ServerConfig {
             max_upload_bytes: default_max_upload(),
             rate_limit_per_minute: default_rate_limit(),
             rate_limit_burst: default_rate_burst(),
+            tls_cert_file: None,
+            tls_key_file: None,
         }
     }
 }
@@ -279,6 +310,19 @@ impl Config {
             "utc_offset_minutes out of range: {}",
             self.utc_offset_minutes
         );
+        // Refuse half a TLS configuration here rather than at bind time. Given
+        // only one of the two, the alternative is to serve plaintext on a port
+        // the operator has decided is HTTPS, and nothing later in the process
+        // has enough context to warn about that.
+        match (&self.server.tls_cert_file, &self.server.tls_key_file) {
+            (Some(_), None) => anyhow::bail!(
+                "server.tls_cert_file is set without server.tls_key_file; TLS needs both"
+            ),
+            (None, Some(_)) => anyhow::bail!(
+                "server.tls_key_file is set without server.tls_cert_file; TLS needs both"
+            ),
+            _ => {}
+        }
         Ok(())
     }
 
@@ -327,10 +371,15 @@ update_check = true
 
 [server]
 # Loopback by default. Put a reverse proxy in front, or change this to
-# "0.0.0.0:7878" once you have set a token and, ideally, TLS.
+# "0.0.0.0:7878" once you have set a token and TLS.
 listen = "127.0.0.1:7878"
 # Supply the bearer token by file (recommended) or via SPACETRACE_TOKEN.
 # token_file = "/etc/spacetrace/token"
+# Serve HTTPS directly, for a machine with no reverse proxy in front. Both
+# keys or neither; the certificate needs the address clients use as a subject
+# alternative name. See docs/AGENT.md.
+# tls_cert_file = "/etc/spacetrace/agent.pem"
+# tls_key_file = "/etc/spacetrace/agent.key"
 
 [[roots]]
 path = "/var"
@@ -366,10 +415,15 @@ update_check = true
 
 [server]
 # Loopback by default. Put a reverse proxy in front, or change this to
-# "0.0.0.0:7878" once you have set a token and, ideally, TLS.
+# "0.0.0.0:7878" once you have set a token and TLS.
 listen = "127.0.0.1:7878"
 # Supply the bearer token by file (recommended) or via SPACETRACE_TOKEN.
 # token_file = 'C:\ProgramData\spacetrace\token'
+# Serve HTTPS directly, for a machine with no reverse proxy in front. Both
+# keys or neither; the certificate needs the address clients use as a subject
+# alternative name. See docs/AGENT.md.
+# tls_cert_file = 'C:\ProgramData\spacetrace\agent.pem'
+# tls_key_file = 'C:\ProgramData\spacetrace\agent.key'
 
 [[roots]]
 path = 'C:\Users'
@@ -404,6 +458,47 @@ mod tests {
         assert_eq!(built.dedupe_hardlinks, from_file.dedupe_hardlinks);
         assert_eq!(built.keep, from_file.keep);
         assert!(built.schedule.is_none() && from_file.schedule.is_none());
+    }
+
+    /// Half a TLS configuration is worse than none: the agent would bind and
+    /// serve plaintext while its operator believed otherwise. It has to refuse
+    /// at load, where the message can still name the missing key.
+    #[test]
+    fn one_half_of_the_tls_pair_is_refused() {
+        let cert_only: Config =
+            toml::from_str("db = \"/tmp/x\"\n[server]\ntls_cert_file = \"/etc/c.pem\"\n").unwrap();
+        let err = cert_only
+            .validate()
+            .expect_err("cert without key must fail");
+        assert!(
+            err.to_string().contains("tls_key_file"),
+            "the error must name the missing key, got: {err}"
+        );
+
+        let key_only: Config =
+            toml::from_str("db = \"/tmp/x\"\n[server]\ntls_key_file = \"/etc/k.pem\"\n").unwrap();
+        let err = key_only.validate().expect_err("key without cert must fail");
+        assert!(
+            err.to_string().contains("tls_cert_file"),
+            "the error must name the missing key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn both_halves_together_validate_and_neither_means_plain_http() {
+        let both: Config = toml::from_str(
+            "db = \"/tmp/x\"\n[server]\ntls_cert_file = \"/etc/c.pem\"\ntls_key_file = \"/etc/k.pem\"\n",
+        )
+        .unwrap();
+        both.validate().expect("a complete pair must validate");
+        assert!(both.server.tls_enabled());
+
+        let neither: Config = toml::from_str("db = \"/tmp/x\"").unwrap();
+        neither.validate().unwrap();
+        assert!(
+            !neither.server.tls_enabled(),
+            "TLS must stay off unless asked for"
+        );
     }
 
     #[test]
@@ -482,14 +577,12 @@ mod tests {
             update_check: false,
             db: PathBuf::from("/tmp/x"),
             utc_offset_minutes: 0,
+            // `..default()` rather than every field: this test is about the
+            // token, and spelling out the rest makes it fail to compile every
+            // time an unrelated server key is added.
             server: ServerConfig {
-                listen: default_listen(),
-                token: None,
                 token_file: Some(path),
-                allow_adhoc_scans: false,
-                max_upload_bytes: default_max_upload(),
-                rate_limit_per_minute: default_rate_limit(),
-                rate_limit_burst: default_rate_burst(),
+                ..ServerConfig::default()
             },
             roots: vec![],
         };
@@ -505,14 +598,12 @@ mod tests {
             update_check: false,
             db: PathBuf::from("/tmp/x"),
             utc_offset_minutes: 0,
+            // `..default()` rather than every field: this test is about the
+            // token, and spelling out the rest makes it fail to compile every
+            // time an unrelated server key is added.
             server: ServerConfig {
-                listen: default_listen(),
-                token: None,
                 token_file: Some(path),
-                allow_adhoc_scans: false,
-                max_upload_bytes: default_max_upload(),
-                rate_limit_per_minute: default_rate_limit(),
-                rate_limit_burst: default_rate_burst(),
+                ..ServerConfig::default()
             },
             roots: vec![],
         };

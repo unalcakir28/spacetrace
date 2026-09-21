@@ -81,7 +81,7 @@ async fn start_agent_limited(allow_adhoc: bool, per_minute: u32, burst: u32) -> 
         // from the one that ships.
         axum::serve(
             listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            app.into_make_service_with_connect_info::<serve::PeerAddr>(),
         )
         .await
         .unwrap();
@@ -97,6 +97,115 @@ async fn start_agent_limited(allow_adhoc: bool, per_minute: u32, burst: u32) -> 
 
 fn client() -> reqwest::Client {
     reqwest::Client::new()
+}
+
+// -------------------------------------------------------------------- TLS
+
+/// An agent serving HTTPS, plus the certificate a client has to trust.
+struct TlsAgent {
+    addr: SocketAddr,
+    /// The PEM the client passes as its only root, which for a self-signed
+    /// certificate is the same act as pinning it.
+    cert_pem: String,
+    _home: TempDir,
+    _scanned: TempDir,
+}
+
+impl TlsAgent {
+    fn url(&self, path: &str) -> String {
+        format!("https://{}{}", self.addr, path)
+    }
+
+    /// A client that trusts exactly this agent's certificate and nothing else.
+    fn client(&self) -> reqwest::Client {
+        let root = reqwest::Certificate::from_pem(self.cert_pem.as_bytes())
+            .expect("the generated certificate must be valid PEM");
+        reqwest::Client::builder()
+            .add_root_certificate(root)
+            .build()
+            .unwrap()
+    }
+}
+
+/// A self-signed certificate and key, both PEM.
+///
+/// Generated per run rather than checked in: a committed certificate expires
+/// and then CI fails on a date nobody chose. The subject alternative name is
+/// the loopback address, which is what the tests connect to — rustls does not
+/// fall back to the common name, so a certificate without a matching SAN
+/// would make every test here fail for the wrong reason.
+fn self_signed_for_loopback() -> (String, String) {
+    let key = rcgen::KeyPair::generate().expect("generating a key pair");
+    let cert = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()])
+        .expect("the loopback address must be a valid SAN")
+        .self_signed(&key)
+        .expect("self-signing");
+    (cert.pem(), key.serialize_pem())
+}
+
+/// Start an agent that serves TLS, with the request limit chosen.
+///
+/// The listener is bound here and wrapped by hand rather than going through
+/// `serve::serve`, for the same reason the plaintext harness does: `serve`
+/// binds the configured port and a test needs the OS to pick a free one. The
+/// composition — `TlsListener` plus connect info — is the same as production's,
+/// and `serve` itself is covered by
+/// `serve_refuses_to_start_when_the_certificate_cannot_be_read`.
+async fn start_tls_agent_limited(per_minute: u32, burst: u32) -> TlsAgent {
+    let home = tempfile::tempdir().unwrap();
+    let scanned = scannable_dir();
+    let (cert_pem, key_pem) = self_signed_for_loopback();
+    let cert_file = home.path().join("cert.pem");
+    let key_file = home.path().join("key.pem");
+    std::fs::write(&cert_file, &cert_pem).unwrap();
+    std::fs::write(&key_file, &key_pem).unwrap();
+
+    let toml = format!(
+        "db = {:?}\n\
+         [server]\n\
+         token = {:?}\n\
+         rate_limit_per_minute = {}\n\
+         rate_limit_burst = {}\n\
+         tls_cert_file = {:?}\n\
+         tls_key_file = {:?}\n\
+         [[roots]]\n\
+         path = {:?}\n",
+        home.path().join("snapshots.sqlite").to_string_lossy(),
+        TOKEN,
+        per_minute,
+        burst,
+        cert_file.to_string_lossy(),
+        key_file.to_string_lossy(),
+        scanned.path().to_string_lossy(),
+    );
+    let config: Config = toml::from_str(&toml).unwrap();
+    let runner = Arc::new(Runner::new(&config));
+    let app = serve::router(Arc::clone(&runner), &config, TOKEN.to_string());
+
+    let tls = spacetrace_agent::tls::server_config(&cert_file, &key_file)
+        .expect("the generated pair must load");
+    let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = tcp.local_addr().unwrap();
+    let listener = spacetrace_agent::tls::TlsListener::spawn(tcp, tls).unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<serve::PeerAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+
+    TlsAgent {
+        addr,
+        cert_pem,
+        _home: home,
+        _scanned: scanned,
+    }
+}
+
+async fn start_tls_agent() -> TlsAgent {
+    start_tls_agent_limited(120, 60).await
 }
 
 /// Wait for a scan triggered by `POST /scans` to show up, since that endpoint
@@ -119,6 +228,123 @@ fn open_snapshot_bytes(bytes: &[u8], dir: &Path) -> Store {
     let path = dir.join("downloaded.sqlite");
     std::fs::write(&path, bytes).unwrap();
     Store::open(&path).unwrap()
+}
+
+#[tokio::test]
+async fn the_api_is_served_over_tls_when_a_certificate_is_configured() {
+    let agent = start_tls_agent().await;
+    let response = agent
+        .client()
+        .get(agent.url("/health"))
+        .send()
+        .await
+        .expect("a client trusting this certificate must connect");
+
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+}
+
+/// A client that has not been told about the certificate must be refused, not
+/// quietly served. Otherwise the feature would be indistinguishable from
+/// `danger_accept_invalid_certs` for anyone testing it.
+#[tokio::test]
+async fn a_client_that_does_not_trust_the_certificate_is_refused() {
+    let agent = start_tls_agent().await;
+    let err = client()
+        .get(agent.url("/health"))
+        .send()
+        .await
+        .expect_err("an untrusted self-signed certificate must not verify");
+
+    // reqwest's own message is only "error sending request"; the reason is in
+    // the source chain, so asserting on the top line would pass for a refused
+    // connection or a timeout just as happily.
+    let mut chain = format!("{err}");
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&err);
+    while let Some(cause) = source {
+        chain.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    let lowered = chain.to_lowercase();
+    assert!(
+        lowered.contains("certificate") || lowered.contains("unknown issuer"),
+        "the failure must be about the certificate, got: {chain}"
+    );
+}
+
+/// Plaintext to an HTTPS port has to fail rather than be answered. The
+/// listener hands axum only completed handshakes, so there is no path by which
+/// an unencrypted request reaches a handler — this pins that.
+#[tokio::test]
+async fn a_plaintext_request_to_the_tls_port_is_not_served() {
+    let agent = start_tls_agent().await;
+    let plain = format!("http://{}/health", agent.addr);
+    let result = client()
+        .get(plain)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await;
+    assert!(
+        result.is_err(),
+        "an HTTP request to the TLS port must not be answered, got {result:?}"
+    );
+}
+
+/// The trap this feature is most likely to fall into.
+///
+/// The rate limiter keys on the peer address, which axum supplies through
+/// `ConnectInfo`. Its own `TcpListener` gets that for free; a custom listener
+/// does not, and the failure is silent — the limiter would either see no
+/// address or the same one for everybody. A 429 over TLS is the proof that the
+/// address survives the custom listener.
+#[tokio::test]
+async fn the_rate_limiter_still_sees_the_peer_address_over_tls() {
+    // One token, no burst beyond it: the second request has to be refused.
+    let agent = start_tls_agent_limited(1, 1).await;
+    let client = agent.client();
+
+    let first = client.get(agent.url("/health")).send().await.unwrap();
+    assert_eq!(first.status(), 200, "the first request is within the limit");
+
+    let second = client.get(agent.url("/health")).send().await.unwrap();
+    assert_eq!(second.status(), 429, "the second is over it");
+    assert!(
+        second.headers().get(reqwest::header::RETRY_AFTER).is_some(),
+        "a 429 has to say when to come back"
+    );
+}
+
+/// `serve` reads the certificate before it binds, so an unreadable one is a
+/// refusal to start rather than a listener that is already accepting when the
+/// problem surfaces.
+#[tokio::test]
+async fn serve_refuses_to_start_when_the_certificate_cannot_be_read() {
+    let home = tempfile::tempdir().unwrap();
+    let missing = home.path().join("absent-cert.pem");
+    let toml = format!(
+        "db = {:?}\n\
+         [server]\n\
+         token = {:?}\n\
+         listen = \"127.0.0.1:0\"\n\
+         tls_cert_file = {:?}\n\
+         tls_key_file = {:?}\n",
+        home.path().join("snapshots.sqlite").to_string_lossy(),
+        TOKEN,
+        missing.to_string_lossy(),
+        home.path().join("absent-key.pem").to_string_lossy(),
+    );
+    let config: Config = toml::from_str(&toml).unwrap();
+    let runner = Arc::new(Runner::new(&config));
+
+    let err = serve::serve(runner, &config, TOKEN.to_string())
+        .await
+        .expect_err("a missing certificate must stop the server starting");
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("absent-cert.pem"),
+        "the error must name the file the operator has to fix, got: {text}"
+    );
 }
 
 // ------------------------------------------------------------------- auth

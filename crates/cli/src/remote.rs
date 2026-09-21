@@ -35,9 +35,12 @@ impl std::fmt::Debug for Remote {
 impl Remote {
     /// `target` is either a URL or the name of a remote in `remotes.toml`.
     pub fn resolve(target: &str, token_override: Option<&str>) -> Result<Self> {
-        let (base, stored_token) =
+        let (base, stored_token, ca_file) =
             if target.starts_with("http://") || target.starts_with("https://") {
-                (target.trim_end_matches('/').to_string(), None)
+                // A bare URL carries no trust configuration, so an agent with
+                // its own certificate has to be named in `remotes.toml` to be
+                // reachable at all. See docs/AGENT.md.
+                (target.trim_end_matches('/').to_string(), None, None)
             } else {
                 let saved = RemotesFile::load()?;
                 let entry = saved.remotes.get(target).with_context(|| {
@@ -49,6 +52,7 @@ impl Remote {
                 (
                     entry.url.trim_end_matches('/').to_string(),
                     entry.token.clone(),
+                    entry.ca_file.clone(),
                 )
             };
 
@@ -67,9 +71,13 @@ impl Remote {
                 )
             })?;
 
-        let client = reqwest::blocking::Client::builder()
-            .build()
-            .context("building the HTTP client")?;
+        let mut builder = reqwest::blocking::Client::builder();
+        if let Some(path) = &ca_file {
+            for cert in read_pem_roots(path)? {
+                builder = builder.add_root_certificate(cert);
+            }
+        }
+        let client = builder.build().context("building the HTTP client")?;
         Ok(Remote {
             base,
             token,
@@ -246,6 +254,30 @@ fn decode_zstd_bounded(data: &[u8], limit: u64) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Read every certificate in a PEM file as a trust root.
+///
+/// A bundle rather than a single certificate, because the file an operator
+/// points at may be either: a self-signed leaf is one certificate, an internal
+/// authority is often two or three. Reading only the first would trust the leaf
+/// of a chain and then fail to verify anything issued under it, which is a
+/// confusing way to be broken.
+fn read_pem_roots(path: &Path) -> Result<Vec<reqwest::Certificate>> {
+    let pem = std::fs::read(path).with_context(|| {
+        format!(
+            "reading the certificate named by ca_file: {}",
+            path.display()
+        )
+    })?;
+    let certs = reqwest::Certificate::from_pem_bundle(&pem)
+        .with_context(|| format!("{} is not a PEM certificate bundle", path.display()))?;
+    anyhow::ensure!(
+        !certs.is_empty(),
+        "{} contains no certificate",
+        path.display()
+    );
+    Ok(certs)
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 struct RemotesFile {
     #[serde(default)]
@@ -257,6 +289,15 @@ struct RemoteEntry {
     url: String,
     #[serde(default)]
     token: Option<String>,
+
+    /// PEM certificate to trust for this remote, in addition to nothing else.
+    ///
+    /// Needed when the agent serves its own TLS with a certificate no public
+    /// authority signed, which is the ordinary case for a NAS with no domain
+    /// name. For a self-signed certificate, naming it here is the same act as
+    /// pinning it: it is trusted for this remote and for no other.
+    #[serde(default)]
+    ca_file: Option<PathBuf>,
 }
 
 impl RemotesFile {
@@ -317,6 +358,58 @@ url = "http://10.0.0.5:7878"
         assert_eq!(parsed.remotes.len(), 2);
         assert_eq!(parsed.remotes["prod"].token.as_deref(), Some("abc"));
         assert!(parsed.remotes["staging"].token.is_none());
+    }
+
+    #[test]
+    fn a_remote_can_name_a_certificate_to_trust() {
+        let parsed: RemotesFile = toml::from_str(
+            r#"
+[remotes.nas]
+url = "https://nas.lan:7878"
+token = "abc"
+ca_file = "/etc/spacetrace/nas.pem"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.remotes["nas"].ca_file.as_deref(),
+            Some(Path::new("/etc/spacetrace/nas.pem"))
+        );
+        // Absent means "the public roots only", which is what every remote
+        // behaved like before this key existed.
+        let without: RemotesFile = toml::from_str("[remotes.x]\nurl = \"https://x\"\n").unwrap();
+        assert!(without.remotes["x"].ca_file.is_none());
+    }
+
+    /// A `ca_file` that cannot be read has to stop the command with the path in
+    /// the message. Falling back to the public roots would turn a typo into a
+    /// connection that fails later for an unrelated-looking reason.
+    #[test]
+    fn an_unreadable_ca_file_is_reported_with_its_path() {
+        let err = read_pem_roots(Path::new("/nonexistent/ca.pem")).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("ca_file"),
+            "the error must name the key: {text}"
+        );
+        assert!(
+            text.contains("/nonexistent/ca.pem"),
+            "the error must name the path: {text}"
+        );
+    }
+
+    #[test]
+    fn a_ca_file_that_is_not_a_certificate_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-cert.pem");
+        std::fs::write(&path, b"this is not PEM at all\n").unwrap();
+
+        let err = read_pem_roots(&path).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("not-a-cert.pem"),
+            "the error must name the file: {text}"
+        );
     }
 
     #[test]
