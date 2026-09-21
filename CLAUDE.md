@@ -69,6 +69,7 @@ Some rule here enforce themselves under `.claude/` (rationale: `9f09332`), and i
 | `security-reviewer` (agent) | Agent and CLI against threat model: near-root service, its token, two path that open byte off network |
 | `code-reviewer` (agent) | Ordinary review, before commit |
 | `test-writer` (agent) | New test, in repo style |
+| `changelog-translation-reviewer` (agent) | Five locale of entry disagree: dropped negation, translated flag, drifted number. Test only prove locale **present** |
 | `changelog-entry` (skill) | User-visible change: five locale, then regenerate `CHANGELOG.md` |
 | `release` (skill) | Cut release; full sequence in [docs/RELEASING.md](docs/RELEASING.md) |
 | `preflight` (skill) | Everything CI run, before push, cheapest first |
@@ -77,7 +78,7 @@ Some rule here enforce themselves under `.claude/` (rationale: `9f09332`), and i
 
 Two hook run via `.claude/settings.json`: Edit/Write on generated `CHANGELOG.md` blocked (Bash redirection stay allowed, release procedure use it), and at end of session you asked once if `crates/*/src` changed while `changelog.json` no change. `.claude/hooks/rustfmt-on-edit.sh` still on disk but **nothing reference it**: plugin hook do same job in every repo and back off silent without `rustfmt`, so local wiring left `settings.local.json` on 16 September 2026, where both had run per edit.
 
-**Cross-repo tool live in `spacetrace-tools` plugin** (`spacetrace-tooling`, next door, private), under `spacetrace-tools:` prefix. Relevant here: `doc-drift-auditor` (what diff turn false in doc) and `workspace-audit` (same across five repo). `code-reviewer` and `test-writer` exist there too, but **same-named agent here sharper and stay**; prefix stop collision. `security-reviewer` share name without being same agent — plugin one read hub credential and dashboard, this one near-root service on somebody else server. **Full list stay in plugin README**, because inventory in four place make the drift this file exist to hunt. Plugin `CHANGELOG.md` hook deliberately silent here; local one already cover it.
+**Cross-repo tool live in `spacetrace-tools` plugin** (`spacetrace-tooling`, next door, private), under `spacetrace-tools:` prefix. Relevant here: `doc-drift-auditor` (what diff turn false in doc), `workspace-audit` (same across five repo) and `release-landed` (after release: binary downloadable, `desktop-latest` moved, site fallback bumped, site rebuilt — four post-condition no single repo can see). `code-reviewer` and `test-writer` exist there too, but **same-named agent here sharper and stay**; prefix stop collision. `security-reviewer` share name without being same agent — plugin one read hub credential and dashboard, this one near-root service on somebody else server. **Full list stay in plugin README**, because inventory in four place make the drift this file exist to hunt. Plugin `CHANGELOG.md` hook deliberately silent here; local one already cover it.
 
 Vendored `web-design-guidelines` skill left with site in `4d90a05`. That commit left broken symlink under `.claude/skills/` and root `skills-lock.json`, so skill never load at all; both deleted 16 September 2026.
 
