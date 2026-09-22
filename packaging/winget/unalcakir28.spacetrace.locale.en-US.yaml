@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: unalcakir28.spacetrace
+PackageVersion: "@VERSION@"
+PackageLocale: en-US
+Publisher: unalcakir28
+PublisherUrl: https://github.com/unalcakir28
+PublisherSupportUrl: https://github.com/unalcakir28/spacetrace/issues
+PackageName: spacetrace
+PackageUrl: https://spacetrace.teknobakkall.com
+License: Apache-2.0
+LicenseUrl: https://github.com/unalcakir28/spacetrace/blob/main/LICENSE
+ShortDescription: Scan a disk, snapshot it, and find out what grew
+Description: |-
+  spacetrace scans a directory tree, stores the result as a snapshot, and
+  compares two snapshots to answer the question a one-off disk usage tool
+  cannot: which folder grew, and by how much.
+
+  It ships two binaries. spacetrace is the command-line tool. spacetrace-agent
+  is a scheduler and HTTP service for a server, so a machine you do not sit at
+  can be scanned on a timetable and read remotely.
+Tags:
+  - disk
+  - disk-usage
+  - du
+  - storage
+  - cli
+ReleaseNotesUrl: https://github.com/unalcakir28/spacetrace/releases/tag/v@VERSION@
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

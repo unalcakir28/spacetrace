@@ -1,0 +1,32 @@
+{
+    "version": "@VERSION@",
+    "description": "Scan a disk, snapshot it, and find out what grew",
+    "homepage": "https://spacetrace.teknobakkall.com",
+    "license": "Apache-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/unalcakir28/spacetrace/releases/download/v@VERSION@/spacetrace-v@VERSION@-x86_64-pc-windows-msvc.zip",
+            "hash": "@SHA_WINDOWS_X86_64@",
+            "extract_dir": "spacetrace-v@VERSION@-x86_64-pc-windows-msvc"
+        }
+    },
+    "bin": [
+        "spacetrace.exe",
+        "spacetrace-agent.exe"
+    ],
+    "checkver": {
+        "github": "https://github.com/unalcakir28/spacetrace"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/unalcakir28/spacetrace/releases/download/v$version/spacetrace-v$version-x86_64-pc-windows-msvc.zip",
+                "extract_dir": "spacetrace-v$version-x86_64-pc-windows-msvc"
+            }
+        },
+        "hash": {
+            "url": "https://github.com/unalcakir28/spacetrace/releases/download/v$version/SHA256SUMS",
+            "find": "([a-fA-F0-9]{64})\\s+\\./$basename"
+        }
+    }
+}

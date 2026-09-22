@@ -1,0 +1,23 @@
+# Maintainer: unalcakir28 <https://github.com/unalcakir28>
+pkgname=spacetrace-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Scan a disk, snapshot it, and find out what grew"
+arch=('x86_64' 'aarch64')
+url="https://spacetrace.teknobakkall.com"
+license=('Apache-2.0')
+provides=('spacetrace')
+conflicts=('spacetrace')
+# The musl builds, deliberately: they are the ones the release publishes, and
+# a static binary is the same thing the agent is installed as on a NAS.
+source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::https://github.com/unalcakir28/spacetrace/releases/download/v$pkgver/spacetrace-v$pkgver-x86_64-unknown-linux-musl.tar.gz")
+source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::https://github.com/unalcakir28/spacetrace/releases/download/v$pkgver/spacetrace-v$pkgver-aarch64-unknown-linux-musl.tar.gz")
+sha256sums_x86_64=('@SHA_LINUX_X86_64@')
+sha256sums_aarch64=('@SHA_LINUX_ARM64@')
+
+package() {
+  install -Dm755 "$srcdir/spacetrace" "$pkgdir/usr/bin/spacetrace"
+  install -Dm755 "$srcdir/spacetrace-agent" "$pkgdir/usr/bin/spacetrace-agent"
+  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "$srcdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

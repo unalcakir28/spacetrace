@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: unalcakir28.spacetrace
+PackageVersion: "@VERSION@"
+InstallerType: zip
+# The binaries sit inside a versioned directory in the archive, not at its
+# root, so every RelativeFilePath carries the version. A manifest written
+# against the tar.gz layout, where they are at the root, installs nothing.
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: spacetrace-v@VERSION@-x86_64-pc-windows-msvc\spacetrace.exe
+    PortableCommandAlias: spacetrace
+  - RelativeFilePath: spacetrace-v@VERSION@-x86_64-pc-windows-msvc\spacetrace-agent.exe
+    PortableCommandAlias: spacetrace-agent
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/unalcakir28/spacetrace/releases/download/v@VERSION@/spacetrace-v@VERSION@-x86_64-pc-windows-msvc.zip
+    InstallerSha256: @SHA_WINDOWS_X86_64_UPPER@
+ManifestType: installer
+ManifestVersion: 1.6.0
