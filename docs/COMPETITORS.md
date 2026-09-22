@@ -85,6 +85,42 @@ TODO.md saying "none of the competitors do this on macOS" was **wrong**
 and has been corrected. The Windows (B4) and Linux (B6) counterparts are
 still open, and those machines aren't on hand.
 
+**The same inference, taken one step further (22 September 2026).** After B5
+the remaining per-entry syscall was the clone probe: an `open` plus an
+`fcntl(F_LOG2PHYS_EXT)` for every file whose size collided with another's, in
+a phase of its own after the walk. Ablation put it at 23 ms of 74 on `/usr`,
+90 of 596 on `/Applications` and 551 of 2400 on `~/Desktop/Projects` — **15%
+to 31% of the scan** `[measured]`.
+
+APFS will name the clone family inside the bulk record itself:
+`ATTR_CMNEXT_CLONEID` and `ATTR_CMNEXT_EXT_FLAGS`, in `forkattr`, under
+`FSOPT_ATTR_CMN_EXTENDED`. The family is keyed `(device, clone id)` and
+gated on `EF_MAY_SHARE_BLOCKS` — without that gate every file would join a
+family, because APFS hands every file a clone id whether or not it shares
+anything. Charging happens in the walk, beside the hardlink claim, so the
+phase is gone rather than faster. **dua-cli 2.45.0 does exactly this**, which
+is how it got the same answer for 2–18% where we paid 15–31%.
+
+Head to head against the previous build and against dua, interleaved in a
+random order each round, warm cache, median `[measured]`:
+
+| Corpus | before | after | dua 2.45.0 |
+|--------|--------|-------|------------|
+| `/usr`, 50,189 entries | 94 ms | **78 ms** | 77 ms |
+| `/Applications`, 415,503 | 485 ms | **412 ms** | 448 ms |
+| `~/Desktop/Projects`, 1,064,452 | 2133 ms | **1431 ms** | 1566 ms |
+
+Part of the gain is the thread default, which moved for the same reason
+(§1.2). `--no-clone-dedupe` now buys nothing measurable (398 vs 412 ms on
+`/Applications`), where it used to buy 15%: correctness on APFS has stopped
+costing anything at all.
+
+**Worth keeping in view when reading that table:** `dua <path>` prints an
+aggregate and keeps nothing — 24 MiB peak against our 200 — while these runs
+build a full queryable arena that can be saved, diffed and served. The two
+tools are not doing the same amount of work, and we are now faster anyway on
+both large corpora.
+
 ### 1.2 Thread scaling
 
 | Threads | Duration | Speedup |
@@ -128,6 +164,27 @@ chained directories underneath one another, producing a deep and narrow tree
 that doesn't parallelize either. Files per directory was matched, but what
 actually matters for parallelism — **branching** — was missed. Above 412k is
 still unmeasured.
+
+**22 September 2026, third measurement — the optimum moved because the walk
+got cheaper.** `~/Desktop/Projects` (1,064,452 entries) closes the "above 412k
+unmeasured" gap with a real tree rather than a synthetic one, and the same
+sweep was repeated after the clone probe moved into the bulk listing (§1.1).
+Best of 4–5 runs per setting `[measured]`:
+
+| Corpus | 4 | 5 | 6 | 7 | 8 | 10 |
+|--------|---|---|---|---|---|----|
+| `/usr`, 50,189 | 84 | 77 | **74 ms** | 76 | 75 | 81 |
+| `/Applications`, 415,503 | 450 | 407 | 424 | **389 ms** | 403 | 457 |
+| `~/Desktop/Projects`, 1,064,452 | 1553 | 1376 | **1342 ms** | 1408 | 1647 | 2009 |
+
+**The default is now `min(cores, 6)`.** Two things changed since the 10
+September table. The curve *sharpened*: with the per-file clone probe still in
+the walk it was almost flat on `/usr` (92/89/96/99/93/98 ms across 4–10), so a
+wrong cap cost little; it now costs 22% on the largest corpus. And the
+optimum *fell*, because less work per entry means the arena lock and the
+work-stealing coordination are a larger share of the run. 6 is at or within
+noise of the best on all three, which is the first time one setting has been
+able to say that.
 
 ### 1.3 Accuracy
 
@@ -207,6 +264,37 @@ Comparison points:
 shared filename store + dense directory ids**, peak RSS down 49% (525 MB →
 268 MB). Our 104-byte + per-node `String` design is exactly the design they
 abandoned.
+
+**Re-measured 22 September 2026, and most of the table above is now stale.**
+The intermediate tree went in B1-K (14 September): the walk writes each
+directory straight into the arena, so the two are never alive at once. On
+1,064,452 real entries `[measured]`:
+
+| | before 22 Sep | after |
+|--|--------------|-------|
+| peak RSS, whole process | 299.2 MiB | **199.7 MiB** |
+| peak, `memprobe` | 276.5 MiB (272 B/entry) | **182.7 MiB (178 B/entry)** |
+| the tree itself | 108.8 MiB (106 B/entry) | 108.8 MiB (106 B/entry) |
+| everything else | 169.0 MiB (61% of peak) | **73.9 MiB (40%)** |
+
+The live tree never moved — `Node` is 72 B plus the name, as it has been
+since 9 September. What fell is what the *walk* held on the way there: it
+used to build a `PathBuf` for every entry it listed, and now builds one only
+for the directories it descends into, which on a real disk is a tenth of
+them. So the honest per-entry figure to compare against dua-cli's 64 B is
+**106 B**, not 178: the rest is allocator retention, not structure.
+
+Two things were tried and did not help, recorded so they are not tried again:
+passing `expected_entries` so the arena never doubles made the peak **worse**
+(191.3 vs 182.7 MiB), which rules out arena growth as the cause; and reusing
+one bulk-listing buffer per thread instead of allocating 256 KiB per
+directory did not move the wall time at all. The residue is libmalloc
+declining to return fragmented spans — RSS does not fall when the tree is
+dropped — which is TODO D4 and is not a leak.
+
+For scale against the tools that keep nothing: `dua` peaks at 24.1 MiB and
+`ncdu -o` at 2.5 MiB on the same tree, because neither retains a queryable
+structure afterwards. `dust`, which does, peaks at 773 MiB.
 
 ---
 

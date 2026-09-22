@@ -262,6 +262,51 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
 
 ### B. Speed — measured gaps
 
+- [x] **B8 The clone probe leaves the walk** — *(22 September 2026)*
+
+      After B5 removed the per-entry `lstat` on macOS, the remaining
+      per-entry syscall was the clone probe: an `open` plus an
+      `fcntl(F_LOG2PHYS_EXT)` for every file whose logical size collided
+      with another's, run in a phase of its own after the walk. Ablation put
+      it at **15–31% of the scan**: 23 ms of 74 on `/usr`, 90 of 596 on
+      `/Applications`, 551 of 2400 on `~/Desktop/Projects`.
+
+      APFS names the clone family inside the bulk record. `forkattr` gains
+      `ATTR_CMNEXT_CLONEID | ATTR_CMNEXT_EXT_FLAGS` under
+      `FSOPT_ATTR_CMN_EXTENDED`; the family is `(device, clone id)`, gated on
+      `EF_MAY_SHARE_BLOCKS` because APFS hands *every* file a clone id and
+      without the gate every file would join a family. Charging moved into
+      `place()` beside the hardlink claim, both resolved once per directory
+      so each process-wide lock is taken once rather than per entry.
+
+      **The one hazard, and it is silent:** a name dropped as a repeat
+      hardlink must not also consume its clone family's claim, or the
+      family's blocks are charged to nobody and the total comes out short.
+      `Ctx::claim` resolves the two in that order for exactly this reason.
+
+      Results, interleaved random order, warm cache, median `[measured]`:
+
+      | Corpus | before | after | dua-cli 2.45.0 |
+      |---|---|---|---|
+      | `/usr`, 50,189 | 94 ms | **78 ms** | 77 ms |
+      | `/Applications`, 415,503 | 485 ms | **412 ms** | 448 ms |
+      | `~/Desktop/Projects`, 1,064,452 | 2133 ms | **1431 ms** | 1566 ms |
+
+      Peak RSS on the largest fell 299 → 200 MiB in the same change, because
+      the walk stopped building a `PathBuf` per entry (see D4). The thread
+      default moved 8 → 6 for the same underlying reason: less work per entry
+      makes coordination a larger share, and 8 now costs 22% at 1M entries.
+
+      Two consequences worth knowing about:
+
+      - **The 64 KiB floor is gone.** It existed because each check cost an
+        open; small clones are now deduplicated too, so `clones_deduped`
+        rises and a tree of many small clones reports slightly less.
+      - **`clones_probed` is 0 on an ordinary macOS scan.** The counter stays
+        because it is on the agent's wire and because the slow listing path
+        (a directory holding a mount point) still asks one file at a time,
+        now with `getattrlist` rather than an `open` + `fcntl`.
+
 - [x] **B1 Memory** — *(9 September 2026: measured, broken down, four done.
       The fifth and main one, **B1-K**, finished on 14 September 2026.)*
 
@@ -497,6 +542,72 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
          the normal path stays the one most users hit. B4 does not
          excuse leaving it slow.
 
+      5. **The non-elevated tier, and the one thing that decides its
+         shape** *(22 September 2026, read off the Win32 ABI in
+         `windows-sys` 0.61 — a structure layout is not machine-dependent,
+         so this much did not need the volume.)*
+
+         `GetFileInformationByHandleEx(FileIdBothDirectoryInfo)` answers a
+         whole directory from the **directory's** handle: per entry it
+         carries `EndOfFile`, `AllocationSize`, `FileAttributes` and
+         `FileId`. No administrator, works on ReFS, FAT and network
+         drives. That is `alloc` and the file identity without opening
+         anything per entry, which is what the +36% is spent on.
+
+         **What it does not carry is the link count**, and neither does
+         `FILE_ID_EXTD_DIR_INFO`, the newer class. `NumberOfLinks` exists
+         in exactly two places, `FILE_STANDARD_INFO` and
+         `BY_HANDLE_FILE_INFORMATION`, and both want an open handle. So
+         there is no Windows directory enumeration that answers everything
+         the Unix `stat` in the walk already answers, and the plan's
+         "drop `nlink` in favour of the `(volume, FileId)` set" is a
+         **trade, not a simplification**. What it costs, precisely:
+
+         - *Deduplication stays correct.* `(volume serial, FileId)` is
+           exactly what a hardlink shares, and the volume serial is one
+           call per directory, not per entry. `Ctx::claim` already keys on
+           a pair, so nothing in the accounting changes.
+         - *Three consumers read the value itself.* `store::ncdu` writes
+           `"nlink":N,"hlnkc":true` for files above 1 — the interop
+           contract ncdu and gdu read; `dupes` gates on `nlink <= 1`; and
+           `store::digest` hashes it, so **a Tier 1 scan and an ordinary
+           scan of the same tree would carry different content hashes**.
+           That last one is what stops this from being a free win: the
+           whole point of `assert_same_answer_as_lstat` on macOS is that
+           a second metadata path must not disagree with the first.
+         - *A tree-scoped count is not the same count.* "Seen twice under
+           this root" misses a file whose other name is outside it, which
+           the real `nlink` does not.
+
+         **Two smaller wins that are not trades and should land first.**
+
+         - `query()` calls `GetFileInformationByHandleEx(FileStandardInfo)`
+           for `AllocationSize` and then `GetFileInformationByHandle` for
+           the link count — but `FILE_STANDARD_INFO` **already carries
+           `NumberOfLinks`**. The second call adds only the file index and
+           the volume serial, both of which the directory listing above
+           supplies. So the listing plus one `FileStandardInfo` per file
+           replaces three per-entry calls with one, with no semantic
+           change at all.
+         - With `--no-dedupe`, or for a directory, nothing outside the
+           listing is wanted and the handle disappears entirely.
+
+         **And one route worth a look on the machine:**
+         `GetFileInformationByName` (Windows 11 22H2+) answers
+         `FILE_STAT_BASIC_INFORMATION` **by path, with no handle** — and
+         that structure has `AllocationSize`, `FileId` *and*
+         `NumberOfLinks` together. It would be the exact counterpart of
+         the `getattrlist` call that replaced the `fcntl` probe on macOS
+         in B8. `windows-sys` 0.61 does not expose it, so it needs a
+         hand-written `extern "system"` and a `GetProcAddress` fallback
+         for older Windows — neither of which is worth writing blind.
+
+         **None of this is written.** It is type-checkable here and
+         nothing else, and the repository's own rule applies: no claim
+         that anything works on Windows before CI says so. The
+         differential test in point 3 is what settles the `nlink`
+         question, because it will fail loudly on exactly that field.
+
       Same trip, while the machine is there: **B7** is the same API
       family and belongs directly after this, and the desktop's treemap
       performance on the Windows WebView is still unverified (Phase 3) —
@@ -584,6 +695,80 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       (invariant 2) — the delta cannot patch an arena in place, it has to
       feed `TreeBuilder`. A stale or rolled-over journal ID must fall
       back to a full scan, silently and always.
+
+      **macOS comes first, and its half is now measured** *(22 September
+      2026)*. The same feature wants three journals — USN on Windows,
+      FSEvents on macOS, fanotify on Linux — and FSEvents is the one that
+      can be tried on the machine this is written on. `examples/fsprobe.rs`
+      is that experiment; it is kept because the numbers below are the
+      whole case for the feature.
+
+      **FSEvents answers the question, including the case a directory
+      mtime cannot.** Replaying from a stored event id returns the paths
+      that changed under a root, and a file *grown in place* comes back
+      with `ItemModified` — which is what rules out the obvious cheap
+      alternative of comparing directory mtimes, since writing into an
+      existing file changes no directory's mtime and would be missed.
+
+      **The cost is proportional to how far back the cursor is, not to
+      how much changed** `[measured]`, replaying under `~/Desktop/Projects`:
+
+      | Event ids back | Replay | Events returned |
+      |---|---|---|
+      | 1,000 | 7.7 ms | 0 |
+      | 10,000 | 10.2 ms | 5 |
+      | 100,000 | 29.9 ms | 633 |
+      | 1,000,000 | 835 ms | 24,616 |
+      | all history (id 1) | 19.4 s | 6 |
+
+      Against a full scan of the same tree at **1431 ms**, a rescan an
+      hour or a day later costs tens of milliseconds — a 20–50× win, and
+      the strategic case for the feature holds up. The last row is the
+      shape of the failure: an id old enough that the whole `/.fseventsd`
+      log is read takes far longer than rescanning, and it reports the
+      condition **by not finishing** rather than by a flag. So the
+      fallback rule writes itself: **spend at most as long asking as the
+      last full scan took** — `scans.duration_ms` is already stored — and
+      walk everything when the deadline passes. Every other loss mode
+      (`MustScanSubDirs`, `UserDropped`, `KernelDropped`,
+      `EventIdsWrapped`, `RootChanged`, `Mount`, `Unmount`) is a flag on
+      an event and lands in the same branch.
+
+      **The blocker is not the journal. It is that the arena stores no
+      identity.** To reuse an unchanged subtree the new scan has to splice
+      the old nodes in — which is easy, a breadth-first pass through
+      `TreeBuilder::push_block` keeps invariant 2 by construction — but it
+      must also restore the *accounting* state, and it cannot. `Ctx::claim`
+      keys hardlinks on `(dev, ino)` and clone families on
+      `(dev, clone id)`; `Node` carries neither, and never has. The
+      failure is silent and specific: a hardlink or clone family that
+      **straddles the boundary**, one name inside a spliced subtree and
+      one inside a re-walked one, is charged twice — the spliced copy
+      still carries the bytes it was charged last time, and the re-walked
+      copy claims an identity this run has not seen.
+
+      Three ways out, costed:
+
+      1. **Store the identity per node.** Principled, and expensive: `ino`
+         is 8 bytes on a 72-byte `Node` and a column on every row of every
+         snapshot, and it changes `content_hash`.
+      2. **One bit per node: "something below me has a shared identity".**
+         Computed in the reverse pass `TreeBuilder::aggregate` already
+         makes, and splicing is allowed only where the bit is clear. Sound,
+         and **free in memory** — `Node` is exactly 72 bytes with five
+         bytes of padding after `kind`, so a `u8` flag fits in space that
+         is already being paid for. This is the one to build.
+      3. **Refuse incremental when the previous scan deduplicated
+         anything.** Sound and trivial, but on a developer's Mac
+         `clones_deduped` is never zero, so it would switch the feature off
+         exactly where it is worth most. `clones_deduped` is not even in
+         the `scans` table today; only `hardlinks_deduped` is.
+
+      So the build order is: the flag from (2), then the `scans` cursor
+      column, then the splice, then the safety test — **a rebuilt tree and
+      a full scan of the same filesystem state must have the same
+      `content_hash`**, which is the only assertion strong enough to be
+      worth having here.
 
 ### C. Feature gaps
 
@@ -1112,7 +1297,44 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       doesn't write the quarantine flag, the warning never triggers. What to
       delete once payment is made is written item by item in
       docs/RELEASING.md.
-- [ ] **E4 Homebrew / AUR / Microsoft Store.**
+- [ ] **E4 Homebrew / Scoop / winget / AUR** — *manifests written and
+      verified 22 September 2026; the four repositories and accounts do not
+      exist yet.*
+
+      **Why it is the widest gap and not the smallest.** On 22 September 2026
+      spacetrace was in **no package manager at all**: 121 downloads across 14
+      releases, 0 stars, 4 unique visitors in 14 days. Every tool it is
+      measured against is one command away — `brew install dua-cli`,
+      `scoop install gdu`, `pacman -S ncdu`. Being measurably faster than them
+      (B8) reaches nobody who installs software the way most people do.
+
+      Done: `packaging/` holds a template per manager and `render.sh`, which
+      fills them from a **published** release and refuses a tag that was never
+      published. Rendered against v0.9.0 and checked — Ruby parses the
+      formula, a YAML parser the three winget manifests, the digests match the
+      files downloaded from the release. A `packaging` job in `release.yml`
+      renders and re-verifies on every release and attaches the result as an
+      asset, which also makes it the one check that notices an asset rename.
+
+      **The layout trap, worth stating once:** the `tar.gz` archives put the
+      binaries at the root, the Windows `.zip` puts them in a versioned
+      subdirectory. Scoop needs `extract_dir` and winget a `RelativeFilePath`
+      with the version in it; a manifest written from the tar.gz shape
+      installs nothing on Windows and says nothing about it.
+
+      Left, and each is an account or a repository somebody has to create:
+
+      - `unalcakir28/homebrew-tap` — public repo, `Formula/spacetrace.rb`
+      - `unalcakir28/scoop-bucket` — public repo, `bucket/spacetrace.json`
+      - winget — a pull request per version to `microsoft/winget-pkgs`
+      - AUR — an SSH key at aur.archlinux.org, then `spacetrace-bin`;
+        `.SRCINFO` needs `makepkg` and therefore an Arch machine
+
+      homebrew-core instead of a tap would drop the tap prefix, but its
+      acceptance criteria are about notability and 0 stars does not clear
+      them. Flathub is deliberately excluded: a desktop store for a
+      command-line tool, sandboxed away from the filesystem it exists to read.
+      Detail and rationale: [packaging/README.md](packaging/README.md).
 - [x] ~~**E5 Migration guides**~~ — **out of scope** *(14 September 2026,
       user decision)*. ROADMAP had listed it as a 1.0 requirement; it isn't
       one. The product itself already imports ncdu output (C8), and `--help`
@@ -1130,10 +1352,10 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
 | ~~4~~ ✅ | ~~A3, A5~~ | We were wrong on macOS (DaisyDisk was right) — A3 is done; corruption over the network is no longer silent. **Done (10 September 2026)** |
 | 5 | ~~B2~~ ✅, **B3 ← next up** | Cheap and measured — B2 is done (10 September 2026); B3 needs a real HDD or a network drive |
 | ~~6~~ | ~~C3, D1~~ | Both done |
-| 7 | B4, ~~B5~~ ✅, B6 | Platform-specific fast paths — B5 is done (11 September 2026); B4 needs a Windows machine, B6 a Linux machine |
+| 7 | B4, ~~B5~~ ✅, B6, ~~B8~~ ✅ | Platform-specific fast paths — B5 is done (11 September 2026) and B8 on 22 September, which is where the lead over dua-cli came from; B4 needs a Windows machine, B6 a Linux machine |
 | 8 | B7 | The biggest strategic win. Listed after B4 for the machine, not for a dependency — and since 21 September 2026 it reads as the cheaper of the two, because it needs no MFT parser |
 | 9 | ~~C1–C9~~ ✅ | Feature parity completed *(11 September 2026)* |
-| 10 | E3, E4, ~~D2~~ ✅, ~~D3~~ ✅ | Release prep (E5 left out of scope). D3 done 14 September 2026, D2 on 21 September; E3 needs money and E4 needs a release to package |
+| 10 | E3, **E4 ← half done**, ~~D2~~ ✅, ~~D3~~ ✅ | Release prep (E5 left out of scope). D3 done 14 September 2026, D2 on 21 September; E3 needs money. E4's manifests and CI job landed 22 September — what is left is creating four repositories and accounts, which is the widest remaining competitive gap and needs no engineering |
 | ~~last~~ ✅ | ~~B1-K~~ | Double storage. Research was done and **the problem had been framed wrong**: the arena didn't want BFS, it wanted two properties. The intermediate tree was removed, speed is the same, peak memory is -37% on `/Applications`. **Done (14 September 2026)** |
 
 ---
