@@ -73,9 +73,24 @@ impl Remote {
 
         let mut builder = reqwest::blocking::Client::builder();
         if let Some(path) = &ca_file {
-            for cert in read_pem_roots(path)? {
-                builder = builder.add_root_certificate(cert);
-            }
+            // `tls_certs_only`, not "add these to whatever the platform
+            // trusts". Either reason below would be enough on its own.
+            //
+            // It is what `ca_file` already means. A self-signed certificate
+            // named here is pinned — the operator is saying "this one" — and
+            // trusting it *alongside* every public certificate authority is a
+            // weaker promise than the documentation makes.
+            //
+            // And adding is not merely weaker on Windows, it does not work.
+            // reqwest hands extra roots to `rustls_platform_verifier`, whose
+            // Windows backend only reconsiders them when CryptoAPI came back
+            // with a *partial* chain. A self-signed certificate's chain is not
+            // partial: it is complete and untrusted, so the answer is
+            // `CERT_E_UNTRUSTEDROOT`, the extra root is never looked at, and
+            // the connection fails with `UnknownIssuer`. Self-signed is the
+            // only kind `ca_file` exists for, so this path could never have
+            // worked there. Caught by the agent's own TLS tests in CI.
+            builder = builder.tls_certs_only(read_pem_roots(path)?);
         }
         let client = builder.build().context("building the HTTP client")?;
         Ok(Remote {

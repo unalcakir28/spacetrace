@@ -20,6 +20,10 @@ because anyone can install them.
 
 - macOS scans are 15-33% faster and hold a third less memory. Copy-on-write clones used to be found in a phase of their own after the walk, opening every candidate file one at a time; APFS reports the clone family inside the directory listing the walk was already reading, so that phase is gone. Measured against the previous build, warm cache, interleaved runs: 50,189 entries 94 to 78 ms, 415,503 entries 485 to 412 ms, 1,064,452 entries 2133 to 1431 ms. Peak memory on the largest of those fell from 299 to 200 MiB, because the walk no longer builds a full path for every entry it lists - only for the directories it descends into. Clone deduplication is now free rather than 15-31% of the scan, so `--no-clone-dedupe` no longer buys any speed.
 
+### Fixed
+
+- `ca_file` in `remotes.toml` now works on Windows, and now trusts only the certificate it names. Connecting to an agent serving its own TLS failed there with `InvalidCertificate(UnknownIssuer)` however correct the certificate was: the client added it to the platform's own roots, and the Windows verifier only reconsiders an added root when the chain came back incomplete - a self-signed certificate's chain is complete and untrusted, so the added root was never looked at, and self-signed is the only kind `ca_file` is for. The client now trusts exactly the certificates in `ca_file` and no public authority, which is what the documentation already described as pinning and what the other platforms should have been doing too.
+
 ## 0.9.0 — 2026-09-21
 
 ### Added

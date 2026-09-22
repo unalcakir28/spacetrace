@@ -117,11 +117,18 @@ impl TlsAgent {
     }
 
     /// A client that trusts exactly this agent's certificate and nothing else.
+    ///
+    /// `tls_certs_only`, which is what that sentence describes and what the
+    /// CLI does for a `ca_file`. Adding the certificate to the platform's own
+    /// roots instead is a different, weaker thing — and on Windows it does not
+    /// work at all, which is how these two tests spent a day red: the platform
+    /// verifier only reconsiders extra roots for a *partial* chain, and a
+    /// self-signed certificate's chain is complete and untrusted.
     fn client(&self) -> reqwest::Client {
         let root = reqwest::Certificate::from_pem(self.cert_pem.as_bytes())
             .expect("the generated certificate must be valid PEM");
         reqwest::Client::builder()
-            .add_root_certificate(root)
+            .tls_certs_only([root])
             .build()
             .unwrap()
     }
