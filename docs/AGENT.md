@@ -143,13 +143,38 @@ tls_cert_file = "/etc/spacetrace/agent.pem"
 tls_key_file = "/etc/spacetrace/agent.key"
 ```
 
-A self-signed certificate is a chain of one and works. Generate it naming the
-address clients will use — **as a subject alternative name**, because no
-current TLS client falls back to the common name, and a certificate without a
-matching SAN is rejected by every one of them:
+A self-signed certificate is a chain of one and works. Three things about the
+command below are not optional, and each was measured by generating a
+certificate without it and watching `spacetrace scans --remote` refuse the
+connection:
+
+- **`subjectAltName`.** No current TLS client falls back to the common name, so
+  a certificate that does not name the address clients use is rejected by every
+  one of them.
+- **`extendedKeyUsage=serverAuth`.** Without it the CLI refuses the connection
+  with `invalid peer certificate: Other(OtherError(EkuError))`. Measured with
+  the certificate otherwise identical and `CA:TRUE` and `CA:FALSE` both tried,
+  so the EKU is the cause and the basic constraints are not.
+- **`-days` at most 825.** A longer validity is refused with `certificate is
+  not standards compliant: -67901`, which is Apple's 825-day limit on server
+  certificates. Measured on macOS; whether a Linux client also refuses a
+  ten-year certificate is untested, so keep it under 825 either way.
 
 ```bash
-openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -keyout /etc/spacetrace/agent.key -out /etc/spacetrace/agent.pem -subj "/CN=nas.lan" -addext "subjectAltName=DNS:nas.lan,IP:192.168.1.10"
+openssl req -x509 -newkey rsa:2048 -nodes -days 800 \
+  -keyout /etc/spacetrace/agent.key -out /etc/spacetrace/agent.pem \
+  -subj "/CN=nas.lan" \
+  -addext "subjectAltName=DNS:nas.lan,IP:192.168.1.10" \
+  -addext "extendedKeyUsage=serverAuth"
+```
+
+**Do not check the result with `curl` alone.** `curl` accepts a certificate
+missing the EKU that this CLI rejects, so a `curl --cacert` that returns 200 is
+not evidence the agent is reachable. Check with the client that will actually
+talk to it:
+
+```bash
+spacetrace scans --remote nas
 ```
 
 Keep the key unreadable to anyone else (`chmod 600`), and remember the agent
