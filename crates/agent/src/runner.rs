@@ -76,9 +76,9 @@ pub struct InFlight {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows_total: Option<u64>,
     /// `walking`, `finishing`, `saving` or `checksumming`. Each phase moves a
-    /// different counter — after the walk only `clones_probed` does, and while
-    /// the snapshot is being written only `rows_done` does — so a reader who
-    /// does not know the phase reads a healthy scan as a stuck one.
+    /// different counter — while the snapshot is being written only
+    /// `rows_done` does — so a reader who does not know the phase reads a
+    /// healthy scan as a stuck one.
     pub phase: &'static str,
     /// How long every counter has stood still, once that is worth mentioning.
     /// Absent while the scan is moving.
@@ -589,9 +589,8 @@ mod tests {
         assert_eq!((out.errors, out.clones_probed), (1, 3));
     }
 
-    /// Invariant 8 from the other side: after the walk only `clones_probed`
-    /// moves, so a reader who cannot see the phase reads a healthy scan as a
-    /// stuck one.
+    /// Invariant 8 from the other side: each phase moves its own counter, so a
+    /// reader who cannot see the phase reads a healthy scan as a stuck one.
     #[test]
     fn the_phase_is_named_not_guessed() {
         assert_eq!(phase_word(Phase::Walking), "walking");

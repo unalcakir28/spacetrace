@@ -10,6 +10,16 @@ Versions marked *development milestone* were never tagged and have no
 downloadable files. They are recorded because the work happened, not
 because anyone can install them.
 
+## Unreleased
+
+### Changed
+
+- Clones smaller than 64 KiB are deduplicated too, and the default thread count dropped from 8 to 6. The size floor existed because each clone check cost an open file; it costs nothing now, so a tree of many small clones reports less than it did - closer to what `df` says the disk holds. `clones_deduped` rises accordingly. The thread default was re-measured after the walk got cheaper: 6 is at or near the best on all three test corpora, where 8 now costs 22% on the largest of them. Use `--threads` to override.
+
+### Performance
+
+- macOS scans are 15-33% faster and hold a third less memory. Copy-on-write clones used to be found in a phase of their own after the walk, opening every candidate file one at a time; APFS reports the clone family inside the directory listing the walk was already reading, so that phase is gone. Measured against the previous build, warm cache, interleaved runs: 50,189 entries 94 to 78 ms, 415,503 entries 485 to 412 ms, 1,064,452 entries 2133 to 1431 ms. Peak memory on the largest of those fell from 299 to 200 MiB, because the walk no longer builds a full path for every entry it lists - only for the directories it descends into. Clone deduplication is now free rather than 15-31% of the scan, so `--no-clone-dedupe` no longer buys any speed.
+
 ## 0.9.0 — 2026-09-21
 
 ### Added

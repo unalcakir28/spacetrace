@@ -15,14 +15,6 @@ use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
 /// How many failing paths we keep for the report before we only count them.
 const MAX_REPORTED_ERRORS: usize = 64;
 
-/// Files smaller than this are never probed for being clones.
-///
-/// Every probe is an open and an `fcntl`, and the small end of a tree is where
-/// the file count is: on one real disk, dropping below this would have tripled
-/// the number of probes to recover bytes that round to nothing in any total a
-/// user reads.
-const CLONE_MIN_BYTES: u64 = 64 * 1024;
-
 /// Stack for each walk thread.
 ///
 /// The walk recurses once per directory level, so the stack is what bounds the
@@ -233,13 +225,17 @@ pub struct ScanProgress {
     pub dirs: AtomicU64,
     pub bytes: AtomicU64,
     pub errors: AtomicU64,
-    /// Clone candidates probed, during the phase after the walk.
+    /// Files whose clone family had to be asked for one at a time.
     ///
-    /// Its own counter because that phase moves none of the others, and a
-    /// caller watching for a stall has to be able to tell "still working" from
-    /// "stuck". Measured on `~/github`: probing was 1193 ms of a 1989 ms scan,
-    /// so a phase with no counter would look frozen for most of the run — and
-    /// on a disk ten times the size it would trip any stall warning.
+    /// **Zero on an ordinary scan.** The platform's bulk listing carries the
+    /// family inside the record it was already fetching, so nothing is probed;
+    /// this counts only the entries that could not go that way — a directory
+    /// holding a mount point, and filesystems with no bulk listing at all.
+    ///
+    /// It used to count a phase of its own that ran after the walk, and it was
+    /// 1193 ms of a 1989 ms scan on `~/github` with no other counter moving.
+    /// That phase is gone; the counter stays because it is on the agent's wire
+    /// and because the slow path still has to be visible while it runs.
     pub clones_probed: AtomicU64,
     /// Rows written or checked in the phase that is running, if it counts rows.
     ///
@@ -431,6 +427,10 @@ struct Ctx {
     root_dev: u64,
     seen_inodes: Mutex<HashSet<(u64, u64)>>,
     hardlinks_deduped: AtomicU64,
+    /// Families of copy-on-write clones whose blocks some name has already
+    /// been charged for, keyed `(device, clone id)`.
+    shared_blocks: Mutex<HashSet<(u64, u64)>>,
+    clones_deduped: AtomicU64,
     errors: Mutex<Vec<(PathBuf, String)>>,
     progress: Arc<ScanProgress>,
 }
@@ -494,21 +494,91 @@ impl Ctx {
         }
     }
 
-    /// Returns false when this (dev, ino) pair was already counted.
-    fn claim_inode(&self, meta: &RawMeta) -> bool {
-        if !self.opts.dedupe_hardlinks || !meta.is_hardlinked() {
-            return true;
+    /// Which of a directory's entries are charged for their own blocks, or
+    /// `None` when all of them are.
+    ///
+    /// Two deduplications resolved in one pass, because they interact. A
+    /// hardlinked name met a second time carries no bytes; so does a name
+    /// whose copy-on-write clone family has already been charged — a clone
+    /// has its own inode and `nlink == 1`, so hardlink deduplication cannot
+    /// see it, yet the disk holds those blocks once. That is why `du`
+    /// over-counts a cloned tree and `alloc` deliberately does not
+    /// (invariant #1); Cargo alone produces clones by the thousand, copying
+    /// build artifacts out of `target/debug/deps`.
+    ///
+    /// **Order matters.** A name dropped as a repeat hardlink must not also
+    /// consume its clone family's claim, or the family's blocks end up
+    /// charged to nobody at all and the total quietly comes out short.
+    ///
+    /// **One lock per set per directory, taken only when there is something to
+    /// claim.** On a tree of build artifacts nearly every file is a clone, and
+    /// a process-wide mutex taken per entry would be the walk's slowest
+    /// point — the same reason the arena is written a directory at a time
+    /// rather than an entry at a time.
+    ///
+    /// Which name keeps the bytes is undefined in both cases (invariant #3):
+    /// the first thread to claim wins. The guarantee is "once", not "this
+    /// path".
+    fn claim(&self, pending: &[Pending]) -> Option<Vec<bool>> {
+        let hardlinks =
+            self.opts.dedupe_hardlinks && pending.iter().any(|p| p.meta.is_hardlinked());
+        let clones = self.opts.dedupe_clones && pending.iter().any(|p| p.share.is_some());
+        if !hardlinks && !clones {
+            return None;
         }
-        let fresh = self
-            .seen_inodes
-            .lock()
-            .unwrap()
-            .insert((meta.dev, meta.ino));
-        if !fresh {
-            self.hardlinks_deduped.fetch_add(1, Ordering::Relaxed);
+
+        let mut counted = vec![true; pending.len()];
+        if hardlinks {
+            let mut deduped = 0u64;
+            let mut seen = self.seen_inodes.lock().unwrap();
+            for (slot, p) in counted.iter_mut().zip(pending) {
+                if !p.meta.is_hardlinked() || seen.insert((p.meta.dev, p.meta.ino)) {
+                    continue;
+                }
+                *slot = false;
+                deduped += 1;
+            }
+            drop(seen);
+            self.hardlinks_deduped.fetch_add(deduped, Ordering::Relaxed);
         }
-        fresh
+        if clones {
+            let mut deduped = 0u64;
+            let mut seen = self.shared_blocks.lock().unwrap();
+            for (slot, p) in counted.iter_mut().zip(pending) {
+                if !*slot {
+                    continue;
+                }
+                let Some(key) = p.share else {
+                    continue;
+                };
+                if seen.insert((p.meta.dev, key)) {
+                    continue;
+                }
+                *slot = false;
+                deduped += 1;
+            }
+            drop(seen);
+            self.clones_deduped.fetch_add(deduped, Ordering::Relaxed);
+        }
+        Some(counted)
     }
+}
+
+/// One listed entry, with everything needed to account for it.
+///
+/// The name is carried rather than a full path, because a `PathBuf` per entry
+/// is an allocation per entry and only the subdirectories the walk descends
+/// into ever need one — a tenth of the entries on a real disk. The raw
+/// `OsString` and not a slice of the shared name buffer: that buffer holds
+/// `to_string_lossy` output, and rebuilding a path from a lossily converted
+/// name would name a file that does not exist.
+struct Pending {
+    name: std::ffi::OsString,
+    name_off: u32,
+    name_len: u16,
+    meta: RawMeta,
+    /// See [`NamedMeta::share`].
+    share: Option<u64>,
 }
 
 /// Append `name` and return the range that addresses it, truncating on a
@@ -533,7 +603,7 @@ fn push_name(buf: &mut String, name: &str) -> (u32, u16) {
 ///
 /// Not optimal anywhere — it is the setting that is never bad. See
 /// `default_threads`.
-const THREAD_CAP: usize = 8;
+const THREAD_CAP: usize = 6;
 
 /// How many threads to walk with when the caller does not choose.
 ///
@@ -543,20 +613,28 @@ const THREAD_CAP: usize = 8;
 /// and the coordination is pure loss.
 ///
 /// There is no best fixed number: the optimum moves with the shape of the
-/// tree. Measured on an M3 Max (12 performance + 4 efficiency cores),
-/// interleaved runs, median of 9 `[measurement]`:
+/// tree. It also moves when the walk itself gets cheaper, which is what
+/// happened on 22 September 2026 when the clone accounting stopped being a
+/// phase of its own — less work per entry means coordination is a larger share
+/// of the run, and the curve sharpened. Re-measured on the same M3 Max
+/// (12 performance + 4 efficiency cores), best of 4–5 runs per setting:
 ///
 /// ```text
-///                        best        8        16 (the old default)
-///   /usr, 50k entries      6 →  71    92 ms    151 ms
-///   /Applications, 412k   12 → 1233  1407 ms   1581 ms
+///   threads               4      5      6      7      8     10
+///   /usr, 50k            84     77     74     76     75     81 ms
+///   /Applications, 415k 450    407    424    389    403    457 ms
+///   /Projects, 1.06M   1553   1376   1342   1408   1647   2009 ms
 /// ```
 ///
-/// So 8 is a compromise and not an optimum: it loses 30% to the best setting
-/// on the small tree and 14% on the large one. It is chosen because it beats
-/// the old default on both — by 39% and 11% — and because a caller who knows
-/// their disk can say `--threads`. Picking the winner for one corpus would
-/// have made the other markedly worse.
+/// 6 is the first setting that is at or near the best on all three rather
+/// than winning one and losing another, and 8 — what this was until that
+/// day — now costs 22% on the largest of them. Above it the threads are
+/// queueing in the kernel and contending for the arena rather than working.
+/// A caller who knows their disk can still say `--threads`.
+///
+/// The previous numbers, for comparison: with the per-file clone probe still
+/// in the walk the curve was flat (92/89/96/99/93/98 ms on `/usr`), which is
+/// why a wrong cap cost little then and costs a fifth of the run now.
 fn default_threads() -> usize {
     std::thread::available_parallelism()
         .map_or(1, |n| n.get())
@@ -651,6 +729,8 @@ fn scan_with(
         probe,
         seen_inodes: Mutex::new(HashSet::new()),
         hardlinks_deduped: AtomicU64::new(0),
+        shared_blocks: Mutex::new(HashSet::new()),
+        clones_deduped: AtomicU64::new(0),
         errors: Mutex::new(Vec::new()),
         progress: Arc::clone(&progress),
     };
@@ -679,15 +759,8 @@ fn scan_with(
     // Taken back rather than copied: the finished tree is built from these
     // exact nodes, and once they are gone a snapshot answers `None` — which is
     // what a refresh still in flight has to be told.
-    let mut builder = progress.partial.take();
+    let builder = progress.partial.take();
     progress.enter_phase(Phase::Finishing);
-    let clones_deduped = if ctx.opts.dedupe_clones {
-        // On the same pool: this probes one file at a time over `fcntl`, so it
-        // is the same kind of work as the walk and wants the same width.
-        pool.install(|| dedupe_clones(&mut builder, &root_path, &progress))
-    } else {
-        0
-    };
     let tree = builder.finish(root_path);
 
     let stats = ScanStats {
@@ -695,7 +768,7 @@ fn scan_with(
         dirs: progress.dirs.load(Ordering::Relaxed),
         errors: progress.errors.load(Ordering::Relaxed),
         hardlinks_deduped: ctx.hardlinks_deduped.load(Ordering::Relaxed),
-        clones_deduped,
+        clones_deduped: ctx.clones_deduped.load(Ordering::Relaxed),
         error_samples: ctx.errors.into_inner().unwrap(),
         duration_ms: started.elapsed().as_millis() as u64,
         // Asked once, after the walk: it describes the mount, not the tree,
@@ -703,73 +776,6 @@ fn scan_with(
         capacity: crate::capacity::capacity_of(tree.root_path()),
     };
     Ok((tree, stats))
-}
-
-/// Charge copy-on-write clones once, the way hardlinks are charged once.
-///
-/// Runs after the walk and before aggregation, because it needs the whole tree
-/// to work out which files are even worth asking about: only a file whose size
-/// collides with another file's can be a clone, and finding those collisions
-/// costs nothing next to an open per file. On one real tree that filter cut the
-/// probes from every file to a tenth of them.
-///
-/// Unlike hardlink deduplication, *which* copy keeps the bytes is defined here:
-/// the shallowest path, and the alphabetically first among equals. It costs a
-/// sort and it means the answer does not depend on which thread finished first.
-///
-/// This used to say "the lowest node id", which meant the same thing only
-/// while the arena was laid out breadth-first. The walk now writes each
-/// directory in as soon as it has been listed, so a low id means "listed
-/// early", not "near the top" — and sorting by it would have handed the choice
-/// back to the thread scheduler, quietly, with the totals still adding up.
-fn dedupe_clones(builder: &mut TreeBuilder, root: &Path, progress: &ScanProgress) -> u64 {
-    let mut by_size: std::collections::HashMap<u64, Vec<NodeId>> = std::collections::HashMap::new();
-    for (index, node) in builder.nodes.iter().enumerate() {
-        if node.kind == EntryKind::File && node.own_size >= CLONE_MIN_BYTES {
-            by_size
-                .entry(node.own_size)
-                .or_default()
-                .push(index as NodeId);
-        }
-    }
-    let candidates: Vec<NodeId> = by_size
-        .into_values()
-        .filter(|group| group.len() > 1)
-        .flatten()
-        .collect();
-    if candidates.is_empty() {
-        return 0;
-    }
-
-    // Paths first, then probes, because the probe borrows nothing from the
-    // builder and can therefore run on the pool.
-    let paths: Vec<(NodeId, PathBuf)> = candidates
-        .into_iter()
-        .map(|id| (id, builder.path_of(id, root)))
-        .collect();
-    let mut probed: Vec<(usize, PathBuf, NodeId, u64)> = paths
-        .into_par_iter()
-        .filter_map(|(id, path)| {
-            let key = crate::meta::clone_key(&path);
-            // Counted whether or not the file turned out to be a clone: the
-            // point is to show the phase is moving, and a filesystem with no
-            // clones at all would otherwise look stuck for the whole probe.
-            progress.clones_probed.fetch_add(1, Ordering::Relaxed);
-            key.map(|key| (path.components().count(), path, id, key))
-        })
-        .collect();
-    probed.sort_unstable();
-
-    let mut charged: HashSet<u64> = HashSet::new();
-    let mut deduped = 0;
-    for (_, _, id, key) in probed {
-        if charged.insert(key) {
-            continue;
-        }
-        builder.charge_nothing(id);
-        deduped += 1;
-    }
-    deduped
 }
 
 /// Whether this entry's identity will actually be read.
@@ -819,7 +825,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
     // Names are collected here, on this one thread, so that the parallel phase
     // below only has to carry offsets into a buffer nobody else writes to.
     let mut names = String::new();
-    let mut pending: Vec<(PathBuf, u32, u16, RawMeta)> = Vec::new();
+    let mut pending: Vec<Pending> = Vec::new();
 
     // macOS can answer names and metadata in one call. Not for a directory
     // holding a mount point, though: the whole directory arrives at once, so
@@ -829,12 +835,17 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
     if !guarded {
         if let Some(entries) = bulk_list(dir) {
             for item in entries {
-                let path = dir.join(&item.name);
                 let (name_off, name_len) = push_name(&mut names, &item.name.to_string_lossy());
-                pending.push((path, name_off, name_len, item.meta));
+                pending.push(Pending {
+                    name: item.name,
+                    name_off,
+                    name_len,
+                    meta: item.meta,
+                    share: item.share,
+                });
             }
             drop(listing);
-            return place(parent_id, depth, ctx, &names, pending);
+            return place(dir, parent_id, depth, ctx, &names, pending);
         }
     }
 
@@ -888,15 +899,31 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
         if let Some(e) = failure {
             ctx.note_error(&path, &e);
         }
+        // The clone family the bulk listing would have handed over for free.
+        // This path is reached for a directory holding a mount point and for
+        // filesystems with no bulk listing at all, so it is asked one entry at
+        // a time — the only place left that still pays per file for it.
+        let share = if ctx.opts.dedupe_clones && meta.kind == EntryKind::File {
+            ctx.progress.clones_probed.fetch_add(1, Ordering::Relaxed);
+            clone_key(&path)
+        } else {
+            None
+        };
         let raw_name = entry.file_name();
         let (name_off, name_len) = push_name(&mut names, &raw_name.to_string_lossy());
-        pending.push((path, name_off, name_len, meta));
+        pending.push(Pending {
+            name: raw_name,
+            name_off,
+            name_len,
+            meta,
+            share,
+        });
     }
 
     // Listing done; the recursion that follows is not what hangs.
     drop(listing);
 
-    place(parent_id, depth, ctx, &names, pending)
+    place(dir, parent_id, depth, ctx, &names, pending)
 }
 
 /// Account for one directory's entries, write them into the arena as a block,
@@ -911,11 +938,12 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
 /// process-wide mutex either way. Now only the subdirectories become tasks,
 /// which is a tenth as many on a real disk.
 fn place(
+    dir: &Path,
     parent_id: NodeId,
     depth: usize,
     ctx: &Ctx,
     names: &str,
-    pending: Vec<(PathBuf, u32, u16, RawMeta)>,
+    pending: Vec<Pending>,
 ) {
     let mut children: Vec<NewNode<'_>> = Vec::with_capacity(pending.len());
     let mut subdirs: Vec<(NodeId, PathBuf)> = Vec::new();
@@ -923,8 +951,18 @@ fn place(
     // entry. The watcher only needs the numbers to be moving (`StallWatch`),
     // and they move thousands of times a second either way.
     let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
+    // Resolved for the whole directory before anything is charged, so each
+    // process-wide lock is taken once. See `Ctx::claim`.
+    let claimed = ctx.claim(&pending);
 
-    for (index, (path, name_off, name_len, meta)) in pending.into_iter().enumerate() {
+    for (index, entry) in pending.into_iter().enumerate() {
+        let Pending {
+            name,
+            name_off,
+            name_len,
+            meta,
+            share: _,
+        } = entry;
         let is_dir = meta.kind == EntryKind::Dir;
         if is_dir {
             dirs += 1;
@@ -934,11 +972,13 @@ fn place(
 
         // A hardlinked file already counted elsewhere stays visible in the tree
         // but contributes no bytes, so a directory's total never double-counts
-        // it. A directory's own `len()` is its inode size, not user data: real
+        // it. A copy-on-write clone whose family has been charged is treated
+        // the same way, and for the same reason: the blocks exist once. A
+        // directory's own `len()` is its inode size, not user data: real
         // disk usage, so it counts towards `alloc`, but adding it to the
         // logical size would make totals disagree with "sum of the files in
         // here" (invariant #1).
-        let counted = ctx.claim_inode(&meta);
+        let counted = claimed.as_ref().is_none_or(|counted| counted[index]);
         let (size, alloc) = match (counted, is_dir) {
             (false, _) => (0, 0),
             (true, true) => (0, meta.alloc),
@@ -948,16 +988,13 @@ fn place(
             bytes += alloc;
         }
 
-        // Ordered so the cheap tests run first: `is_excluded` has to recover
-        // the name from the path, and there is no reason to pay for that on a
-        // file or when nothing is excluded at all.
         // Kept separate from the caller's own limit, and checked first: this one
         // is not a preference, and a tree that trips it has to leave a trace
         // rather than quietly stopping short of its own contents.
         let too_deep = is_dir && depth >= MAX_WALK_DEPTH;
         if too_deep {
             ctx.note_error(
-                &path,
+                &dir.join(&name),
                 &std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("nested deeper than {MAX_WALK_DEPTH} levels; not descended"),
@@ -968,9 +1005,12 @@ fn place(
             && !too_deep
             && ctx.opts.max_depth.is_none_or(|max| depth < max)
             && (!ctx.opts.one_filesystem || meta.dev == ctx.root_dev)
-            && !is_excluded(&path, &ctx.opts.exclude_names);
+            && !is_excluded(&name, &ctx.opts.exclude_names);
+        // The only entries that get a path of their own: the walk needs one to
+        // recurse with, and building one for every entry was an allocation per
+        // entry for the nine in ten that are not directories.
         if descend {
-            subdirs.push((index as NodeId, path));
+            subdirs.push((index as NodeId, dir.join(&name)));
         }
 
         let from = name_off as usize;
@@ -1023,15 +1063,27 @@ fn bulk_list(_dir: &Path) -> Option<Vec<NamedMeta>> {
 }
 
 /// Whether this directory's name is on the skip list.
-fn is_excluded(path: &Path, excluded: &[String]) -> bool {
+fn is_excluded(name: &std::ffi::OsStr, excluded: &[String]) -> bool {
     if excluded.is_empty() {
         return false;
     }
-    let Some(name) = path.file_name() else {
-        return false;
-    };
     let name = name.to_string_lossy();
     excluded.iter().any(|x| x.as_str() == name)
+}
+
+/// The clone family of one file, where the platform has one.
+///
+/// Only for the listing path that reads a directory an entry at a time; the
+/// bulk listing answers it inside the record it was already fetching.
+#[cfg(target_os = "macos")]
+fn clone_key(path: &Path) -> Option<u64> {
+    crate::bulk::clone_key(path)
+}
+
+/// Nowhere else has copy-on-write clones this scanner can see.
+#[cfg(not(target_os = "macos"))]
+fn clone_key(_path: &Path) -> Option<u64> {
+    None
 }
 
 #[cfg(test)]
@@ -1052,7 +1104,7 @@ mod thread_tests {
         assert_eq!(pool.current_num_threads(), default_threads());
     }
 
-    /// The literal 8 is deliberate. Asserting against `THREAD_CAP` would
+    /// The literal 6 is deliberate. Asserting against `THREAD_CAP` would
     /// compare the constant with itself, so raising the cap — or deleting it —
     /// would still pass. Changing the cap should have to change this line, and
     /// changing this line should mean re-reading the measurements behind it.
@@ -1086,9 +1138,9 @@ mod thread_tests {
         let n = default_threads();
         assert!(n >= 1, "a pool of no threads does no work");
         assert!(
-            n <= 8,
+            n <= 6,
             "the default grew past the measured cap: {n}. \
-             docs/COMPETITORS.md §1.2 has the numbers this was chosen from"
+             `default_threads` carries the numbers this was chosen from"
         );
     }
 

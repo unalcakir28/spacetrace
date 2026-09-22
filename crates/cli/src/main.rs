@@ -843,7 +843,6 @@ impl Ticker {
                         progress.files.load(Ordering::Relaxed),
                         progress.dirs.load(Ordering::Relaxed),
                         progress.bytes.load(Ordering::Relaxed),
-                        progress.clones_probed.load(Ordering::Relaxed),
                     );
                     // Detected here rather than timestamped in the scanner: this
                     // thread is already polling the counters, and a clock read per
@@ -870,11 +869,12 @@ impl Ticker {
                                 fmt::count(counts.1),
                                 fmt::size(counts.2),
                             ),
-                            Phase::Finishing => format!(
-                                "  finishing… {} files, {} clone candidates checked",
-                                fmt::count(counts.0),
-                                fmt::count(counts.3),
-                            ),
+                            // Aggregation only, since the clone accounting
+                            // moved into the walk: one reverse pass over the
+                            // arena, and over before it can be read.
+                            Phase::Finishing => {
+                                format!("  finishing… {} files", fmt::count(counts.0))
+                            }
                             // The walk is over and the database write is not; its
                             // own counter, because "scanning…" would be a lie and
                             // a blank line reads as a hang (invariant 8).

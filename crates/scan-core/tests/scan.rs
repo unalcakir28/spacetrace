@@ -863,17 +863,33 @@ fn a_cancelled_scan_leaves_nothing_in_flight() {
     assert!(progress.reading_now().is_empty());
 }
 
-/// The clone probe is the one phase that moves no other counter, so its own
-/// counter is what tells a watcher "still working" from "stuck". If it stops
-/// being incremented, a healthy scan starts looking hung — which is why this
-/// asserts the counter moved rather than only that the dedupe worked.
+/// Clone accounting costs no probing of its own where the platform can list in
+/// bulk: the family arrives inside the record the walk was already fetching.
+///
+/// This is the assertion that would fail if the per-file probe came back — it
+/// was 1193 ms of a 1989 ms scan on one real tree, and the phase it ran in
+/// moved no other counter. `clones_probed` therefore has to stay at zero for
+/// an ordinary directory while the deduplication still happens.
+#[cfg(target_os = "macos")]
 #[test]
-fn the_clone_probe_reports_what_it_checked() {
+fn clones_are_deduplicated_without_probing_a_single_file() {
     let dir = tempfile::tempdir().unwrap();
-    // Same size and over the 64 KiB floor, so both are candidates. Whether
-    // they turn out to be clones is beside the point here.
-    for name in ["one.bin", "two.bin"] {
-        fs::write(dir.path().join(name), vec![b'z'; 128 * 1024]).unwrap();
+    let original = dir.path().join("original.bin");
+    let bytes: Vec<u8> = (0..300_000u32)
+        .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
+        .collect();
+    fs::write(&original, &bytes).unwrap();
+    let cloned = |name: &str| {
+        std::process::Command::new("cp")
+            .arg("-c")
+            .arg(&original)
+            .arg(dir.path().join(name))
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    if !cloned("clone-a.bin") || !cloned("clone-b.bin") {
+        eprintln!("SKIPPED: this filesystem does not support clones");
+        return;
     }
 
     let progress = Arc::new(ScanProgress::default());
@@ -881,17 +897,18 @@ fn the_clone_probe_reports_what_it_checked() {
         dedupe_clones: true,
         ..ScanOptions::default()
     };
-    scan(dir.path(), opts, Arc::clone(&progress)).unwrap();
+    let (_, stats) = scan(dir.path(), opts, Arc::clone(&progress)).unwrap();
 
-    assert!(
+    assert_eq!(
+        stats.clones_deduped, 2,
+        "two of the three share the first's blocks"
+    );
+    assert_eq!(
         progress
             .clones_probed
-            .load(std::sync::atomic::Ordering::Relaxed)
-            >= 2,
-        "both candidates should have been counted, got {}",
-        progress
-            .clones_probed
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "the bulk listing already knew; nothing should have been opened"
     );
 }
 
@@ -985,11 +1002,12 @@ fn movement_after_a_stall_clears_it() {
     );
 }
 
-/// Invariant 8 in practice: the phase after the walk moves only
-/// `clones_probed`, and a watcher that ignored it would call that phase a
-/// stall. This is the test that fails if a future counter is left out.
+/// Invariant 8 in practice: a directory the walk had to read one entry at a
+/// time moves only `clones_probed` while its files are asked about, and a
+/// watcher that ignored that counter would call the work a stall. This is the
+/// test that fails if a future counter is left out of `StallWatch`.
 #[test]
-fn a_phase_that_only_probes_clones_is_not_a_stall() {
+fn probing_a_clone_is_work_not_a_stall() {
     use std::time::{Duration, Instant};
     let progress = ScanProgress::default();
     let start = Instant::now();

@@ -31,16 +31,55 @@ use crate::meta::{EntryKind, NamedMeta, RawMeta};
 /// Not in libc's Apple constants.
 const ATTR_CMN_ERROR: libc::attrgroup_t = 0x2000_0000;
 
+/// `EF_MAY_SHARE_BLOCKS` from `<sys/stat.h>`, which libc does not carry
+/// either: this file's blocks may be held by another file too.
+const EF_MAY_SHARE_BLOCKS: u64 = 0x0000_0001;
+
 /// `fsobj_type_t`. Only the three we model are named.
 const VREG: u32 = 1;
 const VDIR: u32 = 2;
 const VLNK: u32 = 5;
 
-/// Batch buffer. Large enough that a directory of a few thousand entries takes
-/// one or two calls, small enough to sit on the stack of every walk thread
-/// without thought — it is heap-allocated per call, and at 256 KiB the
-/// allocation is noise next to the syscalls it saves.
-const BUF_BYTES: usize = 256 * 1024;
+/// Batch buffer, in `u64` words.
+///
+/// Large enough that a directory of a few thousand entries takes one or two
+/// calls. **One per walk thread, reused for every directory it lists** — it
+/// used to be allocated per call, which at 256 KiB was a fresh mapping from
+/// the allocator for every directory on the disk. Measured on 1,064,452
+/// entries the wall time did not move — the allocator hands back a fresh
+/// mapping for a block this size and takes it away again cheaply. It is kept
+/// because it removes one map/unmap pair per directory from a process whose
+/// peak memory is already the thing macOS is worst at giving back (TODO D4),
+/// not because it made the walk faster.
+///
+/// `u64` rather than `u8` so the eight-byte alignment `getattrlistbulk` wants
+/// for its records is a property of the type instead of an assumption about
+/// what the allocator happens to return for a byte slice.
+const BUF_WORDS: usize = 32 * 1024;
+
+thread_local! {
+    static BUFFER: std::cell::RefCell<Vec<u64>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `f` with this thread's batch buffer.
+///
+/// Not re-entrant, and does not need to be: the only thing that runs inside is
+/// the decoding of records already in the buffer.
+fn with_buffer<R>(f: impl FnOnce(&mut [u8]) -> R) -> R {
+    BUFFER.with(|cell| {
+        let mut words = cell.borrow_mut();
+        if words.is_empty() {
+            words.resize(BUF_WORDS, 0);
+        }
+        let len = words.len() * std::mem::size_of::<u64>();
+        // SAFETY: every bit pattern of a `u64` is a valid `u8`, the pointer
+        // comes from a live allocation this borrow keeps alive, and `len`
+        // describes exactly the same bytes.
+        let bytes = unsafe { std::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), len) };
+        f(bytes)
+    })
+}
 
 /// Every entry in `dir`, or `None` when this path cannot serve.
 ///
@@ -63,7 +102,13 @@ pub(crate) fn list(dir: &Path) -> Option<Vec<NamedMeta>> {
     out
 }
 
-fn attr_list() -> libc::attrlist {
+/// What to ask each record for.
+///
+/// `extended` adds the two APFS attributes that identify a copy-on-write
+/// clone. They live in `forkattr`, which the kernel only reads when
+/// `FSOPT_ATTR_CMN_EXTENDED` is passed alongside — the two go together or
+/// neither works, which is why `options_for` sits next to this.
+fn attr_list(extended: bool) -> libc::attrlist {
     // SAFETY: `attrlist` is a plain struct of integers; all-zero is a valid
     // "ask for nothing" value, which the fields below then narrow.
     let mut attrs: libc::attrlist = unsafe { std::mem::zeroed() };
@@ -78,13 +123,29 @@ fn attr_list() -> libc::attrlist {
     attrs.dirattr = libc::ATTR_DIR_LINKCOUNT | libc::ATTR_DIR_ALLOCSIZE | libc::ATTR_DIR_DATALENGTH;
     attrs.fileattr =
         libc::ATTR_FILE_LINKCOUNT | libc::ATTR_FILE_ALLOCSIZE | libc::ATTR_FILE_DATALENGTH;
+    if extended {
+        attrs.forkattr = libc::ATTR_CMNEXT_CLONEID | libc::ATTR_CMNEXT_EXT_FLAGS;
+    }
     attrs
 }
 
+fn options_for(extended: bool) -> u64 {
+    if extended {
+        u64::from(libc::FSOPT_ATTR_CMN_EXTENDED)
+    } else {
+        0
+    }
+}
+
 fn read_all(fd: libc::c_int, dir: &Path) -> Option<Vec<NamedMeta>> {
-    let mut attrs = attr_list();
-    let mut buf = vec![0u8; BUF_BYTES];
+    with_buffer(|buf| read_into(fd, dir, buf))
+}
+
+fn read_into(fd: libc::c_int, dir: &Path, buf: &mut [u8]) -> Option<Vec<NamedMeta>> {
+    let mut extended = true;
+    let mut attrs = attr_list(extended);
     let mut out = Vec::new();
+    let mut read_any = false;
 
     loop {
         // SAFETY: `fd` is open, `attrs` outlives the call, and the kernel
@@ -95,18 +156,31 @@ fn read_all(fd: libc::c_int, dir: &Path) -> Option<Vec<NamedMeta>> {
                 &mut attrs as *mut _ as *mut libc::c_void,
                 buf.as_mut_ptr() as *mut libc::c_void,
                 buf.len(),
-                0,
+                options_for(extended),
             )
         };
-        // Any failure hands the whole directory back to the ordinary walk
-        // rather than returning half of it. A partial directory is the one
-        // answer this scanner must never give (invariant #5).
         if count < 0 {
+            // A kernel or filesystem that refuses the APFS attributes would
+            // otherwise take the whole fast path down with them, for every
+            // directory on the volume. Asked again once, without them.
+            //
+            // **Only before any record has been read.** The call advances the
+            // descriptor's position in the directory, so starting over after
+            // a successful batch would silently skip it — and a directory
+            // half reported is the one answer this scanner must never give
+            // (invariant #5). Every other failure still hands the caller the
+            // ordinary walk, which is what was correct yesterday.
+            if extended && !read_any {
+                extended = false;
+                attrs = attr_list(extended);
+                continue;
+            }
             return None;
         }
         if count == 0 {
             return Some(out);
         }
+        read_any = true;
 
         let mut entry = buf.as_ptr();
         for _ in 0..count {
@@ -120,6 +194,76 @@ fn read_all(fd: libc::c_int, dir: &Path) -> Option<Vec<NamedMeta>> {
             // SAFETY: records are contiguous and `length` covers this one.
             entry = unsafe { entry.add(length) };
         }
+    }
+}
+
+/// The clone family a file's blocks belong to, or `None` when it has none.
+///
+/// APFS hands every file a clone id, so the id on its own says nothing — two
+/// unrelated files each have one. `EF_MAY_SHARE_BLOCKS` is the bit that says
+/// these blocks are actually held by more than one file, and gating on it is
+/// what stops the key from grouping files that merely exist. Measured on a
+/// fixture of one plain file and three clones: the plain file reported
+/// `ext_flags = 0x0`, the three clones `0x41` and one shared id.
+fn share_key(clone_id: u64, ext_flags: u64) -> Option<u64> {
+    if ext_flags & EF_MAY_SHARE_BLOCKS == 0 {
+        return None;
+    }
+    (clone_id != 0).then_some(clone_id)
+}
+
+/// The clone family of one file, asked about by path.
+///
+/// The bulk listing answers this for free, so this is only for the entries
+/// that never went through it: a directory holding a mount point, which the
+/// walk has to read the slow way (see the header). `getattrlist` rather than
+/// the `fcntl(F_LOG2PHYS_EXT)` this used to do — it needs no open file
+/// descriptor, and it returns the filesystem's own identity for the family
+/// instead of a physical offset, so both listing paths key on the same thing.
+///
+/// `FSOPT_NOFOLLOW` because a symlink is counted as itself (invariant #3); a
+/// link to a clone must not be charged as one.
+pub(crate) fn clone_key(path: &Path) -> Option<u64> {
+    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: as in `attr_list` — all-zero is "ask for nothing".
+    let mut attrs: libc::attrlist = unsafe { std::mem::zeroed() };
+    attrs.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+    attrs.commonattr = libc::ATTR_CMN_RETURNED_ATTRS;
+    attrs.forkattr = libc::ATTR_CMNEXT_CLONEID | libc::ATTR_CMNEXT_EXT_FLAGS;
+
+    // The record is a `u32` length, five returned bitmaps and two `u64`s; the
+    // slack is for alignment the kernel is free to insert between them.
+    let mut buf = [0u8; 64];
+    // SAFETY: the path is a valid NUL-terminated string for the call, `attrs`
+    // outlives it, and the kernel writes at most `buf.len()` bytes into a
+    // buffer we own.
+    let rc = unsafe {
+        libc::getattrlist(
+            c_path.as_ptr(),
+            &mut attrs as *mut _ as *mut libc::c_void,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            buf.len(),
+            libc::FSOPT_ATTR_CMN_EXTENDED | libc::FSOPT_NOFOLLOW,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+
+    let mut p = buf.as_ptr();
+    // SAFETY: the kernel wrote a well-formed record into `buf`, and the reads
+    // below stay inside the length it declared.
+    unsafe {
+        let _length: u32 = take(&mut p);
+        let returned: [u32; 5] = take(&mut p);
+        let forkattr = returned[4];
+        if forkattr & libc::ATTR_CMNEXT_CLONEID == 0 || forkattr & libc::ATTR_CMNEXT_EXT_FLAGS == 0
+        {
+            return None;
+        }
+        let clone_id: u64 = take(&mut p);
+        let ext_flags: u64 = take(&mut p);
+        share_key(clone_id, ext_flags)
     }
 }
 
@@ -152,7 +296,8 @@ unsafe fn decode(start: *const u8, dir: &Path) -> (usize, Option<NamedMeta>) {
     // were `attrlist`, which *does* have a header — makes every entry look
     // like an error, which is exactly what happened the first time.
     let returned: [u32; 5] = take(&mut p);
-    let (common, dirattr, fileattr) = (returned[0], returned[2], returned[3]);
+    let (common, dirattr, fileattr, forkattr) =
+        (returned[0], returned[2], returned[3], returned[4]);
 
     let mut error: u32 = 0;
     if common & ATTR_CMN_ERROR != 0 {
@@ -222,6 +367,18 @@ unsafe fn decode(start: *const u8, dir: &Path) -> (usize, Option<NamedMeta>) {
         size = v as u64;
     }
 
+    // Last in the record, after the fork attributes were asked for in
+    // `forkattr`. A filesystem that cannot answer simply leaves the bits out
+    // of the returned bitmap and writes nothing here, which is the whole
+    // reason the bitmap is read rather than assumed.
+    let (mut clone_id, mut ext_flags) = (0u64, 0u64);
+    if forkattr & libc::ATTR_CMNEXT_CLONEID != 0 {
+        clone_id = take(&mut p);
+    }
+    if forkattr & libc::ATTR_CMNEXT_EXT_FLAGS != 0 {
+        ext_flags = take(&mut p);
+    }
+
     let length = length as usize;
 
     // An entry the kernel could not describe, or one it did not name, is left
@@ -257,7 +414,12 @@ unsafe fn decode(start: *const u8, dir: &Path) -> (usize, Option<NamedMeta>) {
         ino,
         dev,
     };
-    (length, Some(NamedMeta { name, meta }))
+    // Only a regular file can share blocks, and asking the question of a
+    // directory would key a whole family on whatever id it happens to carry.
+    let share = (kind == EntryKind::File)
+        .then(|| share_key(clone_id, ext_flags))
+        .flatten();
+    (length, Some(NamedMeta { name, meta, share }))
 }
 
 #[cfg(test)]
@@ -272,21 +434,29 @@ mod tests {
     /// that differs from the slow one in any field is not an optimisation, it
     /// is a second source of truth — and the first field to drift silently
     /// would be one nobody reads until a total comes out wrong.
+    ///
+    /// The clone family is compared too, against the by-path call the walk
+    /// uses when it cannot list in bulk. Those two disagreeing would mean a
+    /// directory holding a mount point deduplicated differently from every
+    /// other directory on the same disk, and nothing but this would say so.
     fn assert_same_answer_as_lstat(dir: &Path) {
-        let bulk: BTreeMap<OsString, RawMeta> = list(dir)
+        let bulk: BTreeMap<OsString, (RawMeta, Option<u64>)> = list(dir)
             .expect("getattrlistbulk should work on a temporary directory")
             .into_iter()
-            .map(|e| (e.name, e.meta))
+            .map(|e| (e.name, (e.meta, e.share)))
             .collect();
 
-        let mut slow: BTreeMap<OsString, RawMeta> = BTreeMap::new();
+        let mut slow: BTreeMap<OsString, (RawMeta, Option<u64>)> = BTreeMap::new();
         for entry in std::fs::read_dir(dir).unwrap() {
             let entry = entry.unwrap();
             let md = entry.metadata().unwrap();
-            let (meta, failure) =
-                RawMeta::for_path(&entry.path(), &md, crate::meta::FileIdentity::Needed);
+            let path = entry.path();
+            let (meta, failure) = RawMeta::for_path(&path, &md, crate::meta::FileIdentity::Needed);
             assert!(failure.is_none());
-            slow.insert(entry.file_name(), meta);
+            let share = (meta.kind == EntryKind::File)
+                .then(|| clone_key(&path))
+                .flatten();
+            slow.insert(entry.file_name(), (meta, share));
         }
 
         assert_eq!(
@@ -378,6 +548,77 @@ mod tests {
         }
         assert_eq!(list(dir.path()).unwrap().len(), 4_000);
         assert_same_answer_as_lstat(dir.path());
+    }
+
+    /// The clone family arrives inside the listing, which is the whole reason
+    /// there is no probe phase after the walk any more.
+    ///
+    /// Three names, one family: the original and two `cp -c` clones must share
+    /// a key, and a plain file of the same size must have none at all. Without
+    /// the second half a `share_key` that returned `Some` for everything would
+    /// pass, and every file on the disk would deduplicate against its
+    /// neighbours.
+    #[test]
+    fn clones_share_a_key_and_plain_files_have_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("original.bin");
+        // Incompressible, so the filesystem cannot quietly store it some other
+        // way and change what is being measured.
+        let bytes: Vec<u8> = (0..300_000u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 24) as u8)
+            .collect();
+        std::fs::write(&original, &bytes).unwrap();
+        std::fs::write(dir.path().join("unrelated.bin"), &bytes).unwrap();
+
+        let cloned = |name: &str| {
+            std::process::Command::new("cp")
+                .arg("-c")
+                .arg(&original)
+                .arg(dir.path().join(name))
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        if !cloned("clone-a.bin") || !cloned("clone-b.bin") {
+            eprintln!("SKIPPED: this filesystem does not support clones");
+            return;
+        }
+
+        let by_name: BTreeMap<OsString, Option<u64>> = list(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.name, e.share))
+            .collect();
+
+        let family: Vec<Option<u64>> = ["original.bin", "clone-a.bin", "clone-b.bin"]
+            .into_iter()
+            .map(|n| by_name[OsStr::new(n)])
+            .collect();
+        assert!(
+            family[0].is_some() && family.iter().all(|k| *k == family[0]),
+            "the three names of one clone family must key alike: {family:?}"
+        );
+        assert_eq!(
+            by_name[OsStr::new("unrelated.bin")],
+            None,
+            "a file that shares nothing must not join a family"
+        );
+
+        assert_same_answer_as_lstat(dir.path());
+    }
+
+    /// A directory can carry a clone id of its own, and keying on it would
+    /// charge a whole family to whatever happened to be next to it.
+    #[test]
+    fn a_directory_never_belongs_to_a_clone_family() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/inside.bin"), vec![3u8; 40_000]).unwrap();
+
+        for entry in list(dir.path()).unwrap() {
+            if entry.meta.kind == EntryKind::Dir {
+                assert_eq!(entry.share, None, "{:?} is a directory", entry.name);
+            }
+        }
     }
 
     /// A path that is not a directory cannot be listed this way, and the
