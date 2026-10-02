@@ -355,6 +355,9 @@ fn cmd_scan_ssh(a: &ScanArgs, destination: &str, db_path: &Path, json: bool) -> 
 const S3_SCOPE: &str = "Current versions only: old versions, delete markers and \
 unfinished multipart uploads are not listed, and are billed on top of this.";
 
+/// Why a key was left out, stored with it as a scan error.
+const REFUSED_KEY: &str = "a `.` or `..` path segment, which would read as navigation";
+
 /// `scan s3://bucket/prefix`: list instead of walk, then everything a disk
 /// scan does — save, ncdu, the summary — on the tree that comes back.
 fn cmd_scan_s3(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
@@ -376,16 +379,22 @@ fn cmd_scan_s3(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
     let tree = &listing.tree;
 
     let root = tree.node(tree.root());
-    // No error count: a listing either finishes or fails as a whole, so there
-    // is no path that was skipped. No capacity either — a bucket has no size
-    // to fill, and `None` is what keeps the hub's free-space alerts quiet.
+    let k = &listing.stats;
+    // A listing finishes or fails as a whole, so the only errors are the keys
+    // the tree refused to draw — reported as a walk reports an unreadable
+    // path. No capacity: a bucket has no size to fill, and `None` is what
+    // keeps the hub's free-space alerts quiet.
     let stats = ScanStats {
         files: u64::from(root.files),
         dirs: u64::from(root.dirs),
-        errors: 0,
+        errors: k.refused,
         hardlinks_deduped: 0,
         clones_deduped: 0,
-        error_samples: Vec::new(),
+        error_samples: k
+            .refused_samples
+            .iter()
+            .map(|key| (PathBuf::from(key), REFUSED_KEY.to_string()))
+            .collect(),
         duration_ms: listing.duration_ms,
         capacity: None,
         // A bucket has no extents to share or compress.
@@ -409,7 +418,6 @@ fn cmd_scan_s3(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
         write_ncdu(tree, out)?;
     }
 
-    let k = &listing.stats;
     if json {
         let payload = serde_json::json!({
             "root": tree.root_path().to_string_lossy(),
@@ -424,6 +432,9 @@ fn cmd_scan_s3(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
             "shadowed_by_folder": k.shadowed,
             "merged": k.merged,
             "odd_keys": k.samples,
+            "refused_keys": k.refused,
+            "refused_bytes": k.refused_bytes,
+            "refused_samples": k.refused_samples,
             "pages": listing.pages,
             "duration_ms": stats.duration_ms,
             "scan_id": saved_id,
@@ -472,6 +483,16 @@ fn cmd_scan_s3(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
     println!("  {S3_SCOPE}");
     println!();
     print_children_table(tree, tree.root(), a.top);
+    if k.refused > 0 {
+        println!(
+            "\n{} keys ({}) are not in the tree: {REFUSED_KEY}.",
+            fmt::count(k.refused),
+            fmt::size(k.refused_bytes)
+        );
+        for key in &k.refused_samples {
+            println!("  {key:?}");
+        }
+    }
     if let Some(id) = saved_id {
         println!("\nSnapshot #{id} saved → {}", db_path.display());
     } else {
@@ -673,15 +694,53 @@ fn resolve_diff_inputs(
         .clone()
         .context("what should be compared? pass --path, --since-last or --from/--to")?;
     let root = root_key(&path)?;
-    let pair = store.last_two_for(&root, None)?;
+    let pair = last_two_of(store, &root)?;
+    let (new, nm) = store.load(pair[0].id)?;
+    let (old, om) = store.load(pair[1].id)?;
+    Ok((old, label_of(&om), new, label_of(&nm)))
+}
+
+/// The two newest snapshots of `root`, newest first.
+///
+/// For a bucket, both from the service the newest came from. `s3://backups`
+/// on MinIO and on AWS are two buckets with one name, and comparing them
+/// would report the gap between two services as growth. A disk root keeps
+/// its old meaning — the two newest, whichever host took them.
+fn last_two_of(store: &Store, root: &str) -> Result<Vec<ScanMeta>> {
+    if root.starts_with("s3://") {
+        let newest = store
+            .latest_for(root, None)?
+            .with_context(|| format!("no stored snapshot of {root}"))?;
+        let pair = store.last_two_for(root, Some(&newest.host))?;
+        if pair.len() == 2 {
+            return Ok(pair);
+        }
+        let mut others: Vec<String> = store
+            .list()?
+            .into_iter()
+            .filter(|m| m.root == root && m.host != newest.host)
+            .map(|m| m.host)
+            .collect();
+        others.sort();
+        others.dedup();
+        anyhow::ensure!(
+            others.is_empty(),
+            "the newest snapshot of {root} is from {}, and the only other one is from {}: \
+             a bucket name on two services is two buckets. Scan it again on {} first, or pick \
+             two snapshots with --from/--to",
+            newest.host,
+            others.join(", "),
+            newest.host
+        );
+        anyhow::bail!("need two snapshots of {root} to compare (found 1)");
+    }
+    let pair = store.last_two_for(root, None)?;
     anyhow::ensure!(
         pair.len() == 2,
         "need two snapshots of {root} to compare (found {})",
         pair.len()
     );
-    let (new, nm) = store.load(pair[0].id)?;
-    let (old, om) = store.load(pair[1].id)?;
-    Ok((old, label_of(&om), new, label_of(&nm)))
+    Ok(pair)
 }
 
 /// Pick the two remote snapshots to compare and download both.
@@ -2034,5 +2093,51 @@ mod progress_tests {
             PathBuf::from("/Volumes/c"),
         ];
         assert_eq!(waiting_on(&paths), "/Volumes/a (+2 more)");
+    }
+}
+
+#[cfg(test)]
+mod s3_diff_tests {
+    use super::*;
+    use spacetrace_scan_core::ImportedNode;
+
+    fn save(store: &mut Store, host: &str, root: &str, bytes: u64) -> i64 {
+        let mut node = ImportedNode::dir(root);
+        node.children.push(ImportedNode::file("f", bytes, bytes));
+        let tree = Tree::from_nested(PathBuf::from(root), node);
+        store
+            .save(&tree, &ScanStats::default(), host, None)
+            .unwrap()
+    }
+
+    /// `s3://backups` on MinIO and on AWS are two buckets that share a name.
+    /// `diff --path` used to pair the newest of each and report the
+    /// difference between two services as growth.
+    #[test]
+    fn a_bucket_name_on_two_services_is_not_one_target() {
+        let mut store = Store::open_in_memory().unwrap();
+        save(&mut store, "s3.amazonaws.com", "s3://backups", 10);
+        save(&mut store, "127.0.0.1:9000", "s3://backups", 1_000_000);
+        let err = last_two_of(&store, "s3://backups").unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("127.0.0.1:9000"), "{text}");
+        assert!(text.contains("s3.amazonaws.com"), "{text}");
+
+        // A second snapshot from the newest one's service makes it a pair —
+        // that service's, not a mixture.
+        let older = save(&mut store, "127.0.0.1:9000", "s3://backups", 5);
+        let newer = save(&mut store, "127.0.0.1:9000", "s3://backups", 6);
+        let pair = last_two_of(&store, "s3://backups").unwrap();
+        assert_eq!((pair[0].id, pair[1].id), (newer, older));
+        assert!(pair.iter().all(|m| m.host == "127.0.0.1:9000"));
+    }
+
+    /// Disk roots keep their old meaning: the two newest, whoever took them.
+    #[test]
+    fn a_disk_root_still_pairs_across_hosts() {
+        let mut store = Store::open_in_memory().unwrap();
+        save(&mut store, "a", "/srv", 1);
+        save(&mut store, "b", "/srv", 2);
+        assert_eq!(last_two_of(&store, "/srv").unwrap().len(), 2);
     }
 }

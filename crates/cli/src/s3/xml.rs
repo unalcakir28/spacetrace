@@ -65,6 +65,7 @@ pub fn parse_list(body: &str) -> Result<ListPage> {
     let mut raw: Vec<Fields> = Vec::new();
     let mut encoding_url = false;
     let mut root_seen = false;
+    let mut truncation_said = false;
 
     walk(body, |path, text| {
         match path {
@@ -73,6 +74,7 @@ pub fn parse_list(body: &str) -> Result<ListPage> {
                 bail!("expected a ListBucketResult, found <{first}>")
             }
             ["ListBucketResult", "IsTruncated"] => {
+                truncation_said = true;
                 page.is_truncated = match text.trim() {
                     "true" => true,
                     "false" => false,
@@ -109,6 +111,14 @@ pub fn parse_list(body: &str) -> Result<ListPage> {
 
     if !root_seen {
         bail!("the response is not a ListBucketResult");
+    }
+    // Required rather than defaulted. "Not truncated" is the claim that the
+    // listing is complete, and a page that leaves it out — a broken proxy, a
+    // body cut short in a way that still parses — would otherwise be saved as
+    // the whole bucket: a partial tree reporting a wrong total, which
+    // invariant 5 exists to prevent.
+    if !truncation_said {
+        bail!("the listing does not say whether it is complete (no <IsTruncated>)");
     }
 
     page.objects.reserve(raw.len());
@@ -152,6 +162,12 @@ pub fn parse_error(body: &str) -> Option<ErrorBody> {
     });
     (parsed.is_ok() && root_seen).then_some(error)
 }
+
+/// A ListObjectsV2 page is four levels deep (`ListBucketResult`, `Contents`,
+/// `Owner`, `ID`). Eight times that is room for whatever AWS adds, and the
+/// limit means a hostile body cannot make the stack of open names grow with
+/// its size.
+const MAX_DEPTH: usize = 32;
 
 /// Walk the document, calling `visit` once per element as it closes, with the
 /// path of local names from the root and the element's own text.
@@ -223,6 +239,9 @@ fn walk(body: &str, mut visit: impl FnMut(&[&str], &str) -> Result<()>) -> Resul
                     bail!("a second root element <{name}>");
                 }
                 seen_root = true;
+            }
+            if stack.len() >= MAX_DEPTH {
+                bail!("the document nests deeper than {MAX_DEPTH} elements");
             }
             stack.push(name);
             // The element's own text starts here; text before it belonged to
@@ -581,6 +600,7 @@ mod tests {
     #[test]
     fn namespace_prefixes_comments_and_attributes_do_not_change_the_answer() {
         let xml = "<s3:ListBucketResult xmlns:s3=\"http://s3.amazonaws.com/doc/2006-03-01/\">\
+             <s3:IsTruncated>false</s3:IsTruncated>\
              <!-- a comment with <Key>bait</Key> inside -->\
              <s3:Contents a=\"x > y\" b='1'><s3:Key>real</s3:Key><s3:Size>5</s3:Size>\
              <s3:Owner><s3:ID>o</s3:ID><s3:Key>not-this-one</s3:Key></s3:Owner></s3:Contents>\
@@ -658,7 +678,7 @@ mod tests {
     fn bad_url_encoding_is_refused() {
         let encoded = |key: &str| {
             format!(
-                "<ListBucketResult><Contents><Key>{key}</Key><Size>1</Size></Contents>\
+                "<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>{key}</Key><Size>1</Size></Contents>\
                  <EncodingType>url</EncodingType></ListBucketResult>"
             )
         };
@@ -673,12 +693,27 @@ mod tests {
     /// answer, not a stack overflow.
     #[test]
     fn absurd_nesting_does_not_overflow_the_stack() {
-        let depth = 1_000_000;
-        let mut xml = String::from("<ListBucketResult>");
-        xml.push_str(&"<x>".repeat(depth));
-        xml.push_str(&"</x>".repeat(depth));
-        xml.push_str("</ListBucketResult>");
-        assert!(parse_list(&xml).unwrap().objects.is_empty());
+        let nested = |depth: usize| {
+            let mut xml = String::from("<ListBucketResult><IsTruncated>false</IsTruncated>");
+            xml.push_str(&"<x>".repeat(depth));
+            xml.push_str(&"</x>".repeat(depth));
+            xml.push_str("</ListBucketResult>");
+            xml
+        };
+        assert!(refused(&nested(1_000_000)).contains("deeper than 32"));
+        assert!(refused(&nested(32)).contains("deeper than 32"));
+        // The root is one level; 31 more is the deepest accepted.
+        assert!(parse_list(&nested(31)).unwrap().objects.is_empty());
+    }
+
+    /// A page that never says whether it is the last one must not be taken as
+    /// the last one: that would save part of a bucket as all of it.
+    #[test]
+    fn a_page_without_is_truncated_is_refused() {
+        let xml = "<ListBucketResult><Contents><Key>k</Key><Size>1</Size></Contents>\
+             <NextContinuationToken>more</NextContinuationToken></ListBucketResult>";
+        assert!(refused(xml).contains("IsTruncated"));
+        assert!(refused("<ListBucketResult/>").contains("IsTruncated"));
     }
 
     #[test]

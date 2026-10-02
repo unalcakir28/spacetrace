@@ -283,6 +283,10 @@ fn read_ini(path: Option<&Path>) -> Result<Ini> {
 /// `;` comments on their own line, and indented lines — the nested `s3 =`
 /// blocks of the config file — which belong to the key above them and are
 /// skipped, since nothing here reads them.
+/// The name of a section whose header could not be read. Not a string a
+/// profile name can be: it holds a NUL.
+const UNNAMEABLE: &str = "\0unreadable header";
+
 fn parse_ini(text: &str) -> Ini {
     let mut ini = Ini::default();
     for line in text.lines() {
@@ -293,8 +297,19 @@ fn parse_ini(text: &str) -> Ini {
         if line.is_empty() || line.starts_with(['#', ';']) {
             continue;
         }
-        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        if let Some(header) = line.strip_prefix('[') {
+            // Up to the last `]`, as Python's configparser (and so botocore)
+            // reads it, which leaves `[work]  ; prod` named `work`. A header
+            // with no `]` still opens a section, one no lookup can name:
+            // otherwise the keys under it would join the section above and a
+            // plain run would sign with them.
+            let name = match header.rfind(']') {
+                Some(end) => header[..end]
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                None => UNNAMEABLE.to_string(),
+            };
             ini.sections.push((name, Section::default()));
             continue;
         }
@@ -555,6 +570,55 @@ mod tests {
             world.resolve(&flags).unwrap().endpoint.unwrap().authority,
             "flag:3"
         );
+    }
+
+    /// A header with a comment after it must still open its own section. It
+    /// used to fail to parse as a header at all, so `work`'s keys were
+    /// appended to `[default]` above it and a plain `scan` signed with them.
+    #[test]
+    fn a_header_with_a_trailing_comment_still_opens_its_section() {
+        let world = World::new().file(
+            "credentials",
+            "[default]\naws_access_key_id = DEFAULTID\naws_secret_access_key = defaultsecret\n\
+             [work]  ; prod\naws_access_key_id = WORKID\naws_secret_access_key = worksecret\n\
+             [profile x] # note\nregion = r\n",
+        );
+        let s = world.resolve(&Flags::default()).unwrap();
+        assert_eq!(keys(&s).0, "DEFAULTID", "default keeps its own keys");
+        let flags = Flags {
+            profile: Some("work".into()),
+            ..Flags::default()
+        };
+        assert_eq!(keys(&world.resolve(&flags).unwrap()).0, "WORKID");
+
+        let ini = parse_ini("[profile x] # note\nregion = r\n");
+        assert_eq!(
+            ini.section("profile x").unwrap().get("region").as_deref(),
+            Some("r")
+        );
+    }
+
+    /// A header that cannot be read opens a section nobody can name, so the
+    /// keys under it are lost rather than lent to the section above.
+    #[test]
+    fn keys_under_an_unreadable_header_join_no_section() {
+        let ini = parse_ini(
+            "[default]\naws_access_key_id = DEFAULTID\n[broken\naws_access_key_id = STRAY\n",
+        );
+        assert_eq!(
+            ini.section("default")
+                .unwrap()
+                .get("aws_access_key_id")
+                .as_deref(),
+            Some("DEFAULTID")
+        );
+        assert_eq!(
+            ini.section("default").unwrap().values.len(),
+            1,
+            "the stray key did not join [default]"
+        );
+        assert!(ini.section("[broken").is_none());
+        assert!(ini.section("broken").is_none());
     }
 
     #[test]

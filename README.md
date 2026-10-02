@@ -232,7 +232,9 @@ static keys are read; for SSO or an assumed role, export keys first with
 
 - Keys are split on `/` into folders, and a key ending in `/` (a "folder
   marker") is drawn as its folder. The path after the bucket is a folder:
-  `s3://b/photos` lists `photos/…`, not `photos2024/…`.
+  `s3://b/photos` lists `photos/…`, not `photos2024/…`. A key with a `.` or
+  `..` segment is not drawn — as a name it would read as navigation — and is
+  reported with its bytes, as a disk scan reports an unreadable path.
 - An object has no blocks, so `size` and `alloc` are both its length. The
   on-disk total is every byte listed — the figure `mc du` prints. Bytes the tree can only charge to a folder (a
   marker holding data, an object `a` beside a folder `a/`) count there and stay
@@ -241,7 +243,9 @@ static keys are read; for SSO or an assumed role, export keys first with
   multipart uploads are not in a listing and are not counted — but they are
   billed, so the total is not the bill.
 - The snapshot's host is the service (`s3.amazonaws.com`, or the endpoint's
-  `host:port`), not this machine: two machines listing one bucket see one target.
+  `host:port`), not this machine: two machines listing one bucket see one target,
+  and `diff --path s3://b` compares two snapshots from the same service — one
+  bucket name on MinIO and on AWS is two buckets.
 
 ### Watching it happen
 

@@ -129,6 +129,12 @@ pub fn scan(url: &S3Url, flags: &Flags, progress: Arc<ScanProgress>) -> Result<S
     scan_with(url, settings, None, progress)
 }
 
+/// Consecutive pages with no keys and a token for more, before the listing is
+/// refused. S3 may send an empty page while it skips past what a listing does
+/// not show; a thousand in a row is not that, it is a server that will never
+/// finish.
+const MAX_EMPTY_PAGES: u64 = 1000;
+
 fn scan_with(
     url: &S3Url,
     settings: config::Settings,
@@ -149,6 +155,7 @@ fn scan_with(
     let mut token: Option<String> = None;
     let mut seen_tokens = std::collections::HashSet::new();
     let mut pages = 0u64;
+    let mut empty_in_a_row = 0u64;
     loop {
         let page = http.list_page(&bucket, token.as_deref(), &progress)?;
         pages += 1;
@@ -162,6 +169,17 @@ fn scan_with(
 
         if !page.is_truncated {
             break;
+        }
+        empty_in_a_row = match page.objects.is_empty() {
+            true => empty_in_a_row + 1,
+            false => 0,
+        };
+        if empty_in_a_row > MAX_EMPTY_PAGES {
+            bail!(
+                "s3://{} sent more than {MAX_EMPTY_PAGES} empty pages in a row, each promising more; \
+                 the listing would never end",
+                url.bucket
+            );
         }
         let next = page.next_continuation_token.with_context(|| {
             format!(
@@ -186,7 +204,8 @@ fn scan_with(
     // enough to be seen, and not walking any more.
     progress.begin_rows(Phase::Finishing, 0);
     let (root_node, stats) = keys.finish();
-    let tree = Tree::from_nested(PathBuf::from(&root), root_node);
+    let tree = Tree::try_from_nested(PathBuf::from(&root), root_node)
+        .with_context(|| format!("cannot build the tree of {root}"))?;
     Ok(S3Scan {
         tree,
         stats,
@@ -234,5 +253,65 @@ mod tests {
         assert!(S3Url::is_s3(Path::new("s3://b")));
         assert!(!S3Url::is_s3(Path::new("./s3://b")));
         assert!(!S3Url::is_s3(Path::new("/srv")));
+    }
+
+    fn page(keys: &[&str], next: Option<&str>) -> Vec<u8> {
+        let contents: String = keys
+            .iter()
+            .map(|k| format!("<Contents><Key>{k}</Key><Size>1</Size></Contents>"))
+            .collect();
+        let tail = match next {
+            Some(token) => format!(
+                "<IsTruncated>true</IsTruncated><NextContinuationToken>{token}</NextContinuationToken>"
+            ),
+            None => "<IsTruncated>false</IsTruncated>".to_string(),
+        };
+        format!("<ListBucketResult>{contents}{tail}</ListBucketResult>").into_bytes()
+    }
+
+    fn anonymous(endpoint: &str) -> config::Settings {
+        config::Settings {
+            credentials: None,
+            region: config::DEFAULT_REGION.into(),
+            endpoint: Some(config::Endpoint::parse(endpoint).unwrap()),
+        }
+    }
+
+    /// A few empty pages are legal — S3 can return one while it skips over
+    /// what it does not list — and must not end the listing early.
+    #[test]
+    fn empty_pages_in_the_middle_are_followed() {
+        let responses = vec![
+            (200, "OK", page(&[], Some("t1"))),
+            (200, "OK", page(&[], Some("t2"))),
+            (200, "OK", page(&["a", "b"], Some("t3"))),
+            (200, "OK", page(&["c"], None)),
+        ];
+        let (endpoint, server) = client::test_server::canned(responses);
+        let url = S3Url::parse("s3://b").unwrap();
+        let scan = scan_with(&url, anonymous(&endpoint), None, Arc::default()).unwrap();
+        assert_eq!(scan.pages, 4);
+        assert_eq!(scan.stats.objects, 3);
+        assert_eq!(server.join().unwrap().len(), 4);
+    }
+
+    /// A hostile endpoint can hand out a fresh token with every empty page
+    /// forever; the repeated-token check cannot see that, and no counter
+    /// moves for anyone watching. Bounded instead.
+    #[test]
+    fn an_endless_run_of_empty_pages_is_refused() {
+        let responses = (0..=MAX_EMPTY_PAGES)
+            .map(|i| (200, "OK", page(&[], Some(&format!("token-{i}")))))
+            .collect();
+        let (endpoint, server) = client::test_server::canned(responses);
+        let url = S3Url::parse("s3://b").unwrap();
+        let err = scan_with(&url, anonymous(&endpoint), None, Arc::default())
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("empty pages in a row"),
+            "{err:#}"
+        );
+        assert_eq!(server.join().unwrap().len(), MAX_EMPTY_PAGES as usize + 1);
     }
 }

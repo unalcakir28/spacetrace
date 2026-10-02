@@ -334,14 +334,18 @@ What a bucket snapshot means:
   the region, or the endpoint's `host:port` — and `root` is `s3://bucket` or
   `s3://bucket/prefix` without a trailing slash. Two machines listing one
   bucket produce one target, which is what `diff --path` and the hub's trends
-  group by. `fs_total`/`fs_available` stay empty: a bucket has no capacity to
+  group by — and for a bucket `diff --path` takes both snapshots from the
+  newest one's service, since one bucket name on two services is two
+  buckets. `fs_total`/`fs_available` stay empty: a bucket has no capacity to
   fill, and an empty capacity keeps free-space alerts quiet.
 - **Sizes.** An object has no blocks, so `size` and `alloc` are both its
   length and `alloc` totals every byte listed. A folder marker (a key ending
   in `/`) is drawn as its folder; should it — or an object `a` beside a folder
   `a/` — hold bytes, they are the folder's own cost in `alloc` only, the way a
   directory's own blocks are on a disk (invariant 1). `mtime` is
-  `LastModified`; a folder takes its newest content's.
+  `LastModified`; a folder takes its newest content's. A key with a `.` or
+  `..` segment is left out and counted as a scan error with its bytes,
+  because as a name it reads as navigation to every path consumer.
 - **Scope.** Current versions only. Old versions, delete markers and
   unfinished multipart uploads are billed and are not in a listing; the CLI
   says so under every total.

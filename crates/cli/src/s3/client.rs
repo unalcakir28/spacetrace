@@ -55,6 +55,9 @@ pub struct Client {
     redirected: bool,
     /// Keys per page; S3's own default and maximum when `None`.
     pub page_size: Option<u32>,
+    /// The first retry's delay, doubling after. A field so a test can make
+    /// six attempts in milliseconds.
+    first_backoff: Duration,
 }
 
 /// The service the listing went to, for the snapshot's `host` and for the
@@ -81,12 +84,16 @@ impl Client {
             .user_agent(concat!("spacetrace/", env!("CARGO_PKG_VERSION")))
             .build()
             .context("building the HTTP client")?;
+        if let Some(warning) = cleartext_warning(&settings) {
+            eprintln!("{warning}");
+        }
         Ok(Client {
             http,
             region: settings.region.clone(),
             settings,
             redirected: false,
             page_size: None,
+            first_backoff: FIRST_BACKOFF,
         })
     }
 
@@ -132,6 +139,10 @@ impl Client {
                     });
                 }
                 Ok(response) => response,
+                Err(unusable) if unusable.downcast_ref::<Final>().is_some() => {
+                    return Err(unusable)
+                        .with_context(|| format!("{} sent a response", self.describe(bucket)));
+                }
                 Err(transport) => {
                     if attempt >= ATTEMPTS {
                         return Err(transport).with_context(|| {
@@ -141,7 +152,7 @@ impl Client {
                             )
                         });
                     }
-                    backoff(attempt, progress)?;
+                    backoff(self.first_backoff, attempt, progress)?;
                     continue;
                 }
             };
@@ -158,7 +169,7 @@ impl Client {
                 continue;
             }
             if is_retryable(failure.status, error.as_ref()) && attempt < ATTEMPTS {
-                backoff(attempt, progress)?;
+                backoff(self.first_backoff, attempt, progress)?;
                 continue;
             }
             return Err(self.failure(bucket, &failure, error));
@@ -263,8 +274,11 @@ impl Client {
             request = request.body(body);
         }
 
+        // `without_url`: reqwest's text ends in the whole URL, query included,
+        // and the query is the prefix and the server's continuation token.
         let response = request
             .send()
+            .map_err(reqwest::Error::without_url)
             .with_context(|| format!("requesting {}", redact(&url)))?;
         let status = response.status().as_u16();
         let bucket_region = response
@@ -276,11 +290,19 @@ impl Client {
         response
             .take(MAX_BODY_BYTES + 1)
             .read_to_end(&mut raw)
+            .map_err(without_url)
             .context("reading the response")?;
+        // Both refusals are final. They are the server's answer rather than a
+        // dropped connection, and retrying would fetch the same answer again —
+        // up to six times 64 MiB of it.
         if raw.len() as u64 > MAX_BODY_BYTES {
-            bail!("the response is larger than {MAX_BODY_BYTES} bytes; refusing to buffer it");
+            return Err(Final(format!(
+                "the response is larger than {MAX_BODY_BYTES} bytes; refusing to buffer it"
+            ))
+            .into());
         }
-        let body = String::from_utf8(raw).context("the response is not UTF-8")?;
+        let body =
+            String::from_utf8(raw).map_err(|_| Final("the response is not UTF-8".to_string()))?;
         Ok(Response {
             status,
             body,
@@ -370,12 +392,38 @@ impl Client {
             "ExpiredToken" | "InvalidToken" => " The session token has expired; fetch new credentials.",
             _ => "",
         };
-        let message = error.message.trim_end_matches('.');
+        let code = for_terminal(&error.code, 64);
+        let message = for_terminal(&error.message, 400);
+        let message = message.trim_end_matches('.');
         anyhow::anyhow!(
-            "{what} refused the listing: {} ({}): {message}.{hint}",
-            error.code,
+            "{what} refused the listing: {code} ({}): {message}.{hint}",
             response.status,
         )
+    }
+}
+
+/// A response that arrived and cannot be used. Not retried.
+#[derive(Debug)]
+struct Final(String);
+
+impl std::fmt::Display for Final {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Final {}
+
+/// An I/O error from reading a body, with the URL taken out of the reqwest
+/// error inside it for the same reason as at `send`.
+fn without_url(e: std::io::Error) -> std::io::Error {
+    let kind = e.kind();
+    match e.into_inner() {
+        Some(inner) => match inner.downcast::<reqwest::Error>() {
+            Ok(reqwest_error) => std::io::Error::new(kind, reqwest_error.without_url()),
+            Err(other) => std::io::Error::new(kind, other),
+        },
+        None => std::io::Error::from(kind),
     }
 }
 
@@ -383,6 +431,55 @@ pub struct Response {
     pub status: u16,
     pub body: String,
     bucket_region: Option<String>,
+}
+
+/// The warning for signed requests over plain HTTP to another machine, or
+/// `None`. The secret itself never travels, but the access key id, a session
+/// token and a signed GET anyone on the path can replay for 15 minutes do,
+/// and the listing can be altered on the way back. Loopback is exempt: a
+/// MinIO on this machine is the one case plain HTTP is ordinary.
+fn cleartext_warning(settings: &Settings) -> Option<String> {
+    let endpoint = settings.endpoint.as_ref()?;
+    settings.credentials.as_ref()?;
+    if endpoint.scheme != "http" {
+        return None;
+    }
+    let host = match endpoint.authority.rsplit_once(':') {
+        // `[::1]:9000` and `host:9000`; a bare IPv6 address has no port here
+        // because `Endpoint::parse` brackets it.
+        Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => host,
+        _ => endpoint.authority.as_str(),
+    };
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let loopback = bare == "localhost"
+        || bare
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    (!loopback).then(|| {
+        format!(
+            "warning: signing requests to {} over plain http: the access key id, any session \
+             token and a replayable signed request travel unencrypted, and the listing can be \
+             altered in transit. Use https:// for anything but this machine.",
+            endpoint.authority
+        )
+    })
+}
+
+/// Server text made safe to print: control characters escaped, so none is
+/// interpreted by the terminal, and at most `limit` characters of it.
+fn for_terminal(text: &str, limit: usize) -> String {
+    let mut out = String::new();
+    for (i, c) in text.chars().enumerate() {
+        if i == limit {
+            out.push('…');
+            break;
+        }
+        match c.is_control() {
+            true => out.extend(c.escape_default()),
+            false => out.push(c),
+        }
+    }
+    out
 }
 
 fn is_retryable(status: u16, error: Option<&xml::ErrorBody>) -> bool {
@@ -395,12 +492,12 @@ fn is_retryable(status: u16, error: Option<&xml::ErrorBody>) -> bool {
 }
 
 /// Sleep before attempt `attempt + 1`, in short slices so a cancel is noticed.
-fn backoff(attempt: u32, progress: &ScanProgress) -> Result<()> {
-    let delay = FIRST_BACKOFF * 2u32.saturating_pow(attempt.saturating_sub(1));
+fn backoff(first: Duration, attempt: u32, progress: &ScanProgress) -> Result<()> {
+    let delay = first * 2u32.saturating_pow(attempt.saturating_sub(1));
     let until = std::time::Instant::now() + delay;
     while std::time::Instant::now() < until {
         check_cancelled(progress)?;
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50).min(delay));
     }
     Ok(())
 }
@@ -465,8 +562,60 @@ pub fn count_page(progress: &ScanProgress, files: u64, bytes: u64, folders: u64)
     progress.dirs.store(folders, Ordering::Relaxed);
 }
 
+/// A server that answers each connection with the next canned response and
+/// records the request head it was sent. Real TCP and real HTTP through
+/// reqwest, so the retry and redirect loops run as they run in use, not as a
+/// function is called. Status 0 closes the connection without an answer.
+#[cfg(test)]
+pub(super) mod test_server {
+    pub type Canned = (u16, &'static str, Vec<u8>);
+
+    pub fn canned(responses: Vec<Canned>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for (status, reason, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    head.push_str(&line);
+                }
+                seen.push(head);
+                if status == 0 {
+                    continue;
+                }
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/xml\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(&body);
+            }
+            seen
+        });
+        (address, handle)
+    }
+}
+
+impl Client {
+    #[cfg(test)]
+    pub(super) fn with_quick_retries(mut self) -> Self {
+        self.first_backoff = Duration::from_millis(1);
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_server::canned;
     use super::*;
 
     #[test]
@@ -653,46 +802,6 @@ mod tests {
         assert_eq!(progress.files.load(Ordering::Relaxed), 0);
     }
 
-    // ------------------------------------------- against a real socket
-    //
-    // A server that answers each connection with the next canned response
-    // and records the request head it was sent. Real TCP and real HTTP
-    // through reqwest, so the retry and redirect loops run as they run in
-    // use, not as a function is called.
-
-    type Canned = (u16, &'static str, String);
-
-    fn canned(responses: Vec<Canned>) -> (String, std::thread::JoinHandle<Vec<String>>) {
-        use std::io::{BufRead, BufReader, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = format!("http://{}", listener.local_addr().unwrap());
-        let handle = std::thread::spawn(move || {
-            let mut seen = Vec::new();
-            for (status, reason, body) in responses {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut head = String::new();
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                        break;
-                    }
-                    head.push_str(&line);
-                }
-                seen.push(head);
-                write!(
-                    stream,
-                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/xml\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                )
-                .unwrap();
-            }
-            seen
-        });
-        (address, handle)
-    }
-
     const ONE_KEY: &str = "<ListBucketResult><IsTruncated>false</IsTruncated>\
         <Contents><Key>k</Key><Size>5</Size></Contents></ListBucketResult>";
 
@@ -713,9 +822,9 @@ mod tests {
     fn slow_down_is_retried_until_the_listing_comes() {
         let slow = "<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>";
         let (endpoint, server) = canned(vec![
-            (503, "Slow Down", slow.to_string()),
-            (500, "Internal Server Error", String::new()),
-            (200, "OK", ONE_KEY.to_string()),
+            (503, "Slow Down", slow.into()),
+            (500, "Internal Server Error", Vec::new()),
+            (200, "OK", ONE_KEY.into()),
         ]);
         let mut c = signed_client(&endpoint);
         let page = c
@@ -750,8 +859,8 @@ mod tests {
         let malformed = "<Error><Code>AuthorizationHeaderMalformed</Code><Message>the region \
              'us-east-1' is wrong; expecting 'eu-central-1'</Message><Region>eu-central-1</Region></Error>";
         let (endpoint, server) = canned(vec![
-            (400, "Bad Request", malformed.to_string()),
-            (200, "OK", ONE_KEY.to_string()),
+            (400, "Bad Request", malformed.into()),
+            (200, "OK", ONE_KEY.into()),
         ]);
         let mut c = signed_client(&endpoint);
         c.list_page(&bucket("b"), None, &ScanProgress::default())
@@ -774,7 +883,7 @@ mod tests {
     fn a_refusal_is_not_retried_and_says_what_s3_said() {
         let denied = "<Error><Code>AccessDenied</Code><Message>Access Denied</Message>\
              <StringToSign>AWS4-HMAC-SHA256 signed material</StringToSign></Error>";
-        let (endpoint, server) = canned(vec![(403, "Forbidden", denied.to_string())]);
+        let (endpoint, server) = canned(vec![(403, "Forbidden", denied.into())]);
         let mut c = signed_client(&endpoint);
         let err = c
             .list_page(&bucket("b"), None, &ScanProgress::default())
@@ -788,5 +897,94 @@ mod tests {
         assert!(!text.contains("signed material"), "{text}");
         assert!(!text.contains("token-for-the-header"), "{text}");
         assert_eq!(server.join().unwrap().len(), 1, "one request, no retry");
+    }
+
+    /// reqwest's own error text ends in the full URL — prefix, continuation
+    /// token and all — and used to reach the terminal that way.
+    #[test]
+    fn a_transport_failure_does_not_print_the_query() {
+        let dropped = (0..ATTEMPTS).map(|_| (0, "", Vec::new())).collect();
+        let (endpoint, server) = canned(dropped);
+        let mut c = signed_client(&endpoint).with_quick_retries();
+        let mut b = bucket("b");
+        b.prefix = "private-prefix/".into();
+        let err = c
+            .list_page(&b, Some("token-from-the-server"), &ScanProgress::default())
+            .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("did not answer after 6 attempts"), "{text}");
+        assert!(!text.contains("token-from-the-server"), "{text}");
+        assert!(!text.contains("private-prefix"), "{text}");
+        assert!(!text.contains("continuation-token"), "{text}");
+        assert_eq!(server.join().unwrap().len(), ATTEMPTS as usize);
+    }
+
+    /// A body that can never be read is the server's answer, not a hiccup:
+    /// retrying it would fetch up to 6 x 64 MiB for the same refusal.
+    #[test]
+    fn an_unreadable_body_is_not_retried() {
+        let (endpoint, server) = canned(vec![(200, "OK", vec![0xff, 0xfe, b'<'])]);
+        let mut c = signed_client(&endpoint).with_quick_retries();
+        let err = c
+            .list_page(&bucket("b"), None, &ScanProgress::default())
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("not UTF-8"), "{err:#}");
+        assert_eq!(server.join().unwrap().len(), 1, "one request, no retry");
+
+        let huge = vec![b' '; MAX_BODY_BYTES as usize + 1];
+        let (endpoint, server) = canned(vec![(200, "OK", huge)]);
+        let mut c = signed_client(&endpoint).with_quick_retries();
+        let err = c
+            .list_page(&bucket("b"), None, &ScanProgress::default())
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("larger than"), "{err:#}");
+        assert_eq!(server.join().unwrap().len(), 1, "one request, no retry");
+    }
+
+    /// The server's message goes to a terminal: control characters would be
+    /// interpreted by it, and length is the server's to choose.
+    #[test]
+    fn a_server_message_is_escaped_and_bounded() {
+        let long = "x".repeat(10_000);
+        let body = format!(
+            "<Error><Code>AccessDenied&#x1B;[2J</Code><Message>&#x1B;[31mred\nline&#7;{long}</Message></Error>"
+        );
+        let (endpoint, _server) = canned(vec![(403, "Forbidden", body.into_bytes())]);
+        let mut c = signed_client(&endpoint);
+        let err = c
+            .list_page(&bucket("b"), None, &ScanProgress::default())
+            .unwrap_err();
+        let text = format!("{err:#}");
+        assert!(!text.chars().any(|ch| ch.is_control()), "{text:?}");
+        assert!(text.contains("\\u{1b}[31mred"), "{text}");
+        assert!(
+            text.chars().count() < 1_000,
+            "{} chars",
+            text.chars().count()
+        );
+    }
+
+    #[test]
+    fn credentials_over_plain_http_to_another_machine_are_warned_about() {
+        let settings = |endpoint: &str, signed: bool| Settings {
+            credentials: signed.then(|| sigv4::Credentials {
+                access_key_id: "AKID".into(),
+                secret_access_key: "s".into(),
+                session_token: None,
+            }),
+            region: "us-east-1".into(),
+            endpoint: Some(Endpoint::parse(endpoint).unwrap()),
+        };
+        assert!(cleartext_warning(&settings("http://nas.lan:9000", true)).is_some());
+        assert!(cleartext_warning(&settings("http://10.0.0.5:9000", true)).is_some());
+        for quiet in [
+            settings("http://127.0.0.1:9000", true),
+            settings("http://localhost:9000", true),
+            settings("http://[::1]:9000", true),
+            settings("https://nas.lan:9000", true),
+            settings("http://nas.lan:9000", false),
+        ] {
+            assert_eq!(cleartext_warning(&quiet), None, "{:?}", quiet.endpoint);
+        }
     }
 }

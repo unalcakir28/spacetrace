@@ -19,6 +19,10 @@
 //!   name would break `diff`, which pairs entries by name, and `--subpath`,
 //!   which finds them by name; renaming the object would invent a key that
 //!   does not exist. Counted and sampled, so the summary says it happened.
+//! * **`.` and `..` segments** are not drawn at all: as names they would
+//!   read as path navigation to everything downstream. The key is counted
+//!   and sampled as a scan error, with its bytes, so the total says it is
+//!   short.
 //! * **Empty segments** (`/x`, `a//b`) have no name a path can carry, so they
 //!   are collapsed: `a//b` is drawn as `a/b`. Should that make two keys land on
 //!   one name, the two are one entry with both sizes, again counted.
@@ -50,8 +54,14 @@ pub struct KeyStats {
     /// Every object listed, markers included.
     pub objects: u64,
     /// Bytes of every object listed — what the bucket stores for the current
-    /// versions, and what the tree's `alloc` total adds up to.
+    /// versions. The tree's `alloc` total is this less `refused_bytes`.
     pub bytes: u64,
+    /// Keys with a `.` or `..` segment, left out of the tree and reported the
+    /// way an unreadable path is (invariant 7): counted, sampled, and in the
+    /// snapshot's error count.
+    pub refused: u64,
+    pub refused_bytes: u64,
+    pub refused_samples: Vec<String>,
     /// Keys ending in `/`, drawn as their folder.
     pub folder_markers: u64,
     /// Objects whose name is also a folder's, charged to that folder.
@@ -64,10 +74,11 @@ pub struct KeyStats {
 
 struct Open {
     node: ImportedNode,
-    /// Name → index into `node.children`, for this folder only. Dropped when
-    /// the folder closes, so memory is held for the open path and not for the
-    /// whole bucket.
-    names: HashMap<String, usize>,
+    /// Finds a child by name, for this folder only. Dropped when the folder
+    /// closes, so it is held for the open path and not the whole bucket — but
+    /// the root never closes before the end, and in a flat bucket the root is
+    /// everything, so the index must not copy the names it points at.
+    names: NameIndex,
     /// Where in the parent's children this folder goes back when it closes:
     /// `None` for a folder seen for the first time, `Some` for one reopened.
     slot: Option<usize>,
@@ -75,13 +86,75 @@ struct Open {
 
 impl Open {
     fn new(node: ImportedNode, slot: Option<usize>) -> Self {
-        let names = node
-            .children
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (c.name.clone(), i))
-            .collect();
+        let mut names = NameIndex::default();
+        for (i, child) in node.children.iter().enumerate() {
+            names.insert(&child.name, i);
+        }
         Open { node, names, slot }
+    }
+}
+
+/// Name → index into a folder's children, holding a 64-bit hash per child
+/// instead of a copy of its name.
+///
+/// A hash is not a name, so every hit is confirmed against the child itself,
+/// and a child whose hash another child already holds goes on a short list
+/// that is searched by name. Measured on 1,000,000 flat keys: peak memory
+/// through the builder and `from_nested` went from 300 to 252 MiB (see
+/// `flat_bucket_peak_memory`).
+#[derive(Default)]
+struct NameIndex {
+    hasher: std::collections::hash_map::RandomState,
+    by_hash: HashMap<u64, usize, std::hash::BuildHasherDefault<Passthrough>>,
+    /// Children whose hash collided with an earlier one. Empty in practice:
+    /// a collision among 64-bit hashes needs billions of names in a folder.
+    collided: Vec<usize>,
+}
+
+impl NameIndex {
+    fn hash(&self, name: &str) -> u64 {
+        use std::hash::BuildHasher;
+        self.hasher.hash_one(name)
+    }
+
+    fn get(&self, children: &[ImportedNode], name: &str) -> Option<usize> {
+        let found = self.by_hash.get(&self.hash(name)).copied();
+        if let Some(i) = found.filter(|&i| children.get(i).is_some_and(|c| c.name == name)) {
+            return Some(i);
+        }
+        self.collided
+            .iter()
+            .copied()
+            .find(|&i| children.get(i).is_some_and(|c| c.name == name))
+    }
+
+    /// Record `index` for `name`, which the caller has just failed to find.
+    fn insert(&mut self, name: &str, index: usize) {
+        match self.by_hash.entry(self.hash(name)) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(index);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => self.collided.push(index),
+        }
+    }
+}
+
+/// The keys of `NameIndex::by_hash` are already hashes; hashing them again
+/// would only cost time.
+#[derive(Default)]
+struct Passthrough(u64);
+
+impl std::hash::Hasher for Passthrough {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(b);
+        }
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.0 = n;
     }
 }
 
@@ -137,6 +210,19 @@ impl KeyTree {
 
         let is_marker = rel.is_empty() || rel.ends_with('/');
         let mut segments: Vec<&str> = rel.split('/').filter(|s| !s.is_empty()).collect();
+        // Not drawn. As a name, `..` reads as "the parent" to every reader of
+        // a path — CSV, ncdu, anything that joins it onto the root — and `.`
+        // cannot be reached by `--subpath` at all; collapsing them instead
+        // would invent keys that do not exist. S3 gives them no meaning, so
+        // they are reported, not interpreted.
+        if segments.iter().any(|s| *s == "." || *s == "..") {
+            self.stats.refused += 1;
+            self.stats.refused_bytes += object.size;
+            if self.stats.refused_samples.len() < SAMPLES {
+                self.stats.refused_samples.push(object.key.clone());
+            }
+            return Ok(());
+        }
         let file_name = match is_marker {
             true => None,
             // A key not ending in `/` ends in a non-empty segment.
@@ -152,11 +238,10 @@ impl KeyTree {
             return Ok(());
         };
 
-        match folder.names.get(name).copied() {
+        match folder.names.get(&folder.node.children, name) {
             None => {
-                folder
-                    .names
-                    .insert(name.to_string(), folder.node.children.len());
+                let index = folder.node.children.len();
+                folder.names.insert(name, index);
                 folder.node.children.push(ImportedNode {
                     mtime: object.last_modified,
                     ..ImportedNode::file(name, object.size, object.size)
@@ -215,7 +300,7 @@ impl KeyTree {
 
     fn open(&mut self, name: &str) {
         let parent = self.top();
-        let opened = match parent.names.get(name).copied() {
+        let opened = match parent.names.get(&parent.node.children, name) {
             None => {
                 self.folders += 1;
                 Open::new(ImportedNode::dir(name), None)
@@ -253,9 +338,8 @@ impl KeyTree {
         match done.slot {
             Some(i) => parent.node.children[i] = done.node,
             None => {
-                parent
-                    .names
-                    .insert(done.node.name.clone(), parent.node.children.len());
+                let index = parent.node.children.len();
+                parent.names.insert(&done.node.name, index);
                 parent.node.children.push(done.node);
             }
         }
@@ -455,6 +539,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dot_segments_are_reported_and_not_drawn() {
+        let (tree, stats) = build(
+            "",
+            &sorted(vec![
+                obj("a/../../up/and/away", 7, 0),
+                obj("./x", 11, 0),
+                obj("ok/..hidden", 13, 0),
+                obj("ok/file", 17, 0),
+            ]),
+        );
+        assert_eq!(stats.refused, 2);
+        assert_eq!(stats.refused_bytes, 18);
+        assert_eq!(stats.refused_samples, ["./x", "a/../../up/and/away"]);
+        assert_eq!(tree.total_alloc(), stats.bytes - stats.refused_bytes);
+        assert!(
+            tree.find("ok/..hidden").is_some(),
+            "only whole segments count"
+        );
+        assert!(tree
+            .iter()
+            .all(|id| tree.name(id) != ".." && tree.name(id) != "."));
+        assert!(tree.find("a").is_none(), "a refused key opens no folder");
+    }
+
     /// The prefix is the root: keys are drawn below it, and its own marker is
     /// the root's.
     #[test]
@@ -560,6 +669,73 @@ mod tests {
         assert_eq!(
             store.verify(id).unwrap(),
             spacetrace_store::Integrity::Intact
+        );
+    }
+
+    /// The index stores hashes, so a hash that points at a child of another
+    /// name — a collision — must not be taken as a hit, and the colliding
+    /// child must still be found. Forced here, since no real name pair is
+    /// known to collide.
+    #[test]
+    fn a_hash_collision_is_confirmed_by_name() {
+        let children = vec![ImportedNode::file("a", 1, 1), ImportedNode::file("b", 2, 2)];
+        let mut index = NameIndex::default();
+        let hash_of_b = index.hash("b");
+        index.by_hash.insert(hash_of_b, 0);
+        index.collided.push(1);
+        assert_eq!(index.get(&children, "b"), Some(1));
+        assert_eq!(
+            index.get(&children, "a"),
+            None,
+            "a's own hash was never stored"
+        );
+        assert_eq!(index.get(&children, "zzz"), None);
+    }
+
+    /// Peak memory of a flat bucket through the builder and `from_nested`,
+    /// the shape that holds the most names in one folder. Ignored because it
+    /// measures rather than asserts; run it alone so the high-water mark is
+    /// its own:
+    /// `cargo test --release -p spacetrace-cli flat_bucket_peak_memory -- --ignored --exact --nocapture`
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    fn flat_bucket_peak_memory() {
+        let count: usize = std::env::var("SPACETRACE_PROBE_KEYS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1_000_000);
+        let peak = || {
+            let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+            // SAFETY: a valid out-pointer to a zeroed rusage.
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+            // Bytes on macOS, KiB on Linux.
+            let raw = usage.ru_maxrss as u64;
+            if cfg!(target_os = "macos") {
+                raw
+            } else {
+                raw * 1024
+            }
+        };
+        let before = peak();
+        let mut keys = KeyTree::new("s3://b", "");
+        for i in 0..count {
+            keys.insert(&obj(
+                &format!("logs/2026-10-02/obj-{i:09}.json.gz")[19..],
+                100,
+                0,
+            ))
+            .unwrap();
+        }
+        let (root, _) = keys.finish();
+        let tree = Tree::from_nested(PathBuf::from("s3://b"), root);
+        assert_eq!(tree.len(), count + 1);
+        let after = peak();
+        eprintln!(
+            "{count} flat keys: peak {:.1} MiB (start {:.1} MiB, {} B/key above start)",
+            after as f64 / 1048576.0,
+            before as f64 / 1048576.0,
+            (after - before) / count as u64
         );
     }
 }
