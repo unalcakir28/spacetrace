@@ -1,5 +1,6 @@
 mod args;
 mod fmt;
+mod pkgs;
 mod remote;
 mod s3;
 #[cfg(unix)]
@@ -25,7 +26,7 @@ use spacetrace_store::{
 
 use crate::args::{
     parse_size, AgeArgs, Cli, Command, DiffArgs, DupesArgs, ExportArgs, ExportFormat, ImportArgs,
-    LsArgs, PruneArgs, PullArgs, RmArgs, ScanArgs, VerifyArgs,
+    LsArgs, PkgsArgs, PruneArgs, PullArgs, RmArgs, ScanArgs, VerifyArgs,
 };
 use crate::remote::Remote;
 use crate::s3::S3Url;
@@ -100,6 +101,7 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Import(a) => cmd_import(a, &db_path, cli.json),
         Command::Age(a) => cmd_age(a, &db_path, cli.json),
         Command::Dupes(a) => cmd_dupes(a, &db_path, cli.json, cli.remote.is_some()),
+        Command::Pkgs(a) => cmd_pkgs(a, &db_path, cli.json, cli.remote.is_some()),
         Command::Prune(a) => cmd_prune(a, &db_path, cli.json),
         Command::Rm(a) => cmd_rm(a, &db_path),
         Command::Verify(a) => cmd_verify(a, &db_path, cli.json),
@@ -1503,6 +1505,306 @@ fn cmd_dupes(a: &DupesArgs, db_path: &Path, json: bool, remote: bool) -> Result<
         }
     }
     Ok(())
+}
+
+// ------------------------------------------------------------- packages
+
+/// Which installed package the bytes belong to, and what belongs to none.
+///
+/// **This machine only.** The package databases read are this machine's, so a
+/// snapshot of another one — fetched with `--remote`, or pulled earlier — would
+/// be checked against packages it never had: its own files would come out
+/// unowned and the report would still look like an answer. Refused rather
+/// than warned about, because no part of that answer is right, and a warning on
+/// stderr is the first thing a `--json` pipeline loses.
+fn cmd_pkgs(a: &PkgsArgs, db_path: &Path, json: bool, remote: bool) -> Result<()> {
+    anyhow::ensure!(
+        !remote,
+        "pkgs reads this machine's package databases, so it only works on this machine. \
+         A remote snapshot describes another one."
+    );
+    // `.` is clap's default, so only a path the user typed can conflict.
+    anyhow::ensure!(
+        a.scan.is_none() || a.path == Path::new("."),
+        "--scan reports on the snapshot's own root; leave the path out"
+    );
+    let sources = pkgs::Sources::system();
+
+    // A file, or anything that is not a folder, is a question about its owner
+    // rather than a breakdown. Through `is_dir`, which follows links, so
+    // `pkgs /bin` on a merged-/usr system breaks down `/usr/bin` the way
+    // `scan /bin` would, and `pkgs /usr/bin/python3` asks about the link.
+    if a.scan.is_none() && !a.path.is_dir() {
+        return pkgs_owner(&a.path, &sources, json);
+    }
+
+    let (tree, source, stats) = match a.scan {
+        Some(id) => {
+            let store = open_store(db_path)?;
+            let (tree, meta) = store.load(id)?;
+            let here = Store::local_host();
+            anyhow::ensure!(
+                meta.host == here,
+                "snapshot #{id} was taken on {}, and the package databases here describe {here}. \
+                 Run `spacetrace pkgs` on {} instead",
+                meta.host,
+                meta.host
+            );
+            let source = format!(
+                "snapshot #{} ({}, {}) against the packages installed now",
+                meta.id,
+                meta.root,
+                fmt::timestamp(meta.started_at)
+            );
+            (tree, source, None)
+        }
+        None => {
+            let (tree, stats) = scan_with_progress(&a.path, a.walk.to_options(), !json)?;
+            (tree, tree_source(&a.path), Some(stats))
+        }
+    };
+
+    let started = std::time::Instant::now();
+    let own = pkgs::Ownership::load(&sources, tree.root_path())?;
+    ensure_package_databases(&own)?;
+    // Logical, as everywhere in the CLI, and said at the call site
+    // (invariant 6).
+    let report = pkgs::report(&tree, &own, SizeBasis::Logical, a.top);
+    let took_ms = started.elapsed().as_millis() as u64;
+    let (listed, kept) = own.sizes();
+
+    if json {
+        warn_unreadable_databases(&own);
+        let payload = serde_json::json!({
+            "source": source,
+            "root": tree.root_path().to_string_lossy(),
+            "basis": report.basis,
+            "databases": own.databases(),
+            "duration_ms": took_ms,
+            "listed_paths": listed,
+            "kept_paths": kept,
+            "total": report.total,
+            "owned": report.owned,
+            "unowned": report.unowned,
+            "shared": report.shared,
+            "packages_present": report.packages.len(),
+            "packages": report.packages.iter().take(a.top).collect::<Vec<_>>(),
+            "unowned_parts": report.unowned_parts,
+            "errors": stats.as_ref().map(|s| s.errors),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    println!("{source}");
+    print_package_databases(&own);
+    // What the matching cost, beside the answer: the databases are re-read on
+    // every run, and this is the number that says whether that is a problem.
+    // Homebrew lists nothing — it owns by position — so a count of zero there
+    // is not a finding and is left out.
+    let lists = match listed {
+        0 => String::new(),
+        n => format!(
+            "{} paths listed, {} of them under this root; ",
+            fmt::count(n),
+            fmt::count(kept as u64)
+        ),
+    };
+    println!("  {lists}matched in {}", fmt::duration(took_ms));
+    println!();
+
+    let total = report.total.size.max(1) as f64;
+    let share = |size: u64| size as f64 / total * 100.0;
+    println!(
+        "{}  ·  {} in {} files",
+        tree.root_path().display(),
+        fmt::size(report.total.size),
+        fmt::count(report.total.files)
+    );
+    println!(
+        "{:>12}  {:>5.1}%  owned by {} ({} files)",
+        fmt::size(report.owned.size),
+        share(report.owned.size),
+        package_count(report.packages.len()),
+        fmt::count(report.owned.files)
+    );
+    println!(
+        "{:>12}  {:>5.1}%  owned by no package ({} files)",
+        fmt::size(report.unowned.size),
+        share(report.unowned.size),
+        fmt::count(report.unowned.files)
+    );
+    if report.shared.files > 0 {
+        println!(
+            "  {} files ({}) are listed by more than one package; each is counted once",
+            fmt::count(report.shared.files),
+            fmt::size(report.shared.size)
+        );
+    }
+
+    if !report.packages.is_empty() {
+        println!();
+        println!(
+            "{:>10}  {:>5}  {:>9}  {:<13}  PACKAGE",
+            "SIZE", "SHARE", "FILES", "MANAGER"
+        );
+        for p in report.packages.iter().take(a.top) {
+            println!(
+                "{:>10}  {:>4.1}%  {:>9}  {:<13}  {}",
+                fmt::size(p.size),
+                share(p.size),
+                fmt::count(p.files),
+                p.manager.label(),
+                p.name
+            );
+        }
+        if report.packages.len() > a.top {
+            println!("… and {} more packages", report.packages.len() - a.top);
+        }
+    }
+
+    if !report.unowned_parts.is_empty() {
+        println!();
+        println!("Owned by no package, largest first:");
+        println!("{:>10}  {:>9}  PATH", "SIZE", "FILES");
+        for part in &report.unowned_parts {
+            let path = match part.path.as_str() {
+                "" => "(all of it)".to_string(),
+                rel => format!(
+                    "{}{}",
+                    fmt::ellipsize(rel, 64),
+                    if part.dir { "/" } else { "" }
+                ),
+            };
+            println!(
+                "{:>10}  {:>9}  {path}",
+                fmt::size(part.size),
+                fmt::count(part.files)
+            );
+        }
+    }
+
+    if let Some(stats) = &stats {
+        print_errors(stats);
+    }
+    Ok(())
+}
+
+/// `spacetrace pkgs <file>`: every package that lists it.
+fn pkgs_owner(path: &Path, sources: &pkgs::Sources, json: bool) -> Result<()> {
+    let target = pkgs::canonical_name(path)?;
+    let meta = std::fs::symlink_metadata(&target)
+        .with_context(|| format!("path not found: {}", path.display()))?;
+    let kind = match meta.file_type().is_symlink() {
+        true => EntryKind::Symlink,
+        false => EntryKind::File,
+    };
+    // Scoped to the one path, so the index holds one entry at most.
+    let own = pkgs::Ownership::load(sources, &target)?;
+    ensure_package_databases(&own)?;
+    let abs = target.to_string_lossy();
+    let owners: Vec<&pkgs::Package> = own
+        .owners(&abs, kind)
+        .into_iter()
+        .map(|id| own.package(id))
+        .collect();
+
+    if json {
+        warn_unreadable_databases(&own);
+        let payload = serde_json::json!({
+            "path": abs,
+            "owners": owners,
+            "databases": own.databases(),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    println!("{abs}");
+    match owners.split_first() {
+        None => println!("  owned by no package"),
+        Some((first, rest)) => {
+            println!("  owned by {} ({})", first.name, first.manager.label());
+            for other in rest {
+                println!(
+                    "  also listed by {} ({})",
+                    other.name,
+                    other.manager.label()
+                );
+            }
+        }
+    }
+    print_package_databases(&own);
+    Ok(())
+}
+
+/// No database read at all is refused: "everything is unowned" would be the
+/// answer for a system nobody looked at, and it reads like a finding. One
+/// unreadable database beside a readable one still gets a report, which says
+/// what it could not see.
+fn ensure_package_databases(own: &pkgs::Ownership) -> Result<()> {
+    anyhow::ensure!(
+        !own.databases().is_empty(),
+        "no package database found on this machine. Looked for {}",
+        pkgs::WHERE_LOOKED
+    );
+    let unread: Vec<String> = own
+        .databases()
+        .iter()
+        .filter_map(|db| match &db.state {
+            pkgs::State::Read { .. } => None,
+            pkgs::State::Unreadable { reason } => Some(format!(
+                "{} at {}: {reason}",
+                db.manager.label(),
+                db.location.display()
+            )),
+        })
+        .collect();
+    anyhow::ensure!(
+        unread.len() < own.databases().len(),
+        "no package database could be read, so nothing can be said about who owns what. {}",
+        unread.join("; ")
+    );
+    Ok(())
+}
+
+fn package_count(n: usize) -> String {
+    match n {
+        1 => "1 package".to_string(),
+        n => format!("{} packages", fmt::count(n as u64)),
+    }
+}
+
+fn print_package_databases(own: &pkgs::Ownership) {
+    for db in own.databases() {
+        match &db.state {
+            pkgs::State::Read { packages } => println!(
+                "  {}: {} ({})",
+                db.manager.label(),
+                package_count(*packages),
+                db.location.display()
+            ),
+            // In the body and not only on stderr: this changes what the
+            // unowned figure below it means.
+            pkgs::State::Unreadable { reason } => println!(
+                "  {} ({}): NOT READ, {reason}; the files it owns are counted as unowned",
+                db.manager.label(),
+                db.location.display()
+            ),
+        }
+    }
+}
+
+fn warn_unreadable_databases(own: &pkgs::Ownership) {
+    for db in own.databases() {
+        if let pkgs::State::Unreadable { reason } = &db.state {
+            eprintln!(
+                "warning: {} database at {} not read ({reason}); its files are counted as unowned",
+                db.manager.label(),
+                db.location.display()
+            );
+        }
+    }
 }
 
 // ------------------------------------------------------------------ age

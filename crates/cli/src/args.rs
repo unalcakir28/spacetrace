@@ -55,6 +55,8 @@ pub enum Command {
     Age(AgeArgs),
     /// Files holding identical contents, and what deleting the extras returns
     Dupes(DupesArgs),
+    /// Which installed package the bytes belong to, and what belongs to none
+    Pkgs(PkgsArgs),
     /// Delete all but the newest N snapshots per target
     Prune(PruneArgs),
     /// Delete a snapshot
@@ -335,6 +337,24 @@ pub struct DupesArgs {
     /// Hash every file again instead of reusing what was hashed before
     #[arg(long)]
     pub no_cache: bool,
+
+    #[command(flatten)]
+    pub walk: WalkArgs,
+}
+
+#[derive(Args, Debug)]
+pub struct PkgsArgs {
+    /// Folder to break down by package, or one file to name the owner of
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    /// Read a stored snapshot of this machine instead of scanning
+    #[arg(long, value_name = "ID")]
+    pub scan: Option<i64>,
+
+    /// How many packages, and how many unowned pieces, to show
+    #[arg(long, default_value_t = 20, value_name = "N")]
+    pub top: usize,
 
     #[command(flatten)]
     pub walk: WalkArgs,

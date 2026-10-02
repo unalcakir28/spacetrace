@@ -1,0 +1,524 @@
+//! Each test builds a small system in a temporary directory — real files, real
+//! symlinks, the databases in their real formats at their real places — and
+//! points the loader at it the way `dpkg --root` would be.
+
+use std::os::unix::fs::symlink;
+use std::path::Path;
+use std::sync::Arc;
+
+use spacetrace_scan_core::{scan, ScanOptions, ScanProgress};
+
+use super::*;
+
+/// A sysroot: a temporary directory standing in for `/`.
+struct System {
+    dir: tempfile::TempDir,
+}
+
+impl System {
+    fn new() -> System {
+        System {
+            dir: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    fn root(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// The path the databases spell as `/<rel>`, which is how every list
+    /// inside the sysroot has to name it.
+    fn file(&self, rel: &str, bytes: usize) {
+        let path = self.root().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, vec![b'x'; bytes]).unwrap();
+    }
+
+    fn dir(&self, rel: &str) {
+        std::fs::create_dir_all(self.root().join(rel)).unwrap();
+    }
+
+    fn link(&self, rel: &str, target: &str) {
+        let path = self.root().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        symlink(target, path).unwrap();
+    }
+
+    /// The merged-/usr layout every current Debian, Arch and Fedora ships:
+    /// the old top-level directories are relative symlinks into `/usr`.
+    fn merge_usr(&self) {
+        self.dir("usr/bin");
+        self.dir("usr/lib");
+        self.link("bin", "usr/bin");
+        self.link("lib", "usr/lib");
+        self.link("sbin", "usr/bin");
+    }
+
+    fn dpkg(&self, package: &str, paths: &[&str]) {
+        let mut text = String::from("/.\n");
+        for path in paths {
+            text.push_str(path);
+            text.push('\n');
+        }
+        self.file_text(&format!("var/lib/dpkg/info/{package}.list"), &text);
+    }
+
+    fn file_text(&self, rel: &str, text: &str) {
+        let path = self.root().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn sources(&self) -> Sources {
+        Sources {
+            sysroot: self.root().to_path_buf(),
+            // Never the host's: a test that found a real rpm would be reading
+            // this machine's packages.
+            rpm: OsString::from("spacetrace-test-no-such-rpm"),
+        }
+    }
+
+    /// Scan `rel` and report on it, the way `spacetrace pkgs` does.
+    fn report(&self, rel: &str) -> (Report, Ownership, Tree) {
+        let (tree, _) = scan(
+            self.root().join(rel),
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+        )
+        .unwrap();
+        let own = Ownership::load(&self.sources(), tree.root_path()).unwrap();
+        let report = report(&tree, &own, SizeBasis::Logical, 50);
+        (report, own, tree)
+    }
+}
+
+fn size_of(report: &Report, name: &str) -> Option<u64> {
+    report
+        .packages
+        .iter()
+        .find(|p| p.name == name)
+        .map(|p| p.size)
+}
+
+/// The case that makes or breaks this on a modern system. bookworm's
+/// coreutils lists `/bin/ls`; the scan of `/usr` finds `/usr/bin/ls`, because
+/// `/bin` is a symlink and the scanner does not follow it. As strings they
+/// never meet.
+#[test]
+fn a_file_listed_under_a_merged_directory_is_found_under_usr() {
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 1000);
+    sys.file("usr/lib/libc.so.6", 300);
+    sys.dpkg("coreutils", &["/bin", "/bin/ls"]);
+    sys.dpkg("libc6:arm64", &["/lib", "/lib/libc.so.6"]);
+
+    let (report, _, tree) = sys.report("usr");
+
+    assert_eq!(size_of(&report, "coreutils"), Some(1000));
+    assert_eq!(size_of(&report, "libc6:arm64"), Some(300));
+    assert_eq!(report.unowned.size, 0, "{:?}", report.unowned_parts);
+    assert_eq!(report.owned.size, tree.total_size());
+}
+
+/// Arch goes one further: `/usr/sbin` is itself a symlink to `bin`, and a
+/// package may still list a path through it.
+#[test]
+fn a_symlink_inside_usr_is_resolved_too() {
+    let sys = System::new();
+    sys.merge_usr();
+    sys.link("usr/sbin", "bin");
+    sys.file("usr/bin/ldconfig", 50);
+    sys.file_text(
+        "var/lib/pacman/local/glibc-2.42-1/desc",
+        "%NAME%\nglibc\n\n%VERSION%\n2.42-1\n",
+    );
+    sys.file_text(
+        "var/lib/pacman/local/glibc-2.42-1/files",
+        "%FILES%\nusr/\nusr/sbin/\nusr/sbin/ldconfig\n\n%BACKUP%\n",
+    );
+    // The links themselves, as archlinux:latest's `filesystem` lists them:
+    // without the trailing slash a directory would have.
+    sys.file_text(
+        "var/lib/pacman/local/filesystem-2025.10.12-1/desc",
+        "%NAME%\nfilesystem\n",
+    );
+    sys.file_text(
+        "var/lib/pacman/local/filesystem-2025.10.12-1/files",
+        "%FILES%\nbin\nlib\nsbin\nusr/\nusr/bin/\nusr/sbin\n\n",
+    );
+    sys.file_text("var/lib/pacman/local/ALPM_DB_VERSION", "9\n");
+
+    let (report, own, _) = sys.report("usr");
+
+    assert_eq!(size_of(&report, "glibc"), Some(50));
+    assert_eq!(size_of(&report, "filesystem"), Some(3), "the `bin` link");
+    assert_eq!(report.unowned.files, 0, "{:?}", report.unowned_parts);
+    assert!(matches!(
+        own.databases()[0].state,
+        State::Read { packages: 2 }
+    ));
+}
+
+/// A package that ships a symlink owns the link, not what it points at.
+/// Resolving the whole path would credit the link's bytes to the target's
+/// package and leave the link itself unowned.
+#[test]
+fn a_shipped_symlink_is_owned_as_a_link() {
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/python3.13", 4000);
+    sys.link("usr/bin/python3", "python3.13");
+    sys.dpkg("python3-minimal", &["/usr/bin/python3"]);
+    sys.dpkg("python3.13-minimal", &["/usr/bin/python3.13"]);
+
+    let (report, own, _) = sys.report("usr");
+
+    assert_eq!(size_of(&report, "python3.13-minimal"), Some(4000));
+    let link = own.owners(
+        &canonical_name(&sys.root().join("bin/python3"))
+            .unwrap()
+            .to_string_lossy(),
+        EntryKind::Symlink,
+    );
+    assert_eq!(
+        link.iter()
+            .map(|&id| own.package(id).name.as_str())
+            .collect::<Vec<_>>(),
+        ["python3-minimal"],
+        "asked through /bin, answered for the link in /usr/bin"
+    );
+    assert_eq!(report.unowned.files, 0);
+}
+
+/// The other half of the answer, and usually the interesting one.
+#[test]
+fn unowned_bytes_are_reported_as_pieces_that_add_up() {
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 100);
+    sys.file("usr/bin/my-script", 7);
+    sys.file("usr/local/lib/node_modules/a/index.js", 2000);
+    sys.file("usr/local/lib/node_modules/b/index.js", 3000);
+    sys.dir("usr/local/empty");
+    sys.dpkg("coreutils", &["/usr/bin/ls"]);
+
+    let (report, _, tree) = sys.report("usr");
+
+    assert_eq!(report.owned.size, 100);
+    assert_eq!(report.unowned.size, 5007);
+    assert_eq!(report.owned.size + report.unowned.size, tree.total_size());
+    let parts: Vec<(&str, u64)> = report
+        .unowned_parts
+        .iter()
+        .map(|p| (p.path.as_str(), p.size))
+        .collect();
+    // `local` whole, because nothing in it is packaged; `my-script` alone,
+    // because its folder also holds `ls`. Not `local/lib` as well: the pieces
+    // never overlap.
+    assert_eq!(parts, [("local", 5000), ("bin/my-script", 7)]);
+    let sum: u64 = report.unowned_parts.iter().map(|p| p.size).sum();
+    assert_eq!(sum, report.unowned.size);
+}
+
+#[test]
+fn everything_unowned_is_one_piece_the_root() {
+    let sys = System::new();
+    sys.file("home/me/a", 10);
+    sys.file("home/me/b/c", 20);
+    sys.dpkg("base-files", &["/etc/issue"]);
+
+    let (report, _, _) = sys.report("home");
+
+    assert_eq!(report.owned.files, 0);
+    assert_eq!(report.unowned_parts.len(), 1);
+    assert_eq!(report.unowned_parts[0].path, "");
+    assert_eq!(report.unowned_parts[0].size, 30);
+}
+
+/// Two packages listing one file: the bytes go to one of them, chosen by
+/// name and not by which list was read first, and the overlap is counted.
+#[test]
+fn a_contested_file_is_credited_once_and_the_overlap_is_said() {
+    let sys = System::new();
+    sys.file("usr/share/x/common", 500);
+    sys.file("usr/share/x/only-b", 5);
+    sys.dpkg(
+        "b-pkg",
+        &["/usr/share/x", "/usr/share/x/common", "/usr/share/x/only-b"],
+    );
+    sys.dpkg("a-pkg", &["/usr/share/x", "/usr/share/x/common"]);
+
+    let (report, own, _) = sys.report("usr");
+
+    assert_eq!(size_of(&report, "a-pkg"), Some(500));
+    assert_eq!(size_of(&report, "b-pkg"), Some(5));
+    assert_eq!(report.owned.size, 505, "counted once, not twice");
+    assert_eq!(
+        report.shared,
+        Usage {
+            size: 500,
+            files: 1
+        }
+    );
+
+    let common = canonical_name(&sys.root().join("usr/share/x/common")).unwrap();
+    let names: Vec<_> = own
+        .owners(&common.to_string_lossy(), EntryKind::File)
+        .into_iter()
+        .map(|id| own.package(id).name.clone())
+        .collect();
+    assert_eq!(names, ["a-pkg", "b-pkg"], "the lookup names both");
+}
+
+/// apk's database is in install order, not by name, so here the claimants do
+/// arrive out of order — and the answer must not notice.
+#[test]
+fn the_credited_claimant_does_not_depend_on_read_order() {
+    let sys = System::new();
+    sys.file("etc/shared.conf", 40);
+    sys.file_text(
+        "lib/apk/db/installed",
+        "P:zeta\nF:etc\nR:shared.conf\n\nP:mid\nF:etc\nR:shared.conf\n\n\
+         P:alpha\nF:etc\nR:shared.conf\n",
+    );
+
+    let (report, own, _) = sys.report("etc");
+
+    assert_eq!(size_of(&report, "alpha"), Some(40));
+    assert_eq!(report.shared, Usage { size: 40, files: 1 });
+    let path = canonical_name(&sys.root().join("etc/shared.conf")).unwrap();
+    let names: Vec<_> = own
+        .owners(&path.to_string_lossy(), EntryKind::File)
+        .into_iter()
+        .map(|id| own.package(id).name.clone())
+        .collect();
+    assert_eq!(names, ["alpha", "mid", "zeta"]);
+}
+
+/// The same path reached twice from one package — `/bin/ls` and
+/// `/usr/bin/ls` in one list, as transitional Debian packages do — is one
+/// claim, not a contest with itself.
+#[test]
+fn a_package_listing_one_file_twice_does_not_share_it_with_itself() {
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 10);
+    sys.dpkg("coreutils", &["/bin/ls", "/usr/bin/ls"]);
+
+    let (report, _, _) = sys.report("usr");
+
+    assert_eq!(size_of(&report, "coreutils"), Some(10));
+    assert_eq!(report.shared, Usage::default());
+}
+
+/// bookworm's own diversion: dash moves anyone else's `/bin/sh` to
+/// `/bin/sh.distrib` and keeps `/bin/sh` for itself.
+#[test]
+fn a_diverted_file_belongs_where_the_diversion_put_it() {
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/sh", 30);
+    sys.file("usr/bin/sh.distrib", 900);
+    sys.dpkg("dash", &["/bin/sh"]);
+    sys.dpkg("bash", &["/bin/sh"]);
+    sys.file_text(
+        "var/lib/dpkg/diversions",
+        "/bin/sh\n/bin/sh.distrib\ndash\n",
+    );
+
+    let (report, _, _) = sys.report("usr");
+
+    assert_eq!(size_of(&report, "dash"), Some(30));
+    assert_eq!(size_of(&report, "bash"), Some(900));
+    assert_eq!(report.shared, Usage::default(), "nobody contests /bin/sh");
+}
+
+#[test]
+fn apk_paths_are_relative_to_the_root() {
+    let sys = System::new();
+    sys.file("bin/busybox", 800);
+    sys.file("etc/motd", 3);
+    sys.file_text(
+        "lib/apk/db/installed",
+        "C:Q1=\nP:busybox\nV:1.37.0-r30\nF:bin\nR:busybox\n\n\
+         C:Q2=\nP:alpine-baselayout\nF:etc\nR:motd\nZ:Q1SLkS9hBidUbPwwrw+XR0Whv3ww8=\n",
+    );
+
+    let (report, own, _) = sys.report("");
+
+    assert_eq!(size_of(&report, "busybox"), Some(800));
+    assert_eq!(size_of(&report, "alpine-baselayout"), Some(3));
+    assert!(own
+        .databases()
+        .iter()
+        .any(|d| d.manager == Manager::Apk && matches!(d.state, State::Read { packages: 2 })));
+}
+
+/// A database that is there and cannot be read must not look like a system
+/// whose files are all unowned.
+#[test]
+fn an_rpm_database_without_rpm_is_reported_as_unreadable() {
+    let sys = System::new();
+    sys.file("usr/bin/bash", 100);
+    sys.file_text("var/lib/rpm/rpmdb.sqlite", "not really");
+
+    let (report, own, _) = sys.report("usr");
+
+    let rpm = own
+        .databases()
+        .iter()
+        .find(|d| d.manager == Manager::Rpm)
+        .expect("the database is found even though it cannot be read");
+    let State::Unreadable { reason } = &rpm.state else {
+        panic!("{:?}", rpm.state);
+    };
+    assert!(reason.contains("not installed"), "{reason}");
+    assert_eq!(report.unowned.size, 100);
+}
+
+/// No rpm database, no rpm entry — `rpm` the tool installed on Debian is not
+/// an rpm system.
+#[test]
+fn no_database_means_no_entry() {
+    let sys = System::new();
+    sys.dir("var/lib/rpm");
+    sys.file("usr/bin/bash", 1);
+    let (_, own, _) = sys.report("usr");
+    assert!(own.databases().is_empty(), "{:?}", own.databases());
+}
+
+#[test]
+fn homebrew_owns_by_position_and_its_links_by_target() {
+    let sys = System::new();
+    let brew = "opt/homebrew";
+    sys.file(&format!("{brew}/Cellar/wget/1.25.0/bin/wget"), 600);
+    sys.file(
+        &format!("{brew}/Cellar/wget/1.25.0/INSTALL_RECEIPT.json"),
+        40,
+    );
+    sys.link(
+        &format!("{brew}/bin/wget"),
+        "../Cellar/wget/1.25.0/bin/wget",
+    );
+    sys.link(&format!("{brew}/opt/wget"), "../Cellar/wget/1.25.0");
+    sys.file(
+        &format!("{brew}/Caskroom/firefox/140.0/firefox.wrapper.sh"),
+        70,
+    );
+    // A database a formula's service created: data, not the package.
+    sys.file(&format!("{brew}/var/postgresql@17/base/1"), 8000);
+    // A link brew did not make, pointing nowhere packaged.
+    sys.link(&format!("{brew}/bin/mine"), "/usr/local/mine");
+
+    let (report, _, tree) = sys.report(brew);
+
+    let wget = report.packages.iter().find(|p| p.name == "wget").unwrap();
+    assert_eq!(wget.manager, Manager::Homebrew);
+    assert_eq!(wget.files, 4, "two files and two links");
+    let link_bytes = tree.total_size() - 600 - 40 - 70 - 8000;
+    let mine_bytes = "/usr/local/mine".len() as u64;
+    assert_eq!(wget.size, 640 + link_bytes - mine_bytes);
+    let cask = report
+        .packages
+        .iter()
+        .find(|p| p.name == "firefox")
+        .unwrap();
+    assert_eq!((cask.manager, cask.size), (Manager::HomebrewCask, 70));
+    let parts: Vec<&str> = report
+        .unowned_parts
+        .iter()
+        .map(|p| p.path.as_str())
+        .collect();
+    assert_eq!(parts, ["var", "bin/mine"]);
+}
+
+/// A scan of one subdirectory keeps only that subdirectory's paths: the
+/// memory follows the question.
+#[test]
+fn only_paths_under_the_root_are_kept() {
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 1);
+    sys.file("usr/share/doc/coreutils/README", 1);
+    sys.file("etc/issue", 1);
+    sys.dpkg("coreutils", &["/bin/ls", "/usr/share/doc/coreutils/README"]);
+    sys.dpkg("base-files", &["/etc/issue"]);
+
+    let (report, own, _) = sys.report("usr/bin");
+
+    assert_eq!(own.sizes(), (3, 1), "three listed, one under usr/bin");
+    assert_eq!(size_of(&report, "coreutils"), Some(1));
+    assert_eq!(size_of(&report, "base-files"), None);
+}
+
+/// Invariant 3: a hardlinked file is counted once whichever name carries it,
+/// and the total still matches the tree's.
+#[test]
+fn a_hardlinked_file_is_counted_once() {
+    let sys = System::new();
+    sys.file("usr/bin/perl5.40", 2000);
+    std::fs::hard_link(
+        sys.root().join("usr/bin/perl5.40"),
+        sys.root().join("usr/bin/perl"),
+    )
+    .unwrap();
+    sys.dpkg("perl-base", &["/usr/bin/perl", "/usr/bin/perl5.40"]);
+
+    let (report, _, tree) = sys.report("usr");
+
+    assert_eq!(tree.total_size(), 2000);
+    assert_eq!(size_of(&report, "perl-base"), Some(2000));
+    assert_eq!(
+        report.packages[0].files, 2,
+        "both names, one carrying bytes"
+    );
+}
+
+/// Pieces of equal size are ordered by path, so the list is the same whatever
+/// order the walk finished directories in.
+#[test]
+fn equal_pieces_are_ordered_by_path() {
+    let sys = System::new();
+    sys.file("usr/bin/ls", 1);
+    for name in ["zeta", "alpha", "mid"] {
+        sys.file(&format!("usr/{name}/f"), 10);
+    }
+    sys.dpkg("coreutils", &["/usr/bin/ls"]);
+
+    let (report, _, _) = sys.report("usr");
+
+    let parts: Vec<&str> = report
+        .unowned_parts
+        .iter()
+        .map(|p| p.path.as_str())
+        .collect();
+    assert_eq!(parts, ["alpha", "mid", "zeta"]);
+}
+
+/// Homebrew on Linux beside dpkg: two databases, one report, each file to the
+/// one that knows it.
+#[test]
+fn homebrew_on_linux_and_dpkg_report_together() {
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 100);
+    sys.dpkg("coreutils", &["/bin/ls"]);
+    let brew = "home/linuxbrew/.linuxbrew";
+    sys.file(&format!("{brew}/Cellar/hello/2.12.2/bin/hello"), 200);
+    sys.link(
+        &format!("{brew}/bin/hello"),
+        "../Cellar/hello/2.12.2/bin/hello",
+    );
+
+    let (report, own, tree) = sys.report("");
+
+    let managers: Vec<Manager> = own.databases().iter().map(|d| d.manager).collect();
+    assert_eq!(managers, [Manager::Dpkg, Manager::Homebrew]);
+    assert_eq!(size_of(&report, "coreutils"), Some(100));
+    let hello = report.packages.iter().find(|p| p.name == "hello").unwrap();
+    assert_eq!((hello.manager, hello.files), (Manager::Homebrew, 2));
+    // Everything else under the sysroot — the dpkg list itself, the /bin
+    // links nobody listed here — is unowned, and the figures still agree.
+    assert_eq!(report.owned.size + report.unowned.size, tree.total_size());
+}

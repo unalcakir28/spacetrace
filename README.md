@@ -127,7 +127,36 @@ spacetrace dupes ~/Downloads --min-size 10M
 
 # Check stored snapshots against the digest saved with them
 spacetrace verify
+
+# Which installed package the bytes belong to, and what belongs to none —
+# usually the part somebody put there by hand
+spacetrace pkgs /usr
+spacetrace pkgs /usr/bin/python3     # one file: which package owns it
 ```
+
+### Packages
+
+`pkgs` reads the package databases straight off the disk: dpkg
+(`/var/lib/dpkg/info`), pacman (`/var/lib/pacman/local`), apk
+(`/lib/apk/db/installed`) and Homebrew, which owns by position (`Cellar/<formula>`,
+`Caskroom/<cask>`, and the links in `bin/` and `opt/` that point there). rpm's
+database is binary, so `rpm` itself is asked; where it is missing the report
+says the database was not read instead of calling its files unowned. Several
+can be present at once, Homebrew next to dpkg for instance.
+
+- **Merged /usr is handled.** A list that says `/bin/ls` is matched against
+  `/usr/bin/ls`, where the file actually is. Matching the strings as written
+  calls 17% of a Debian 12 `/usr` unowned, `/bin` included.
+- **Unowned is what no list names.** That is mostly what somebody installed
+  by hand (`/usr/local`, `pip install`, a tarball in `/opt`), but files a
+  package's install script generates show up too: Python bytecode, font and
+  icon caches, `locale-archive`, busybox's applet links.
+- A file two packages both list is counted once, for the first by name, and
+  the report says how much was shared. The single-file form lists every
+  package that claims it.
+- It works on this machine only. A snapshot from another host (`--scan` of a
+  pulled one, or `--remote`) is refused: this machine's databases say nothing
+  about that machine's files.
 
 ### Another machine
 
