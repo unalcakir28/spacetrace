@@ -199,7 +199,8 @@ pub struct WalkArgs {
     #[arg(long)]
     pub no_dedupe: bool,
 
-    /// Do not deduplicate copy-on-write clones; count every copy (macOS)
+    /// Do not deduplicate copy-on-write clones (APFS, btrfs, XFS) or measure
+    /// btrfs compression; count what every file reports, as du does
     #[arg(long)]
     pub no_clone_dedupe: bool,
 

@@ -7,6 +7,7 @@ use std::time::Duration;
 use rayon::prelude::*;
 
 use crate::capacity::Capacity;
+use crate::extents::{Claims, FsKind, Mapped, Volume, Volumes};
 use crate::meta::{display_name, EntryKind, FileIdentity, NamedMeta, RawMeta};
 use crate::mounts::Mounts;
 use crate::partial::PartialTree;
@@ -45,7 +46,14 @@ pub struct ScanOptions {
     pub max_depth: Option<usize>,
     /// Count a hardlinked file only the first time it is met.
     pub dedupe_hardlinks: bool,
-    /// Count copy-on-write clones only once, the same way (macOS/APFS).
+    /// Count blocks shared between files only once, the way the disk holds
+    /// them: APFS clones on macOS, reflinked and snapshotted extents on btrfs
+    /// and XFS. On btrfs it also charges compressed extents at their
+    /// compressed size, where the process may read it (`CAP_SYS_ADMIN`).
+    ///
+    /// One switch for both because both answer the same question — what the
+    /// disk holds rather than what each name reports — and switching it off
+    /// gives back exactly what `du` says.
     pub dedupe_clones: bool,
     /// How many threads to walk with. `None` (and `Some(0)`) take the default
     /// below, which is measured rather than inherited from the core count.
@@ -227,10 +235,17 @@ pub struct ScanProgress {
     pub errors: AtomicU64,
     /// Files whose clone family had to be asked for one at a time.
     ///
-    /// **Zero on an ordinary scan.** The platform's bulk listing carries the
-    /// family inside the record it was already fetching, so nothing is probed;
-    /// this counts only the entries that could not go that way — a directory
-    /// holding a mount point, and filesystems with no bulk listing at all.
+    /// **Zero on an ordinary macOS scan.** The platform's bulk listing carries
+    /// the family inside the record it was already fetching, so nothing is
+    /// probed; this counts only the entries that could not go that way — a
+    /// directory holding a mount point, and filesystems with no bulk listing
+    /// at all.
+    ///
+    /// **On Linux it is every regular file**, because there is no bulk
+    /// listing. On btrfs and XFS each of them is a real question — an `open`
+    /// and a FIEMAP, see `extents.rs` — and this is the counter that moves
+    /// while a directory of a hundred thousand of them is being asked, since
+    /// `files` is published once per directory.
     ///
     /// It used to count a phase of its own that ran after the walk, and it was
     /// 1193 ms of a 1989 ms scan on `~/github` with no other counter moving.
@@ -393,7 +408,35 @@ pub struct ScanStats {
     /// Hardlinked files met more than once and counted only the first time.
     pub hardlinks_deduped: u64,
     /// Clones whose blocks were already counted under another name.
+    ///
+    /// On btrfs and XFS a file can share only part of itself, so there it is
+    /// the files at least one of whose shared bytes had already been charged.
     pub clones_deduped: u64,
+    /// Bytes `du` counts that `alloc` does not, because another name already
+    /// holds them — the clones above, measured in bytes.
+    ///
+    /// Together with `compressed_bytes_saved` this is the whole difference
+    /// between `du` and the on-disk total, which is how the tests check it.
+    pub shared_bytes_deduped: u64,
+    /// How much less than `du` the compressed files on btrfs were charged,
+    /// because they were charged at their on-disk size.
+    pub compressed_bytes_saved: u64,
+    /// Files on btrfs with compressed extents whose on-disk size could not be
+    /// read — it takes `CAP_SYS_ADMIN` — and which therefore count at their
+    /// uncompressed size, once per name, as `du` counts them. When this is not
+    /// zero the on-disk total is too high, and by how much is unknown.
+    pub compressed_files_inexact: u64,
+    /// Files on btrfs or XFS that could not be opened to ask which of their
+    /// extents are shared (no read permission, usually). They count in full,
+    /// as `du` counts them, so the total errs high by whatever they share.
+    ///
+    /// Not an error: the entry itself was read, and the scan is complete.
+    pub files_unmapped: u64,
+    /// The scan crossed a filesystem whose shared blocks no walk can see —
+    /// ZFS, where block clones and deduplicated blocks are kept in pool-wide
+    /// tables. Each name counts them in full there, so the total can exceed
+    /// what the pool holds.
+    pub unseen_sharing: bool,
     /// Up to `MAX_REPORTED_ERRORS` paths that could not be read.
     pub error_samples: Vec<(PathBuf, String)>,
     pub duration_ms: u64,
@@ -431,6 +474,20 @@ struct Ctx {
     /// been charged for, keyed `(device, clone id)`.
     shared_blocks: Mutex<HashSet<(u64, u64)>>,
     clones_deduped: AtomicU64,
+    shared_bytes_deduped: AtomicU64,
+    /// The filesystems met so far, and which of them can share blocks.
+    volumes: Volumes,
+    /// Physical extents some name has already been charged for, on the
+    /// filesystems that say which extents are shared (Linux).
+    extent_claims: Mutex<Claims>,
+    /// Set by the first btrfs tree search refused for want of privilege, so
+    /// the rest of the scan does not ask again.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    compressed_denied: AtomicBool,
+    compressed_bytes_saved: AtomicU64,
+    compressed_files_inexact: AtomicU64,
+    files_unmapped: AtomicU64,
+    unseen_sharing: AtomicBool,
     errors: Mutex<Vec<(PathBuf, String)>>,
     progress: Arc<ScanProgress>,
 }
@@ -519,15 +576,21 @@ impl Ctx {
     /// Which name keeps the bytes is undefined in both cases (invariant #3):
     /// the first thread to claim wins. The guarantee is "once", not "this
     /// path".
-    fn claim(&self, pending: &[Pending]) -> Option<Vec<bool>> {
+    ///
+    /// A third claim follows on Linux, by physical extent rather than by
+    /// family (`extents.rs`), and the same order holds for it: a repeat
+    /// hardlink claims nothing.
+    fn claim(&self, pending: &[Pending]) -> Option<Vec<Charge>> {
         let hardlinks =
             self.opts.dedupe_hardlinks && pending.iter().any(|p| p.meta.is_hardlinked());
         let clones = self.opts.dedupe_clones && pending.iter().any(|p| p.share.is_some());
-        if !hardlinks && !clones {
+        // Only ever mapped with `dedupe_clones` on; see `map_extents`.
+        let extents = pending.iter().any(|p| p.extents.is_some());
+        if !hardlinks && !clones && !extents {
             return None;
         }
 
-        let mut counted = vec![true; pending.len()];
+        let mut counted = vec![Charge::Full; pending.len()];
         if hardlinks {
             let mut deduped = 0u64;
             let mut seen = self.seen_inodes.lock().unwrap();
@@ -535,17 +598,17 @@ impl Ctx {
                 if !p.meta.is_hardlinked() || seen.insert((p.meta.dev, p.meta.ino)) {
                     continue;
                 }
-                *slot = false;
+                *slot = Charge::Nothing;
                 deduped += 1;
             }
             drop(seen);
             self.hardlinks_deduped.fetch_add(deduped, Ordering::Relaxed);
         }
         if clones {
-            let mut deduped = 0u64;
+            let (mut deduped, mut bytes) = (0u64, 0u64);
             let mut seen = self.shared_blocks.lock().unwrap();
             for (slot, p) in counted.iter_mut().zip(pending) {
-                if !*slot {
+                if *slot == Charge::Nothing {
                     continue;
                 }
                 let Some(key) = p.share else {
@@ -554,14 +617,123 @@ impl Ctx {
                 if seen.insert((p.meta.dev, key)) {
                     continue;
                 }
-                *slot = false;
+                *slot = Charge::Nothing;
                 deduped += 1;
+                bytes += p.meta.alloc;
             }
             drop(seen);
             self.clones_deduped.fetch_add(deduped, Ordering::Relaxed);
+            self.shared_bytes_deduped
+                .fetch_add(bytes, Ordering::Relaxed);
+        }
+        if extents {
+            self.claim_extents(pending, &mut counted);
         }
         Some(counted)
     }
+
+    /// Charge the entries whose extents were mapped, under one lock for the
+    /// whole directory and only if one of them shares anything.
+    fn claim_extents(&self, pending: &[Pending], counted: &mut [Charge]) {
+        let mut claims = None;
+        let (mut files, mut shared, mut saved, mut inexact) = (0u64, 0u64, 0u64, 0u64);
+        for (slot, p) in counted.iter_mut().zip(pending) {
+            // A repeat hardlink is not charged at all, so it must not consume
+            // the claim the name that *is* charged needs.
+            if *slot == Charge::Nothing {
+                continue;
+            }
+            let Some(mapped) = p.extents.as_deref() else {
+                continue;
+            };
+            inexact += u64::from(mapped.compressed_inexact);
+            saved += mapped.compressed_saved;
+            if !mapped.claims_anything() {
+                continue;
+            }
+            let claims = claims.get_or_insert_with(|| {
+                self.extent_claims
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+            });
+            let charged = claims.charge(mapped, p.meta.alloc);
+            *slot = Charge::Alloc(charged.alloc);
+            if charged.shared > 0 {
+                files += 1;
+                shared += charged.shared;
+            }
+        }
+        drop(claims);
+        for (counter, value) in [
+            (&self.clones_deduped, files),
+            (&self.shared_bytes_deduped, shared),
+            (&self.compressed_bytes_saved, saved),
+            (&self.compressed_files_inexact, inexact),
+        ] {
+            if value > 0 {
+                counter.fetch_add(value, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The volume a directory on device `dev` sits on.
+    ///
+    /// Nothing is asked with clone deduplication off: that scan counts what
+    /// every name reports, so there is nothing to look up.
+    fn volume_of(&self, dev: u64, dir: &Path) -> Volume {
+        if !self.opts.dedupe_clones {
+            return Volume {
+                dev,
+                kind: FsKind::Plain,
+            };
+        }
+        let volume = self.volumes.lookup(dev, dir);
+        if volume.kind == FsKind::Opaque {
+            self.unseen_sharing.store(true, Ordering::Relaxed);
+        }
+        volume
+    }
+
+    /// Which of a file's extents are shared or compressed, where the
+    /// filesystem can say. `None` means "charge what `st_blocks` says".
+    #[cfg(target_os = "linux")]
+    fn map_extents(&self, volume: Volume, path: &Path, meta: &RawMeta) -> Option<Box<Mapped>> {
+        let FsKind::Reflink { domain, btrfs } = volume.kind else {
+            return None;
+        };
+        // No blocks, nothing to share. A file on another device than its
+        // directory is a bind mount onto a filesystem this volume does not
+        // describe, and its addresses would be charged in the wrong space.
+        if meta.alloc == 0 || meta.dev != volume.dev {
+            return None;
+        }
+        match crate::extents::linux::map(path, meta, domain, btrfs, &self.compressed_denied) {
+            Ok(mapped) => mapped.map(Box::new),
+            Err(_) => {
+                self.files_unmapped.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    /// Nowhere else says which extents are shared.
+    #[cfg(not(target_os = "linux"))]
+    fn map_extents(&self, _volume: Volume, _path: &Path, _meta: &RawMeta) -> Option<Box<Mapped>> {
+        None
+    }
+}
+
+/// What one entry is charged for its own blocks, decided for its whole
+/// directory at once (see [`Ctx::claim`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Charge {
+    /// What the platform reported.
+    Full,
+    /// Nothing: a repeat hardlink, or a clone whose family is already charged.
+    Nothing,
+    /// This much: part of it was shared with a name already charged, or it is
+    /// compressed and its on-disk size is known.
+    Alloc(u64),
 }
 
 /// One listed entry, with everything needed to account for it.
@@ -579,6 +751,9 @@ struct Pending {
     meta: RawMeta,
     /// See [`NamedMeta::share`].
     share: Option<u64>,
+    /// Its shared and compressed extents, on a filesystem that says (Linux).
+    /// Boxed because almost every entry has none.
+    extents: Option<Box<Mapped>>,
 }
 
 /// Append `name` and return the range that addresses it, truncating on a
@@ -731,6 +906,14 @@ fn scan_with(
         hardlinks_deduped: AtomicU64::new(0),
         shared_blocks: Mutex::new(HashSet::new()),
         clones_deduped: AtomicU64::new(0),
+        shared_bytes_deduped: AtomicU64::new(0),
+        volumes: Volumes::default(),
+        extent_claims: Mutex::new(Claims::default()),
+        compressed_denied: AtomicBool::new(false),
+        compressed_bytes_saved: AtomicU64::new(0),
+        compressed_files_inexact: AtomicU64::new(0),
+        files_unmapped: AtomicU64::new(0),
+        unseen_sharing: AtomicBool::new(false),
         errors: Mutex::new(Vec::new()),
         progress: Arc::clone(&progress),
     };
@@ -740,7 +923,8 @@ fn scan_with(
 
     if root_meta.kind == EntryKind::Dir {
         progress.dirs.fetch_add(1, Ordering::Relaxed);
-        pool.install(|| walk(&root_path, root_id, 1, &ctx));
+        let volume = ctx.volume_of(root_meta.dev, &root_path);
+        pool.install(|| walk(&root_path, root_id, 1, root_meta.dev, volume, &ctx));
     } else {
         progress.files.fetch_add(1, Ordering::Relaxed);
         progress.bytes.fetch_add(root_meta.alloc, Ordering::Relaxed);
@@ -769,6 +953,11 @@ fn scan_with(
         errors: progress.errors.load(Ordering::Relaxed),
         hardlinks_deduped: ctx.hardlinks_deduped.load(Ordering::Relaxed),
         clones_deduped: ctx.clones_deduped.load(Ordering::Relaxed),
+        shared_bytes_deduped: ctx.shared_bytes_deduped.load(Ordering::Relaxed),
+        compressed_bytes_saved: ctx.compressed_bytes_saved.load(Ordering::Relaxed),
+        compressed_files_inexact: ctx.compressed_files_inexact.load(Ordering::Relaxed),
+        files_unmapped: ctx.files_unmapped.load(Ordering::Relaxed),
+        unseen_sharing: ctx.unseen_sharing.load(Ordering::Relaxed),
         error_samples: ctx.errors.into_inner().unwrap(),
         duration_ms: started.elapsed().as_millis() as u64,
         // Asked once, after the walk: it describes the mount, not the tree,
@@ -804,7 +993,10 @@ fn identity_needed(opts: &ScanOptions, is_dir: bool) -> FileIdentity {
 /// caller put it there, which is why the children it adds are guaranteed to sit
 /// at a higher index. Nothing is returned: the tree is the shared arena, not
 /// something assembled from what the recursion hands back.
-fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
+///
+/// `dev` is this directory's own device and `parent` the volume its parent was
+/// on; only a change between the two costs a filesystem lookup.
+fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Volume, ctx: &Ctx) {
     // Checked before the syscall, so a cancelled scan stops issuing I/O
     // immediately instead of draining whatever rayon had already queued.
     if ctx.progress.is_cancelled() {
@@ -815,6 +1007,14 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
     // the recursion below runs on the pool where it would only add ancestors
     // to the list. See `ScanProgress::reading_now`.
     let listing = ctx.progress.listing(dir);
+    // Inside the guard: a new device means a `statfs`, which can block on a
+    // dead mount exactly as the `read_dir` after it can, and a watcher must be
+    // able to name the directory either way.
+    let volume = if dev == parent.dev {
+        parent
+    } else {
+        ctx.volume_of(dev, dir)
+    };
     // One lookup for the whole directory. Almost every directory on a real
     // disk holds no mount point, and those pay nothing per entry.
     let guarded = ctx.opts.mount_timeout.is_some() && ctx.mounts.holds_a_boundary(dir);
@@ -842,10 +1042,11 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
                     name_len,
                     meta: item.meta,
                     share: item.share,
+                    extents: None,
                 });
             }
             drop(listing);
-            return place(dir, parent_id, depth, ctx, &names, pending);
+            return place(dir, parent_id, depth, volume, ctx, &names, pending);
         }
     }
 
@@ -903,11 +1104,14 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
         // This path is reached for a directory holding a mount point and for
         // filesystems with no bulk listing at all, so it is asked one entry at
         // a time — the only place left that still pays per file for it.
-        let share = if ctx.opts.dedupe_clones && meta.kind == EntryKind::File {
+        //
+        // Linux has no clone family; there the same question is which of the
+        // file's extents are shared, asked on the filesystems that can answer.
+        let (share, extents) = if ctx.opts.dedupe_clones && meta.kind == EntryKind::File {
             ctx.progress.clones_probed.fetch_add(1, Ordering::Relaxed);
-            clone_key(&path)
+            (clone_key(&path), ctx.map_extents(volume, &path, &meta))
         } else {
-            None
+            (None, None)
         };
         let raw_name = entry.file_name();
         let (name_off, name_len) = push_name(&mut names, &raw_name.to_string_lossy());
@@ -917,13 +1121,14 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, ctx: &Ctx) {
             name_len,
             meta,
             share,
+            extents,
         });
     }
 
     // Listing done; the recursion that follows is not what hangs.
     drop(listing);
 
-    place(dir, parent_id, depth, ctx, &names, pending)
+    place(dir, parent_id, depth, volume, ctx, &names, pending)
 }
 
 /// Account for one directory's entries, write them into the arena as a block,
@@ -941,12 +1146,13 @@ fn place(
     dir: &Path,
     parent_id: NodeId,
     depth: usize,
+    volume: Volume,
     ctx: &Ctx,
     names: &str,
     pending: Vec<Pending>,
 ) {
     let mut children: Vec<NewNode<'_>> = Vec::with_capacity(pending.len());
-    let mut subdirs: Vec<(NodeId, PathBuf)> = Vec::new();
+    let mut subdirs: Vec<(NodeId, PathBuf, u64)> = Vec::new();
     // Counted up here and published once per directory rather than once per
     // entry. The watcher only needs the numbers to be moving (`StallWatch`),
     // and they move thousands of times a second either way.
@@ -962,6 +1168,7 @@ fn place(
             name_len,
             meta,
             share: _,
+            extents: _,
         } = entry;
         let is_dir = meta.kind == EntryKind::Dir;
         if is_dir {
@@ -978,13 +1185,21 @@ fn place(
         // disk usage, so it counts towards `alloc`, but adding it to the
         // logical size would make totals disagree with "sum of the files in
         // here" (invariant #1).
-        let counted = claimed.as_ref().is_none_or(|counted| counted[index]);
-        let (size, alloc) = match (counted, is_dir) {
-            (false, _) => (0, 0),
-            (true, true) => (0, meta.alloc),
-            (true, false) => (meta.size, meta.alloc),
+        //
+        // A file only *part* of whose extents are shared elsewhere keeps its
+        // logical size and is charged for the rest (`Charge::Alloc`): its
+        // bytes are its own as far as `ls` is concerned, and a partly shared
+        // file has no meaningful partial length.
+        let charge = claimed
+            .as_ref()
+            .map_or(Charge::Full, |charges| charges[index]);
+        let (size, alloc) = match (charge, is_dir) {
+            (Charge::Nothing, _) => (0, 0),
+            (_, true) => (0, meta.alloc),
+            (Charge::Full, false) => (meta.size, meta.alloc),
+            (Charge::Alloc(alloc), false) => (meta.size, alloc),
         };
-        if counted && !is_dir {
+        if charge != Charge::Nothing && !is_dir {
             bytes += alloc;
         }
 
@@ -1010,7 +1225,7 @@ fn place(
         // recurse with, and building one for every entry was an allocation per
         // entry for the nine in ten that are not directories.
         if descend {
-            subdirs.push((index as NodeId, dir.join(&name)));
+            subdirs.push((index as NodeId, dir.join(&name), meta.dev));
         }
 
         let from = name_off as usize;
@@ -1045,8 +1260,8 @@ fn place(
     if subdirs.is_empty() {
         return;
     }
-    subdirs.into_par_iter().for_each(|(index, path)| {
-        walk(&path, start + index, depth + 1, ctx);
+    subdirs.into_par_iter().for_each(|(index, path, dev)| {
+        walk(&path, start + index, depth + 1, dev, volume, ctx);
     });
 }
 

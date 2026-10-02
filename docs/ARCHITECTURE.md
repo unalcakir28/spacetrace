@@ -122,6 +122,27 @@ Decisions:
   Measured on a developer's tree: 430 clones, 0.76 GiB of 15.6 GiB (4.9%), at a
   cost of ~70 ms. This is the one place `alloc` deliberately parts company with
   `du`, which charges every clone in full.
+- **Shared extents are counted once on btrfs and XFS** (Linux, same switch).
+  There is no clone family there, and a file can share only part of itself, so
+  the unit is the physical byte range: each regular file is opened and asked
+  `FS_IOC_FIEMAP` for its extents, and the ones flagged `SHARED` are claimed in
+  a process-wide set of merged ranges, keyed by filesystem — the btrfs UUID,
+  because every subvolume and snapshot has its own `st_dev` while the extent
+  addresses are the filesystem's. A file with no shared extent costs nothing
+  beyond that question. Sharing with something outside the scanned root is
+  charged inside it, once, the same rule APFS clones follow: `alloc` is what
+  the tree references, each block once, not what deleting it would free.
+  Measured in Docker, both filesystems: three reflinked 100 MB copies, `df`
+  +0 for the copies, `alloc` one copy, `du` three. Code: `scan-core/src/extents.rs`.
+- **btrfs compression is charged at its compressed size, where that can be
+  read.** `st_blocks` reports a compressed extent uncompressed (a 100 MB log:
+  100 MB in `st_blocks`, 2.9 MiB in `compsize`, 3.4 MB of `df`). FIEMAP flags
+  the extent `ENCODED` but gives only its logical length; the compressed length
+  is in the file extent item, which `BTRFS_IOC_TREE_SEARCH_V2` reads with
+  `CAP_SYS_ADMIN`. With it — the agent, usually — each compressed extent is
+  charged its on-disk length once, keyed by disk address, and matches
+  `compsize` exactly. Without it the extent stays as `st_blocks` counts it, and
+  the scan says how many files that left inexact (`compressed_files_inexact`).
 - **Hardlinks are counted once.** For files with `nlink > 1`, the
   `(dev, ino)` pair is kept in a shared set; a copy seen again stays visible in
   the tree but contributes 0 bytes. This can be disabled with `--no-dedupe`.
@@ -375,10 +396,33 @@ query. No server setup is required.
   file for hardlink dedup, and a directory's own blocks are not counted (see
   "What Windows costs today"). None of this is visible from macOS: only CI
   runs the Windows tests.
-- On btrfs/ZFS, reflinks, compression, and dedup mean the tree walk
-  misreports actual disk usage. Getting it right requires sampling, like
-  `btdu` does; for now, a "filesystem-aware mode" is planned for Phase 5.
-- APFS clones are not yet deduplicated (`alloc` can be inflated on macOS).
+- **Linux shared and compressed extents are exact for data, not for
+  metadata.** What a walk cannot see, each measured or reasoned in Docker:
+  btrfs *inline* files (data of up to 2 KiB kept inside metadata; FIEMAP gives
+  no address and no `SHARED` flag), so a snapshot of many tiny files still
+  counts them once per name — 166 MB of a 1.3 GB, 100k-file corpus;
+  *bookend* extents (an extent partly overwritten stays whole on disk until
+  every reference is gone, and only the referenced part is charged); RAID
+  copies; and compressed extents without `CAP_SYS_ADMIN`. All of these err
+  high, never low.
+- **The FIEMAP costs a syscall pair per file on btrfs and XFS.** Warm cache,
+  100,000 files, 6 threads: btrfs 16 → 101 ms, XFS 18 → 59 ms; cold cache
+  btrfs 143 → 238 ms. With every extent shared, XFS's answer serialises
+  inside the kernel and gets *slower* with more threads (271 ms at 1 thread,
+  728 ms at 6, unstable between runs) — measured on a loop device in a VM, so
+  to be re-measured on real hardware before anything is tuned to it.
+  `--no-clone-dedupe` switches it off.
+- **ZFS is detected and not corrected** (unverified: no ZFS in the test
+  kernel). Its `st_blocks` already reflects compression, but block cloning
+  (OpenZFS 2.2+) and deduplication live in pool-wide tables no walk can read,
+  so the summary says the total can exceed what the pool holds.
+- Sampling the way `btdu` does (`BTRFS_IOC_LOGICAL_INO`, root only) is not
+  built. A sampled total carries sampling error and the difference of two
+  carries both, so a folder that grew by a fraction of a percent of the disk
+  sits inside the noise — and "what grew" is exactly that difference. FIEMAP's
+  answer is per file and deterministic, which is what a diff of two snapshots
+  needs. What sampling sees and this does not is metadata and inline data, the
+  first limit above.
 - The scan keeps the entire tree in memory. Memory profile needs to be
   measured on roots with 10M+ files; streaming writes will be added if
   needed.

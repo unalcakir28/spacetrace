@@ -208,6 +208,7 @@ fn a_real_bucket_lists_into_a_tree_that_survives_the_store() {
         error_samples: Vec::new(),
         duration_ms: scan.duration_ms,
         capacity: None,
+        ..Default::default()
     };
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path().join("s.sqlite")).unwrap();

@@ -426,3 +426,551 @@ fn without_clone_dedupe_we_match_du_again() {
     assert_eq!(stats.clones_deduped, 0);
     assert_eq!(tree.total_alloc(), du_total);
 }
+
+// ------------------------------------------------ btrfs and XFS reflinks
+
+/// The Linux half of the clone story: reflinked copies on btrfs and XFS.
+///
+/// These only mean something on a filesystem that shares extents, and CI's
+/// runners sit on ext4. So each test looks at where `TMPDIR` points, and on
+/// anything else prints why it did nothing — a reflink test that passed on
+/// ext4 would be passing by testing nothing. CI runs them a second time with
+/// `TMPDIR` on loop-mounted btrfs and XFS.
+///
+/// `df` is the oracle here as well as `du`: `du` can only show the scanner
+/// diverging from it, while `df` says which side of the divergence is right.
+#[cfg(target_os = "linux")]
+mod reflinks {
+    use super::du_bytes;
+    use spacetrace_scan_core::{scan, ScanOptions, ScanProgress, ScanStats, Tree};
+    use std::fs;
+    use std::io::Write;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{FileExt, MetadataExt};
+    use std::path::Path;
+    use std::process::Command;
+    use std::sync::{Arc, Mutex};
+
+    const MB: u64 = 1_000_000;
+    const MIB: u64 = 1 << 20;
+    /// How far `df` may move for what should cost nothing: a reflink writes
+    /// a few metadata blocks, and btrfs keeps metadata twice.
+    const DF_SLACK: u64 = MIB;
+
+    /// One big-file test at a time. `df` is filesystem-wide, so a second test
+    /// writing 100 MB next to this one would be counted as this one's cost.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    /// The filesystem `path` is on, when it is one that shares extents.
+    fn reflink_fs(path: &Path) -> Result<&'static str, String> {
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: all-zero is a valid `statfs`; the path is NUL-terminated.
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return Err("statfs failed".into());
+        }
+        match st.f_type as u32 {
+            0x9123_683E => Ok("btrfs"),
+            0x5846_5342 => Ok("xfs"),
+            other => Err(format!("filesystem magic {other:#x}")),
+        }
+    }
+
+    /// Set by the CI job that mounts btrfs and XFS for these tests. There, a
+    /// test that could not run is a failure: the job exists to run them, and
+    /// one that skipped would pass by testing nothing — exactly what happened
+    /// unseen if the mount or the reflink support were ever lost.
+    const REQUIRED: &str = "SPACETRACE_REQUIRE_REFLINK";
+
+    /// Say why `test` did nothing — or, where it is required to run, fail.
+    ///
+    /// Not for a test that does not apply (compression on XFS): that one is
+    /// skipped plainly, because no filesystem would make it run.
+    fn could_not_run(test: &str, why: &str) {
+        if std::env::var_os(REQUIRED).is_some() {
+            panic!("{test} could not run, and {REQUIRED} says it must: {why}");
+        }
+        eprintln!("SKIPPED {test}: {why}");
+    }
+
+    /// A temporary directory on btrfs or XFS, or `None` after saying why not.
+    fn shared_tempdir(test: &str) -> Option<tempfile::TempDir> {
+        let dir = tempfile::tempdir().unwrap();
+        match reflink_fs(dir.path()) {
+            Ok(_) => Some(dir),
+            Err(why) => {
+                could_not_run(
+                    test,
+                    &format!(
+                        "{} is not on btrfs or XFS ({why}); \
+                         point TMPDIR at a reflink-capable mount to run it",
+                        dir.path().display()
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// `cp --reflink=always`, which fails rather than copying when the
+    /// filesystem cannot share — XFS made without `reflink=1`, for one.
+    fn reflink(src: &Path, dst: &Path) -> bool {
+        Command::new("cp")
+            .arg("--reflink=always")
+            .arg(src)
+            .arg(dst)
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    /// `len` bytes nothing can compress, so the filesystem stores exactly
+    /// what was written and the arithmetic below is about sharing alone.
+    fn write_noise(path: &Path, len: u64, seed: u64) {
+        let mut file = fs::File::create(path).unwrap();
+        let mut state = seed | 1;
+        let mut chunk = vec![0u8; MIB as usize];
+        let mut left = len;
+        while left > 0 {
+            for word in chunk.chunks_exact_mut(8) {
+                // xorshift64: fast, and nothing a compressor can find.
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                word.copy_from_slice(&state.to_ne_bytes());
+            }
+            let n = left.min(MIB) as usize;
+            file.write_all(&chunk[..n]).unwrap();
+            left -= n as u64;
+        }
+        file.sync_all().unwrap();
+    }
+
+    /// Bytes in use on the filesystem holding `path`, once it has stopped
+    /// moving.
+    ///
+    /// `sync` is not enough on its own: XFS frees a deleted file's blocks in
+    /// the background, so the previous test's temporary directory can still
+    /// be coming off the count — measured, 188 KiB of a 100 MB reading. Read
+    /// until two readings a tenth of a second apart agree, for up to five
+    /// seconds.
+    fn df_used(path: &Path) -> u64 {
+        let read = || {
+            // SAFETY: takes no arguments and cannot fail.
+            unsafe { libc::sync() };
+            let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+            // SAFETY: as in `reflink_fs`.
+            let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::statvfs(c.as_ptr(), &mut st) }, 0);
+            (st.f_blocks - st.f_bfree) as u64 * st.f_frsize as u64
+        };
+        let mut last = read();
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let now = read();
+            if now == last {
+                return now;
+            }
+            last = now;
+        }
+        last
+    }
+
+    /// `df` moved from `before` to `after` by less than `slack`, either way.
+    fn barely_moved(before: u64, after: u64, slack: u64) -> bool {
+        before.abs_diff(after) < slack
+    }
+
+    fn blocks(path: &Path) -> u64 {
+        fs::metadata(path).unwrap().blocks() * 512
+    }
+
+    fn run(root: &Path, opts: ScanOptions) -> (Tree, ScanStats) {
+        scan(root, opts, Arc::new(ScanProgress::default())).unwrap()
+    }
+
+    /// The two oracles at once. `du` minus the on-disk total must be exactly
+    /// the bytes the scan says it deduplicated, no more and no less — the
+    /// same shape as the hardlink test above, applied to extents.
+    fn assert_du_gap_is_exactly_the_shared_bytes(root: &Path, tree: &Tree, stats: &ScanStats) {
+        let du = du_bytes(root).expect("du is part of coreutils");
+        assert_eq!(
+            du - tree.total_alloc(),
+            stats.shared_bytes_deduped + stats.compressed_bytes_saved,
+            "du {du}, alloc {}, shared {}, compressed {}",
+            tree.total_alloc(),
+            stats.shared_bytes_deduped,
+            stats.compressed_bytes_saved
+        );
+    }
+
+    fn alloc_of(tree: &Tree, name: &str) -> u64 {
+        tree.node(tree.find(name).unwrap()).alloc
+    }
+
+    /// Invariant 1 on Linux, the controlled measurement: three reflinked
+    /// copies of a 100 MB file take one copy of space, `df` agrees, and the
+    /// on-disk total says so while `du` reports three.
+    #[test]
+    fn three_reflinked_copies_cost_one_copy_and_df_agrees() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(dir) = shared_tempdir("three_reflinked_copies") else {
+            return;
+        };
+        let root = dir.path();
+        let before = df_used(root);
+        write_noise(&root.join("orig.bin"), 100 * MB, 1);
+        let after_original = df_used(root);
+        if !reflink(&root.join("orig.bin"), &root.join("copy1.bin"))
+            || !reflink(&root.join("orig.bin"), &root.join("copy2.bin"))
+        {
+            could_not_run("three_reflinked_copies", "this filesystem refuses reflinks");
+            return;
+        }
+        let after_copies = df_used(root);
+        let one_copy = blocks(&root.join("orig.bin"));
+        eprintln!(
+            "{}: df used {before} -> {after_original} after the original, \
+             -> {after_copies} after two reflinks; du {}",
+            reflink_fs(root).unwrap(),
+            du_bytes(root).unwrap()
+        );
+        assert!(
+            barely_moved(after_original, after_copies, DF_SLACK),
+            "the filesystem should have stored the copies for free"
+        );
+
+        let (tree, stats) = run(root, ScanOptions::default());
+        eprintln!(
+            "  scan: alloc {}, shared {}",
+            tree.total_alloc(),
+            stats.shared_bytes_deduped
+        );
+
+        let files: u64 = ["orig.bin", "copy1.bin", "copy2.bin"]
+            .iter()
+            .map(|n| alloc_of(&tree, n))
+            .sum();
+        assert_eq!(files, one_copy, "three names, one copy on disk");
+        assert_eq!(stats.clones_deduped, 2);
+        assert_eq!(stats.shared_bytes_deduped, 2 * one_copy);
+        assert!(
+            barely_moved(before + tree.total_alloc(), after_copies, DF_SLACK),
+            "the on-disk total and df must agree: {} vs {}",
+            tree.total_alloc(),
+            after_copies.saturating_sub(before)
+        );
+        assert_du_gap_is_exactly_the_shared_bytes(root, &tree, &stats);
+        assert_eq!(stats.files_unmapped, 0);
+    }
+
+    /// Extents split differently in two files. Overwriting 10 MiB in the
+    /// middle of one copy leaves it holding the old extent in two pieces while
+    /// the others hold it whole — measured on both filesystems — and the only
+    /// new space is the 10 MiB written.
+    #[test]
+    fn a_partly_overwritten_copy_is_charged_only_for_what_it_no_longer_shares() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(dir) = shared_tempdir("partly_overwritten_copy") else {
+            return;
+        };
+        let root = dir.path();
+        write_noise(&root.join("orig.bin"), 100 * MB, 2);
+        if !reflink(&root.join("orig.bin"), &root.join("copy1.bin"))
+            || !reflink(&root.join("orig.bin"), &root.join("copy2.bin"))
+        {
+            could_not_run(
+                "partly_overwritten_copy",
+                "this filesystem refuses reflinks",
+            );
+            return;
+        }
+        let one_copy = blocks(&root.join("orig.bin"));
+
+        // The patch is generated before `df` is read, so the only write
+        // between the two readings is the overwrite itself.
+        let patch = root.join("patch.bin");
+        write_noise(&patch, 10 * MIB, 3);
+        let patch_bytes = fs::read(&patch).unwrap();
+        fs::remove_file(&patch).unwrap();
+        let before = df_used(root);
+        let target = fs::OpenOptions::new()
+            .write(true)
+            .open(root.join("copy2.bin"))
+            .unwrap();
+        target.write_all_at(&patch_bytes, 40 * MIB).unwrap();
+        target.sync_all().unwrap();
+        drop(target);
+        let after = df_used(root);
+        eprintln!(
+            "{}: df used {before} -> {after} for a 10 MiB overwrite",
+            reflink_fs(root).unwrap(),
+        );
+        assert!(
+            barely_moved(before + 10 * MIB, after, DF_SLACK),
+            "the overwrite should cost the 10 MiB written and nothing else"
+        );
+
+        let (tree, stats) = run(root, ScanOptions::default());
+        let files: u64 = ["orig.bin", "copy1.bin", "copy2.bin"]
+            .iter()
+            .map(|n| alloc_of(&tree, n))
+            .sum();
+        assert_eq!(
+            files,
+            one_copy + 10 * MIB,
+            "one copy plus the overwritten piece, whichever name was met first"
+        );
+        assert_du_gap_is_exactly_the_shared_bytes(root, &tree, &stats);
+    }
+
+    /// Sharing with something outside the scanned root is charged inside it,
+    /// once. Same rule as APFS clones: the on-disk total of a tree is what the
+    /// tree references, each block once — not what deleting the tree would
+    /// free, which depends on everything else on the disk and is not a
+    /// property of the tree.
+    #[test]
+    fn a_copy_outside_the_root_does_not_make_the_inside_one_free() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(dir) = shared_tempdir("copy_outside_the_root") else {
+            return;
+        };
+        let inside = dir.path().join("inside");
+        let outside = dir.path().join("outside");
+        fs::create_dir(&inside).unwrap();
+        fs::create_dir(&outside).unwrap();
+        write_noise(&inside.join("orig.bin"), 20 * MB, 4);
+        if !reflink(&inside.join("orig.bin"), &outside.join("copy.bin")) {
+            could_not_run("copy_outside_the_root", "this filesystem refuses reflinks");
+            return;
+        }
+        let one_copy = blocks(&inside.join("orig.bin"));
+
+        let (tree, stats) = run(&inside, ScanOptions::default());
+        assert_eq!(alloc_of(&tree, "orig.bin"), one_copy);
+        assert_eq!(stats.shared_bytes_deduped, 0);
+        assert_eq!(stats.clones_deduped, 0);
+
+        let (tree, stats) = run(&outside, ScanOptions::default());
+        assert_eq!(alloc_of(&tree, "copy.bin"), one_copy);
+        assert_eq!(stats.shared_bytes_deduped, 0);
+
+        let (tree, stats) = run(dir.path(), ScanOptions::default());
+        assert_eq!(
+            alloc_of(&tree, "inside/orig.bin") + alloc_of(&tree, "outside/copy.bin"),
+            one_copy,
+            "both in the root: once"
+        );
+        assert_du_gap_is_exactly_the_shared_bytes(dir.path(), &tree, &stats);
+    }
+
+    /// A hardlink and a reflink of the same file: the repeat name claims
+    /// nothing, so the extents are left for the name that is charged. Getting
+    /// the order wrong charges the blocks to nobody.
+    #[test]
+    fn a_hardlink_and_a_reflink_of_one_file_are_each_counted_once() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(dir) = shared_tempdir("hardlink_and_reflink") else {
+            return;
+        };
+        let root = dir.path();
+        fs::create_dir(root.join("a")).unwrap();
+        write_noise(&root.join("a/orig.bin"), 20 * MB, 5);
+        fs::hard_link(root.join("a/orig.bin"), root.join("linked.bin")).unwrap();
+        if !reflink(&root.join("a/orig.bin"), &root.join("copy.bin")) {
+            could_not_run("hardlink_and_reflink", "this filesystem refuses reflinks");
+            return;
+        }
+        let one_copy = blocks(&root.join("a/orig.bin"));
+
+        let (tree, stats) = run(root, ScanOptions::default());
+        let files: u64 = ["a/orig.bin", "linked.bin", "copy.bin"]
+            .iter()
+            .map(|n| alloc_of(&tree, n))
+            .sum();
+        assert_eq!(files, one_copy);
+        assert_eq!(stats.hardlinks_deduped, 1);
+        assert_eq!(stats.clones_deduped, 1);
+        // `du` already counts the hardlink once, so its excess is the reflink.
+        assert_eq!(stats.shared_bytes_deduped, one_copy);
+        assert_du_gap_is_exactly_the_shared_bytes(root, &tree, &stats);
+    }
+
+    /// A btrfs snapshot inside the root. Every subvolume has its own device
+    /// number while the extents are the filesystem's, so this is the test
+    /// that fails if the claims are keyed by device: the snapshot would never
+    /// meet its origin and the whole file would be charged twice.
+    #[test]
+    fn a_snapshot_inside_the_root_costs_nothing_more() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(dir) = shared_tempdir("snapshot_inside_the_root") else {
+            return;
+        };
+        if reflink_fs(dir.path()) != Ok("btrfs") {
+            eprintln!("SKIPPED snapshot_inside_the_root: only btrfs has snapshots");
+            return;
+        }
+        let root = dir.path();
+        let btrfs = |args: &[&str]| {
+            Command::new("btrfs")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        if !btrfs(&["subvolume", "create", "live"]) {
+            could_not_run("snapshot_inside_the_root", "cannot create a subvolume here");
+            return;
+        }
+        write_noise(&root.join("live/data.bin"), 20 * MB, 7);
+        if !btrfs(&["subvolume", "snapshot", "live", "snap"]) {
+            could_not_run("snapshot_inside_the_root", "cannot snapshot here");
+            return;
+        }
+        let one_copy = blocks(&root.join("live/data.bin"));
+        assert_ne!(
+            fs::metadata(root.join("live")).unwrap().dev(),
+            fs::metadata(root.join("snap")).unwrap().dev(),
+            "the premise: a snapshot is a device of its own"
+        );
+
+        let (tree, stats) = run(root, ScanOptions::default());
+        assert_eq!(
+            alloc_of(&tree, "live/data.bin") + alloc_of(&tree, "snap/data.bin"),
+            one_copy
+        );
+        assert_eq!(stats.shared_bytes_deduped, one_copy);
+        assert_du_gap_is_exactly_the_shared_bytes(root, &tree, &stats);
+    }
+
+    /// Switched off, the scan agrees with `du` again — the proof that the
+    /// divergence above is the extent accounting and nothing else.
+    #[test]
+    fn without_clone_dedupe_alloc_is_du_again() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(dir) = shared_tempdir("without_clone_dedupe") else {
+            return;
+        };
+        let root = dir.path();
+        write_noise(&root.join("orig.bin"), 20 * MB, 6);
+        if !reflink(&root.join("orig.bin"), &root.join("copy.bin")) {
+            could_not_run("without_clone_dedupe", "this filesystem refuses reflinks");
+            return;
+        }
+        let opts = ScanOptions {
+            dedupe_clones: false,
+            ..ScanOptions::default()
+        };
+        let (tree, stats) = run(root, opts);
+        assert_eq!(tree.total_alloc(), du_bytes(root).unwrap());
+        assert_eq!(stats.clones_deduped, 0);
+        assert_eq!(stats.shared_bytes_deduped, 0);
+    }
+
+    /// Ask btrfs to compress what is written into `dir`, unprivileged.
+    fn compress_into(dir: &Path) -> bool {
+        let chattr = Command::new("chattr").arg("+c").arg(dir).status();
+        if chattr.is_ok_and(|s| s.success()) {
+            return true;
+        }
+        Command::new("btrfs")
+            .args(["property", "set"])
+            .arg(dir)
+            .args(["compression", "zstd"])
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    /// `compsize -b`'s "Disk Usage" for `path`, when compsize is installed
+    /// and may run (it needs the same privilege the scanner does).
+    fn compsize_disk(path: &Path) -> Option<u64> {
+        let out = Command::new("compsize").arg("-b").arg(path).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let total = text.lines().find(|l| l.starts_with("TOTAL"))?;
+        total.split_whitespace().nth(2)?.parse().ok()
+    }
+
+    /// btrfs compression. `st_blocks` reports a compressed extent at its
+    /// uncompressed length, so `du` is high by the compression ratio.
+    ///
+    /// With `CAP_SYS_ADMIN` the scan reads the real size and agrees with
+    /// `compsize` and `df`; without it the scan agrees with `du` and says so.
+    /// Both outcomes are asserted, because both are promises.
+    #[test]
+    fn a_compressed_file_is_charged_its_size_on_disk_where_that_can_be_read() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(dir) = shared_tempdir("compressed_file") else {
+            return;
+        };
+        if reflink_fs(dir.path()) != Ok("btrfs") {
+            eprintln!("SKIPPED compressed_file: only btrfs compresses");
+            return;
+        }
+        let root = dir.path().join("z");
+        fs::create_dir(&root).unwrap();
+        if !compress_into(&root) {
+            could_not_run("compressed_file", "could not switch compression on");
+            return;
+        }
+        let before = df_used(&root);
+        let line = b"2026-10-02T12:00:00Z INFO request served path=/api/v1/items status=200\n";
+        let mut file = fs::File::create(root.join("log.txt")).unwrap();
+        for _ in 0..(50 * MB as usize / line.len()) {
+            file.write_all(line).unwrap();
+        }
+        file.sync_all().unwrap();
+        drop(file);
+        assert!(reflink(&root.join("log.txt"), &root.join("log-copy.txt")));
+        let after = df_used(&root);
+        let du = du_bytes(&root).unwrap();
+
+        // Decided from `df`, not from the scan: a skip that read the
+        // scanner's own answer would skip exactly when the scanner is wrong.
+        let stored = after.saturating_sub(before);
+        if stored > du / 4 {
+            could_not_run(
+                "compressed_file",
+                &format!("btrfs stored the data uncompressed ({stored} of {du})"),
+            );
+            return;
+        }
+
+        let (tree, stats) = run(&root, ScanOptions::default());
+        eprintln!(
+            "btrfs compressed: df used {before} -> {after} (+{stored}), du {du}, alloc {}, \
+             compsize {:?}, saved {}, shared {}, inexact {}",
+            tree.total_alloc(),
+            compsize_disk(&root),
+            stats.compressed_bytes_saved,
+            stats.shared_bytes_deduped,
+            stats.compressed_files_inexact
+        );
+
+        if stats.compressed_files_inexact > 0 {
+            eprintln!("  no CAP_SYS_ADMIN: checking the du-like fallback");
+            assert_eq!(
+                tree.total_alloc(),
+                du,
+                "unmeasured means counted as du counts"
+            );
+            assert_eq!(stats.compressed_bytes_saved, 0);
+            assert_eq!(stats.compressed_files_inexact, 2, "both names say so");
+            return;
+        }
+        assert!(
+            tree.total_alloc() < du / 10,
+            "a repeated log line compresses far better than ten to one"
+        );
+        if let Some(disk) = compsize_disk(&root) {
+            assert_eq!(tree.total_alloc(), disk, "compsize's Disk Usage, exactly");
+        }
+        assert!(
+            barely_moved(before + tree.total_alloc(), after, DF_SLACK),
+            "and df agrees: {} vs {stored}",
+            tree.total_alloc(),
+        );
+        assert_du_gap_is_exactly_the_shared_bytes(&root, &tree, &stats);
+    }
+}

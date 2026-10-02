@@ -178,6 +178,11 @@ fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
             "errors": stats.errors,
             "hardlinks_deduped": stats.hardlinks_deduped,
             "clones_deduped": stats.clones_deduped,
+            "shared_bytes_deduped": stats.shared_bytes_deduped,
+            "compressed_bytes_saved": stats.compressed_bytes_saved,
+            "compressed_files_inexact": stats.compressed_files_inexact,
+            "files_unmapped": stats.files_unmapped,
+            "unseen_sharing": stats.unseen_sharing,
             "duration_ms": stats.duration_ms,
             "scan_id": saved_id,
             "fs_total": stats.capacity.map(|c| c.total),
@@ -318,6 +323,9 @@ fn cmd_scan_ssh(a: &ScanArgs, destination: &str, db_path: &Path, json: bool) -> 
             }
             _ => None,
         },
+        // What the remote scan learnt about shared and compressed extents is
+        // not in a snapshot, so nothing here can claim it; zero prints no note.
+        ..ScanStats::default()
     };
     println!("{} (over ssh)", meta.target());
     print_scan_summary(&tree, &stats);
@@ -377,6 +385,8 @@ fn cmd_scan_s3(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
         error_samples: Vec::new(),
         duration_ms: listing.duration_ms,
         capacity: None,
+        // A bucket has no extents to share or compress.
+        ..ScanStats::default()
     };
 
     let mut saved_id = None;
@@ -1281,6 +1291,7 @@ fn print_scan_summary(tree: &Tree, stats: &ScanStats) {
             fmt::count(stats.clones_deduped)
         );
     }
+    print_accounting_notes(stats);
     // The filesystem's own accounting, which covers more than the scanned root
     // and is the only thing that can answer "how much room is left".
     if let Some(capacity) = stats.capacity {
@@ -1328,6 +1339,40 @@ fn bar(share: f64, width: usize) -> String {
     let filled = (share * width as f64).round() as usize;
     let filled = filled.min(width);
     format!("{}{}", "█".repeat(filled), "·".repeat(width - filled))
+}
+
+/// Where the on-disk total departs from `du`, or could not be exact.
+///
+/// Each line appears only when it applies, and each says which way the number
+/// errs: a total that is knowingly high and says so is still one a person can
+/// act on, while one that is silently off is not.
+fn print_accounting_notes(stats: &ScanStats) {
+    if stats.compressed_bytes_saved > 0 {
+        println!(
+            "  compressed files counted at their compressed size ({} less than du reports)",
+            fmt::size(stats.compressed_bytes_saved)
+        );
+    }
+    if stats.compressed_files_inexact > 0 {
+        println!(
+            "  {} compressed files counted at their uncompressed size, as du does; \
+             reading their size on disk needs root (btrfs), so on disk is high",
+            fmt::count(stats.compressed_files_inexact)
+        );
+    }
+    if stats.files_unmapped > 0 {
+        println!(
+            "  {} files could not be opened to see which blocks they share; \
+             they count in full, as du counts them",
+            fmt::count(stats.files_unmapped)
+        );
+    }
+    if stats.unseen_sharing {
+        println!(
+            "  ZFS: block clones and deduplicated blocks cannot be seen by a scan and \
+             count once per name, so on disk can exceed what the pool holds"
+        );
+    }
 }
 
 fn print_errors(stats: &ScanStats) {
@@ -1380,6 +1425,11 @@ fn cmd_import(a: &ImportArgs, db_path: &Path, json: bool) -> Result<()> {
         errors: 0,
         hardlinks_deduped: 0,
         clones_deduped: 0,
+        shared_bytes_deduped: 0,
+        compressed_bytes_saved: 0,
+        compressed_files_inexact: 0,
+        files_unmapped: 0,
+        unseen_sharing: false,
         error_samples: Vec::new(),
         duration_ms: 0,
         capacity: None,

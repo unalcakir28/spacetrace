@@ -19,6 +19,40 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
+  # The reflink and compression tests in du_equivalence.rs only mean something
+  # on btrfs and XFS, and the runner's disk is ext4, where the job above skips
+  # them. Here they get both, as loop files, and SPACETRACE_REQUIRE_REFLINK
+  # turns a skip into a failure: a lost mount must not pass by testing nothing.
+  # btrfs runs twice because the compressed path depends on privilege — the
+  # runner user cannot read compressed sizes, root can.
+  reflink:
+    name: test (btrfs + XFS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Mount btrfs and XFS on loop files
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq btrfs-progs xfsprogs btrfs-compsize
+          truncate -s 2G "$RUNNER_TEMP/btrfs.img" "$RUNNER_TEMP/xfs.img"
+          sudo mkfs.btrfs -q "$RUNNER_TEMP/btrfs.img"
+          sudo mkfs.xfs -q -m reflink=1 "$RUNNER_TEMP/xfs.img"
+          sudo mkdir -p /mnt/btrfs /mnt/xfs
+          sudo mount -o loop "$RUNNER_TEMP/btrfs.img" /mnt/btrfs
+          sudo mount -o loop "$RUNNER_TEMP/xfs.img" /mnt/xfs
+          sudo chown "$(id -u):$(id -g)" /mnt/btrfs /mnt/xfs
+      - name: Build the test binary
+        run: |
+          cargo test -p spacetrace-scan-core --test du_equivalence --no-run --message-format=json \
+            | jq -r 'select(.executable != null) | .executable' > "$RUNNER_TEMP/du_equivalence"
+      - name: btrfs, unprivileged
+        run: TMPDIR=/mnt/btrfs SPACETRACE_REQUIRE_REFLINK=1 "$(cat "$RUNNER_TEMP/du_equivalence")" reflinks --nocapture
+      - name: btrfs, root
+        run: sudo TMPDIR=/mnt/btrfs SPACETRACE_REQUIRE_REFLINK=1 "$(cat "$RUNNER_TEMP/du_equivalence")" reflinks --nocapture
+      - name: XFS
+        run: TMPDIR=/mnt/xfs SPACETRACE_REQUIRE_REFLINK=1 "$(cat "$RUNNER_TEMP/du_equivalence")" reflinks --nocapture
   lint:
     runs-on: ubuntu-latest
     steps:

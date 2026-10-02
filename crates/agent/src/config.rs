@@ -162,9 +162,12 @@ pub struct RootConfig {
     #[serde(default = "default_dedupe")]
     pub dedupe_hardlinks: bool,
 
-    /// Count copy-on-write clones once (macOS/APFS). Defaults on, like
-    /// hardlink deduplication: both answer "how much would freeing this give
-    /// back", and both cost a syscall per candidate to answer honestly.
+    /// Count copy-on-write clones once: APFS clones on macOS, reflinked and
+    /// snapshotted extents on btrfs and XFS, where it also charges btrfs
+    /// compressed extents at their on-disk size (the agent, as root, can read
+    /// it). Defaults on, like hardlink deduplication: both answer "what does
+    /// the disk hold", and both cost a syscall per candidate to answer
+    /// honestly.
     #[serde(default = "default_dedupe")]
     pub dedupe_clones: bool,
 

@@ -288,7 +288,10 @@ static binary built from `scan-core` + `store`.
 
 - **logical (`size`)**: file bytes only. Matches `du -sb` exactly.
 - **on disk (`alloc`)**: blocks actually allocated, directory blocks included.
-  Matches `du -s --block-size=1` exactly.
+  Matches `du -s --block-size=1` exactly, except where blocks are shared: APFS
+  clones and btrfs/XFS reflinks and snapshots are charged once, so `alloc`
+  follows `df` and `du` over-counts. Run as root on btrfs, compressed files are
+  charged at their compressed size. `--no-clone-dedupe` gives back `du`'s number.
 - **filesystem capacity**: reported as *free of total*, which matches `df`'s
   Avail column exactly. Deliberately not "% used": on a filesystem whose space
   is shared between volumes (APFS containers, btrfs subvolumes, thin LVM) the

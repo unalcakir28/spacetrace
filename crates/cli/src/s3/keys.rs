@@ -543,6 +543,7 @@ mod tests {
             error_samples: Vec::new(),
             duration_ms: 0,
             capacity: None,
+            ..Default::default()
         };
         let mut store = Store::open_in_memory().unwrap();
         let id = store.save(&tree, &stats, "localhost:9000", None).unwrap();
