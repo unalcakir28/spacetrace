@@ -18,9 +18,16 @@
 //! down from the root and culling skips whole subtrees whose parent is off
 //! screen. That is what a quadtree would have been for, except the structure is
 //! already there and costs nothing to keep.
+//!
+//! **Cushions come out of the same pass.** Each tile carries the coefficients
+//! of its shaded surface ([`cushion`]), which are its parent's plus a ridge of
+//! its own, so they are added when the tile is made rather than in a walk
+//! after it.
 
+pub mod cushion;
 pub mod sunburst;
 
+pub use cushion::Cushion;
 use spacetrace_scan_core::{NodeId, SizeBasis, Tree};
 
 /// An axis-aligned rectangle in layout space, y growing downward.
@@ -76,6 +83,13 @@ pub struct Tile {
     /// True when subdivision stopped here because of the area limit even though
     /// the entry has children. The renderer can hint that there is more inside.
     pub truncated: bool,
+    /// The shaded surface over this rectangle: every ancestor's ridge and its
+    /// own. A tile the area limit stopped subdividing still has its own ridge,
+    /// so it reads as one cushion rather than as a flat patch of its parent.
+    ///
+    /// `default` so a tile serialised before this field existed still reads.
+    #[serde(default)]
+    pub cushion: Cushion,
     children_start: u32,
     children_len: u32,
 }
@@ -227,6 +241,7 @@ pub fn layout(tree: &Tree, root: NodeId, bounds: Rect, opts: &LayoutOptions) -> 
         rect: bounds,
         depth: 0,
         truncated: tree.node(root).children_len > 0,
+        cushion: Cushion::FLAT.with_ridge(bounds, cushion::ridge_height(0)),
         children_start: 0,
         children_len: 0,
     });
@@ -235,9 +250,9 @@ pub fn layout(tree: &Tree, root: NodeId, bounds: Rect, opts: &LayoutOptions) -> 
     let mut queue = std::collections::VecDeque::from([0usize]);
 
     while let Some(index) = queue.pop_front() {
-        let (node, rect, depth) = {
+        let (node, rect, depth, surface) = {
             let t = &tiles[index];
-            (t.node, t.rect, t.depth)
+            (t.node, t.rect, t.depth, t.cushion)
         };
 
         if opts.max_depth.is_some_and(|max| depth >= max) {
@@ -264,12 +279,14 @@ pub fn layout(tree: &Tree, root: NodeId, bounds: Rect, opts: &LayoutOptions) -> 
         }
 
         let start = tiles.len();
+        let ridge = cushion::ridge_height(depth + 1);
         for (child, child_rect) in placed {
             tiles.push(Tile {
                 node: child,
                 rect: child_rect,
                 depth: depth + 1,
                 truncated: tree.node(child).children_len > 0,
+                cushion: surface.with_ridge(child_rect, ridge),
                 children_start: 0,
                 children_len: 0,
             });

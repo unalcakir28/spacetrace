@@ -9,6 +9,7 @@ use std::fs;
 use std::sync::Arc;
 
 use spacetrace_scan_core::{scan, NodeId, ScanOptions, ScanProgress, Tree};
+use spacetrace_treemap::cushion::{self, Cushion};
 use spacetrace_treemap::{layout, LayoutOptions, Rect, Tile, TileTree};
 
 /// A tree whose top level is deliberately lopsided, like a real disk.
@@ -457,6 +458,133 @@ fn a_wide_tree_lays_out_without_slivers_or_panics() {
 
     let covered: f64 = map.children_of(root).iter().map(|t| t.rect.area()).sum();
     assert!((covered - canvas.area()).abs() / canvas.area() < 0.01);
+}
+
+// ---------------------------------------------------------------- cushions
+
+/// Every (parent, child) pair of the map, found by walking the hierarchy.
+fn edges(map: &TileTree) -> Vec<(Tile, Tile)> {
+    let mut out = Vec::new();
+    let mut stack: Vec<&Tile> = map.root().into_iter().collect();
+    while let Some(tile) = stack.pop() {
+        for child in map.children_of(tile) {
+            out.push((*tile, *child));
+            stack.push(child);
+        }
+    }
+    out
+}
+
+/// The surface is accumulated top-down, so a tile's coefficients must be
+/// exactly its parent's with its own ridge added — checked for every tile of a
+/// real layout against an independent rebuild of the sum.
+#[test]
+fn a_cushion_is_its_parents_plus_its_own_ridge() {
+    let (_d, tree) = fixture();
+    let map = layout(&tree, tree.root(), full_canvas(), &LayoutOptions::default());
+    let pairs = edges(&map);
+    assert_eq!(
+        pairs.len() + 1,
+        map.len(),
+        "every tile but the root has a parent"
+    );
+    assert!(pairs.len() > 5, "a fixture this small still nests");
+
+    assert_eq!(
+        map.root().unwrap().cushion,
+        Cushion::FLAT,
+        "the root is flat"
+    );
+    for (above, tile) in pairs {
+        let expected = above
+            .cushion
+            .with_ridge(tile.rect, cushion::ridge_height(tile.depth));
+        assert_eq!(tile.cushion, expected, "{}", tree.name(tile.node));
+        assert_ne!(
+            tile.cushion,
+            above.cushion,
+            "{} added no ridge",
+            tree.name(tile.node)
+        );
+    }
+}
+
+/// The level-of-detail rule stops splitting a folder, not shading it: a tile
+/// whose contents were not laid out is still a cushion of its own.
+#[test]
+fn a_tile_that_was_not_subdivided_still_gets_its_own_ridge() {
+    let (_d, tree) = fixture();
+    let coarse = LayoutOptions {
+        min_area: 120_000.0,
+        padding: 0.0,
+        ..Default::default()
+    };
+    let map = layout(&tree, tree.root(), full_canvas(), &coarse);
+
+    let stopped: Vec<(Tile, Tile)> = edges(&map)
+        .into_iter()
+        .filter(|(_, tile)| tile.truncated)
+        .collect();
+    assert!(!stopped.is_empty(), "the limit stopped somewhere");
+    for (above, tile) in stopped {
+        assert_ne!(tile.cushion, above.cushion);
+        // Its own ridge peaks in its own middle, which is what makes it read
+        // as one cushion.
+        let (cx, cy) = (
+            tile.rect.x + tile.rect.w / 2.0,
+            tile.rect.y + tile.rect.h / 2.0,
+        );
+        let own = Cushion::FLAT.with_ridge(tile.rect, cushion::ridge_height(tile.depth));
+        let n = own.normal_at(cx, cy);
+        assert!(n[0].abs() < 1e-9 && n[1].abs() < 1e-9, "{n:?}");
+    }
+}
+
+/// Shading every pixel centre of a real layout from the deepest tile over it,
+/// the way the window does, never leaves the paper's range.
+#[test]
+fn every_pixel_of_a_real_layout_is_lit_within_range() {
+    let (_d, tree) = fixture();
+    let map = layout(
+        &tree,
+        tree.root(),
+        Rect::new(0.0, 0.0, 320.0, 200.0),
+        &LayoutOptions::default(),
+    );
+    let low = cushion::AMBIENT;
+    let high = cushion::AMBIENT + cushion::DIFFUSE;
+
+    let mut darkest = f64::INFINITY;
+    for py in 0..200 {
+        for px in 0..320 {
+            let (x, y) = (f64::from(px) + 0.5, f64::from(py) + 0.5);
+            let tile = map.hit(x, y).expect("the root covers the canvas");
+            let v = tile.cushion.intensity_at(x, y);
+            assert!(
+                v.is_finite() && (low..=high).contains(&v),
+                "{v} at {px},{py}"
+            );
+            darkest = darkest.min(v);
+        }
+    }
+    assert!(
+        darkest < 0.5,
+        "the seams are shaded at all: darkest {darkest}"
+    );
+}
+
+/// Same tree, same canvas, same surface, to the bit.
+#[test]
+fn cushions_are_deterministic() {
+    let (_d, tree) = fixture();
+    let a = layout(&tree, tree.root(), full_canvas(), &LayoutOptions::default());
+    let b = layout(&tree, tree.root(), full_canvas(), &LayoutOptions::default());
+    assert_eq!(a.len(), b.len());
+    let bits = |c: Cushion| [c.x2, c.x1, c.y2, c.y1].map(f64::to_bits);
+    for (x, y) in a.tiles().iter().zip(b.tiles()) {
+        assert_eq!(x.node, y.node);
+        assert_eq!(bits(x.cushion), bits(y.cushion));
+    }
 }
 
 /// The basis a layout is built from, checked on a real sparse file.

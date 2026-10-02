@@ -193,7 +193,7 @@ crates/
 ├── dupes/       Identical contents: size → prefix → BLAKE3, with a cache trait
 ├── cli/         the spacetrace binary
 ├── agent/       the spacetrace-agent binary: scheduler + HTTP service
-├── treemap/     squarified layout with level-of-detail, for the desktop app
+├── treemap/     squarified layout with level-of-detail and cushion surfaces, for the desktop app
 ├── changelog/   the one changelog source, in five locales, and its generator
 └── buildinfo/   commit, channel and build time, stamped in at compile time
 ```
