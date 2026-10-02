@@ -4,7 +4,14 @@ Live work list. For phase definitions and exit criteria see
 [docs/ROADMAP.md](docs/ROADMAP.md), for rationale see [docs/WHY.md](docs/WHY.md),
 for where competitors are ahead see [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-Last updated: 14 September 2026 (**Version cut: CLI 0.7.0, desktop 0.7.0,
+Last updated: 2 October 2026 (**The idea pool and two long-open items
+closed, nothing released yet:** `scan --ssh`, `scan s3://`, `watch`, `pkgs`,
+the agent's `/metrics`, A6 shared and compressed extents on btrfs and XFS, the
+cushion surfaces in the treemap layout, and the site's fonts served from its
+own origin. Every one went through a review whose fixes are in. Waiting: the
+desktop half of the cushion treemap, which needs a core push and a pin bump.)
+
+Before that, 14 September 2026 (**Version cut: CLI 0.7.0, desktop 0.7.0,
 hub 0.5.0.** Since it stayed fixed at v3, the schema had no order requirement.
 Also **B1-K done** — the double storage is gone, the measurement
 infrastructure is in the repository. Before that: **Order 1–4 closed** — E1, E2, A4, A1, A2,
@@ -86,7 +93,26 @@ in [docs/DECISIONS.md](docs/DECISIONS.md); summary:
 - [x] Remote source in the CLI: `--remote <url|name>` (scans / ls / diff / export)
 - [x] `spacetrace pull` — pull a remote snapshot into the local database
 - [x] Remote source definitions `remotes.toml`
-- [ ] SSH mode: running a temporary agent on the other side without requiring installation
+- [x] SSH mode: running a temporary agent on the other side without requiring
+      installation — `spacetrace scan --ssh DEST PATH` *(2 October 2026)*. A
+      flag on `scan`, not a command: `--save`, `--label`, walk flags,
+      `--ncdu`, `--json` mean what they already mean. A copy of the same
+      version goes into a `mktemp -d` dir over ssh stdin (no scp/sftp), runs
+      `scan --save`, the db comes back over stdout and is imported through
+      `import_snapshot` (digest checked). The remote dir belongs to a lease
+      session that cleans up when the CLI's pipe closes — so also on
+      `kill -9` and network loss — deleting files by name and `rmdir`, from
+      its own copy of the path. One ControlMaster, clients in their own
+      process group, so Ctrl-C reaches only the CLI, which waits for
+      "removed" and exits 130. Binary: self if portable, else the release
+      asset of this version (SHA256SUMS via `update::fetch_release`, cached
+      by version+target), `--binary` for dev builds, `-V` must match.
+      Measured against Docker sshd: v0.9.1 linux-aarch64 asset 7.2 MiB;
+      success/fail/SIGINT/pgrp Ctrl-C/SIGKILL all leave /tmp empty; noexec
+      /tmp → $HOME; hostile path stored byte-exact; 600,601 entries → 19.7 MB
+      db. **Still open:** Windows (no ControlMaster, no process groups —
+      refused today); error paths and clone count are not in the snapshot; a
+      POSIX login shell is required.
 
 ### Distribution
 - [x] Static binary (musl) — linux/amd64, linux/arm64 (release workflow)
@@ -256,8 +282,48 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       authentication** — it also computes a hash for a body that could be
       tampered with; the threat model is corruption, not an attacker.
       No new dependency (`sha2` is already in the workspace).
-- [ ] **A6 btrfs/ZFS awareness** — tree walking is wrong because of reflinks
-      and compression. Long-term; doing it right requires sampling.
+- [x] **A6 btrfs/XFS shared and compressed extents** — done *(2 October
+      2026)*, on by default with clone dedupe, off with `--no-clone-dedupe`.
+      Measured in Docker on loop-mounted btrfs and XFS before writing code: 3
+      reflinked 100 MB copies move `df` +0 for the copies while `du` says
+      300 MB; a 100 MB zstd log reports 100 MB in `st_blocks`, 2.9 MiB in
+      `compsize`, 3.4 MB of `df`.
+      **Shared:** one `open` + `FS_IOC_FIEMAP` per regular file
+      (unprivileged); `SHARED` extents claimed in a merged byte-range set per
+      filesystem. Ranges, not extents, because a partly overwritten copy
+      reports the old extent in two pieces (measured). Keyed by btrfs UUID
+      (`BTRFS_IOC_FS_INFO`), not `st_dev`: every subvolume and snapshot has
+      its own device. Sharing outside the root is charged inside it, once
+      (same rule as APFS).
+      **Compressed:** FIEMAP gives only the logical length of an `ENCODED`
+      extent; the on-disk length needs `BTRFS_IOC_TREE_SEARCH_V2`
+      (`CAP_SYS_ADMIN`). As root: charged on-disk, once per disk address,
+      equal to `compsize`. Unprivileged: left as `du` counts it and reported
+      (`compressed_files_inexact`).
+      **ZFS:** detected by `statfs` magic, summary warns; unverified, no ZFS
+      in the test kernel. **Sampling (btdu):** not built; a diff of two
+      sampled totals sits in the noise, FIEMAP is exact per file.
+      **Which name carries it:** the walk charges the first name it meets so
+      the running total is right; `Phase::Finishing` then moves every shared
+      range to its owner first in `(depth, path)` order, so two scans of an
+      unchanged disk attribute the same bytes to the same folder (the APFS
+      clone pass does the same since 2 October). XFS made without reflink is
+      recognised by `XFS_IOC_FSGEOMETRY_V1` and skipped. `compressed_bytes_saved`
+      is signed: a compressed extent can cost more on disk than `du` says.
+      **Tests:** 9 in `du_equivalence.rs` assert `du − alloc == shared +
+      compressed` against `du`, `df`, `compsize`; skip on ext4, run by the CI
+      job `test (btrfs + XFS)` with `SPACETRACE_REQUIRE_REFLINK=1`. Passed in
+      Docker on btrfs as root and as an ordinary user and on XFS; the whole
+      file passes on XFS with `reflink=0`. 4 mutations each caught.
+      **Cost** (100k files, warm, 6 threads): btrfs 16 → 101 ms, XFS 18 →
+      59 ms; cold btrfs 143 → 238 ms. Memory +0.8 MiB for 200k shared files.
+      **Still open:** XFS FIEMAP serialises in the kernel when extents are
+      shared (271 ms at 1 thread, 728 ms at 6, unstable; a cap of 2
+      concurrent gave 1102 → 303 ms) — re-measure on real hardware, then cap
+      or use `GETFSMAP` as root. btrfs inline files (≤2 KiB, in metadata)
+      still count once per name under a snapshot (166 MB of 1.3 GB, 100k
+      files). Bookend extents and RAID copies are not visible. bcachefs/OCFS2
+      not covered. The new CI job has not run on GitHub Actions yet.
       *Competitor:* btdu (Monte Carlo, 1% resolution at ~100 samples).
 
 ### B. Speed — measured gaps
@@ -436,7 +502,11 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       (they produce the same answers). `dupes`'s group representative is
       deterministic within a scan, and can shift between two scans. The
       scanner's own clone deduplication therefore sorts by
-      `(depth, path)`.
+      `(depth, path)`. *(That stopped being true on macOS the day this
+      landed: the in-walk clone dedupe charged whichever member a thread met
+      first, and 40 scans of one fixture gave five answers. Restored on
+      2 October 2026 by a settlement pass in `Phase::Finishing`, shared with
+      A6.)*
 
       **Verification:** `/Applications`'s 412,983-row CSV export is
       byte-for-byte identical. On `/usr` the tree's shape is identical,
@@ -1375,8 +1445,9 @@ debt record.
 - [x] ~~Windows hardlink dedupe is off~~ → **A2 done** *(9 September 2026)*.
 - [x] ~~No APFS clone deduplication~~ → **A3 done** *(9 September 2026)*, via
       `fcntl(F_LOG2PHYS_EXT)`, on by default.
-- [ ] btrfs/ZFS: tree walking is wrong because of reflink and compression; a
-      "filesystem-aware mode" is needed → **A6**
+- [x] ~~btrfs/ZFS: tree walking is wrong because of reflink and compression~~
+      → **A6 done** *(2 October 2026)* for btrfs and XFS; ZFS is detected and
+      warned about, not measured.
 - [x] ~~Memory profile on 10M+ file roots was never measured~~ →
       **measured** (9 September 2026): `Node` 104 B, real peak
       **276–437 B/entry**. Then fixed: `Node` **72 B** (B1), double storage
@@ -1474,11 +1545,16 @@ ready.
       collapsing them breaks one of them silently, because a scraper ignores
       the short form without complaining. The other four languages are now
       declared as `og:locale:alternate`.
-- [ ] Minor: Google Fonts is fetched as an external stylesheet — serving the
-      woff2 files ourselves removes one render-blocking third-party request.
-      **Kept separate from the work above** *(21 September 2026)*: that was
-      discoverability, this is performance, and they share nothing but the
-      `<head>` they live in.
+- [x] ~~Minor: Google Fonts is fetched as an external stylesheet~~ → done
+      *(2 October 2026)*, site commit `1e767d5`: the woff2 files are served
+      from `public/fonts/` (Google's own files for Archivo and JetBrains
+      Mono, still variable, latin and latin-ext only) with `@font-face` in
+      `global.css`; Archivo latin is preloaded, plus latin-ext on Turkish
+      pages, and the OG card renders from the same bytes. No request goes
+      to a Google domain any more; first screen and `og.png`
+      pixel-identical to before. Live once the site is pushed. **Kept separate from the work above** *(21 September 2026)*:
+      that was discoverability, this is performance, and they share nothing
+      but the `<head>` they live in.
 
 **A guard came with it**, because every failure in this area is silent: a
 dropped `og:image` turns a share back into a bare link and the page looks
@@ -1510,11 +1586,141 @@ rankings quickly.
 
 No decision made yet, will be discussed when its turn comes.
 
-- Duplicate finder (size → pre-hash → blake3, cached)
-- ncdu/gdu JSON **import** (existing users' old scans)
-- Cushion-shaded treemap (SequoiaView/WinDirStat look)
-- Cloud roots: S3, OneDrive, Google Drive each as a "remote source"
-- Package manager awareness (like QDirStat: "this file belongs to that package")
-- File age heat map ("400 GB untouched for 2 years")
-- `spacetrace watch` — live updates via inotify/FSEvents
-- Prometheus metrics endpoint (agent `/metrics`)
+- [x] Duplicate finder → **C4**, done 11 September 2026
+- [x] ncdu/gdu JSON **import** → **C8**, done 11 September 2026
+- [x] File age heat map → **C7**, done 11 September 2026
+- [ ] **Cushion-shaded treemap** — core side done *(2 October 2026)*, the
+      desktop side waits for a core push and a pin bump. van Wijk & van de
+      Wetering 1999 (h = 0.5, f = 0.75, Ia = 40, Is = 215, light [1, 2, 10]
+      with y flipped for screen space). The four coefficients per tile are
+      accumulated in the core's layout pass (`treemap/src/cushion.rs`),
+      tested there, and sent only on request as f32 (+43 B/tile, 52 → 95).
+      The desktop change (prototyped, not committed) lights each device
+      pixel once, from an owner map, and multiplies that onto the cached
+      flat layer, so it composes with every colour mode. At DPR 2 in
+      Chromium: repaint 4 → 28 ms (16k tiles) and 17 → 42 ms (147k); hover
+      unchanged. Default stays Flat.
+      **Still open:** landing the desktop half; frame time on WKWebView,
+      WebKitGTK and WebView2; a cheaper owner pass (12 ms, 7.2× overdraw) if
+      those turn out slow.
+- [x] **Cloud roots — S3** — done *(2 October 2026)*. `spacetrace scan
+      s3://bucket/prefix`, for AWS and S3-compatible services via
+      `--endpoint` (path-style). It lives in the CLI: hand-written SigV4,
+      HMAC and XML, so the agent stays small. Keys become folders, a
+      trailing `/` marks a folder, an object shadowed by a same-named folder
+      is charged to it (`alloc` only, reported), and `size` = `alloc` =
+      object length. Current versions only, and the output says so. `host` =
+      the service and `root` = `s3://bucket[/prefix]`, so diff finds the
+      previous snapshot.
+      *Measured:* totals equal `mc du` to the byte before and after a change
+      (7,349,860 → 12,612,860 B). Real AWS: redirected us-east-1 →
+      us-west-2, then 4,885 objects / 54.8 GB in 5 pages, matching an
+      independent paginator. The signer passes AWS' published vectors.
+      **Found on the way:** `age --scan ID` reported 0 B in every band for
+      every stored snapshot — `age_profile_at` and `median_bands` summed
+      `own_size`/`own_alloc`, which `store::load` returns as zero by design.
+      Fixed in scan-core; the desktop's age colouring of a loaded snapshot is
+      fixed with the next pin bump.
+      - [ ] Still open: OneDrive and Google Drive (need a registered OAuth
+            client); memory and time at 10M keys (unmeasured); parallel
+            prefix listing; SSO/role/IMDS credentials; virtual-hosted
+            addressing for `--endpoint`; R2/B2/Wasabi untested live; billed
+            bytes beyond current versions (ListObjectVersions /
+            ListMultipartUploads); Ctrl-C saves nothing (no signal handler).
+- [x] **C10 Package manager awareness** — done *(2 October 2026)*.
+      `spacetrace pkgs [PATH]` credits every file under a root to the
+      package that installed it and lists the rest as unowned, in pieces
+      that partition the unowned total; a file instead of a folder names its
+      owner. dpkg, pacman, apk and Homebrew are read off the disk; rpm's
+      binary database through `rpm -qa --qf '[%{=NAME}\t%{FILENAMES}\n]'`
+      (`%{NAME}` without `=` fails on every multi-file package), and a
+      missing `rpm` is reported, never silently unowned.
+      **Merged /usr is the whole difference**: listed directories are
+      canonicalised (once each, cached), the last component is not, so a
+      shipped symlink matches as a link. Without it bookworm's `/usr` was 17%
+      "unowned" (297 files, 22.5 MB — all of `/bin`); `dpkg -S /usr/bin/ls`
+      itself fails there. A file two packages list goes to one (manager
+      order, then name) and the overlap is printed. Another host's snapshot,
+      an imported one (marked `scanner_version = "import/…"`, older imports
+      recognised by having no scan time and no filesystem size) and
+      `--remote` are refused. A review closed the hangs: listed paths are
+      resolved one component at a time and stop at the scope, a mount inside
+      it is asked once through `probe_mount`'s deadline, `rpm -qa` runs
+      under a deadline (stale BDB lock), and one damaged entry is counted
+      and sampled instead of ending the report.
+      *Measured:* per-package bytes equal an independent `stat` sum over the
+      package's own list on bookworm, Arch and Fedora; openjdk in
+      /opt/homebrew equals its Cellar plus its link. 97,907 listed paths cost
+      +90 ms and +13 MiB RSS over a plain scan of `/usr`.
+      - [ ] Still open: macOS `pkgutil` receipts (binary BOM), snap/flatpak/
+            nix, cask links outside the Caskroom, Homebrew on Linux verified
+            only on a hand-built layout. Files generated by install scripts
+            (`__pycache__`, `hwdb.bin`, `modules.alias`) are honestly unowned
+            — no list names them.
+      *Competitor:* QDirStat.
+- [x] **C12 `spacetrace watch`** — done *(2 October 2026)*. Live "what is
+      growing": a fresh scan as baseline (a stored snapshot's distance is
+      `diff --since-last`'s job), then the folders that changed since, with a
+      10-20 s rate, by `diff`'s culprit rule — a test holds the rows to `diff`
+      itself. **Events only say where to look**: a dirty folder is relisted
+      with `scan(dir, max_depth = 1)`, a new one scanned whole, so scan-core
+      does all size accounting. **Hardlinks** cannot be settled by one listing
+      (`Node` keeps no inode): a listing that meets `nlink > 1` is refused and
+      a full rescan runs, capped at a tenth of the time. **Clones** are counted
+      at full size, same reason. **Loss**: inotify overflow → full rescan,
+      FSEvents MustScanSubDirs → subtree rescan, plus an unprompted full
+      rescan every max(60 s, 30× scan) that corrects and reports drift —
+      needed because notify 8.2 can drop a Windows overflow without telling
+      anyone. inotify gets one watch per descended folder, added before the
+      first scan (8 vs 29 watches with/without `--exclude node_modules`,
+      measured); exhausting `max_user_watches` stops the command with the
+      sysctl (shown in Docker). New crate: notify =8.2.0, CLI only, +5/+6/+8
+      crates macOS/Linux/Windows.
+      Measured on 1.26M entries / 83k folders: steady RSS ~250 MB (a scan's
+      retained peak); with cargo builds inside the root, hardlink rescans cost
+      ~9 s CPU each and peak at a 520 MB footprint.
+      A review closed four gaps: a folder deleted and made again or swapped
+      for another (`npm install`) kept the old totals and, on inotify, lost
+      its watches — a create or rename naming a tracked folder now rescans
+      its subtree and watches it again; watch setup approached mount points
+      before the guarded scan (invariant 7), now through the mount table and
+      `probe_mount`; the periodic check and compaction never ran on a disk
+      written to every tick; non-UTF-8 names were tracked by their lossy
+      form. The event queue is bounded and a full one is a loss.
+      - [ ] **A `(dev, ino)` ledger** for hardlinked names in the watch, so a
+            build tree stops forcing full rescans. ~100 lines of hardlink
+            accounting outside scan-core — or the B7 per-node flag.
+      - [ ] **Use `inotify` directly** (already in the graph): notify's mask
+            includes IN_OPEN, so every directory read queues an event. No
+            overflow at default limits (40k folders, measured), but it is
+            noise the watch pays for.
+      - [ ] **Windows verified only by CI**, overflow behaviour untested.
+- [x] **Prometheus metrics endpoint** — done *(2 October 2026)*.
+      `crates/agent/src/metrics.rs`, text format 0.0.4, hand-written, no new
+      crate: thirteen gauge families, per configured root from the newest
+      stored snapshot and the runner's claim table, plus build info and start
+      time. Behind the token (root paths and fill level are the inventory it
+      guards) and behind the rate limiter (15 s scrape = 4 of 120/min).
+
+      **A scrape touches no scanned filesystem.** Capacity is the snapshot's,
+      not a fresh `statvfs`, which hangs on a dead share (invariant 7). The
+      configured-vs-canonical root mapping that a restart loses is resolved
+      once per root on an abandonable thread (`Runner::recorded_roots`), at
+      most 500 ms of waiting per scrape, overwritten by every scan.
+
+      **Never-scanned roots stay visible** (`scan_running`, `snapshots` = 0);
+      snapshot families are absent rather than 0. A root listed twice is
+      reported once — a duplicate series fails the whole scrape.
+
+      **Measured, and it found a slow query.** `latest_for(root, Some(host))`
+      read the whole index because `(?2 IS NULL OR host = ?2)` is planned for
+      every binding; split into two statements. Median scrape, two roots:
+      29 snapshots 0.81 ms; 20,005: 10.40 → 2.18 ms; 200,005: 102.28 →
+      14.79 ms (rest is COUNT over each root's index range). Proven against
+      prom/prometheus 3.15.0: `up` 1, values equal `/scans`, a label with
+      `\`, `"` and a newline round-tripped. 18 new tests.
+
+      **Still open:** the dead-mount path of `recorded_roots` is reasoned, not
+      exercised against a real hung NFS mount; `last_two_for` has the same
+      `IS NULL OR` plan and was left alone; `/status` still reads every
+      snapshot row for its count (220 ms at 200,005); no scan-failure counter.

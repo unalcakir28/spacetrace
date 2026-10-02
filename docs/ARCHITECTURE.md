@@ -115,13 +115,17 @@ Decisions:
 - **Copy-on-write clones are counted once** (macOS/APFS, on by default,
   `--no-clone-dedupe` to disable). A clone has its own inode and `nlink == 1`,
   so hardlink deduplication cannot see it, yet the disk holds its blocks once —
-  three 100 MiB clones measured as 0 MiB of consumed free space. They are found
-  by asking `fcntl(F_LOG2PHYS_EXT)` where a file's data physically starts:
-  files sharing that offset share their extents. Only files whose size collides
-  with another file's are probed, because each probe is an open and an `fcntl`.
-  Measured on a developer's tree: 430 clones, 0.76 GiB of 15.6 GiB (4.9%), at a
-  cost of ~70 ms. This is the one place `alloc` deliberately parts company with
-  `du`, which charges every clone in full.
+  three 100 MiB clones measured as 0 MiB of consumed free space. APFS names
+  the clone family inside the `getattrlistbulk` record the walk already reads
+  (`ATTR_CMNEXT_CLONEID`, gated on `EF_MAY_SHARE_BLOCKS`), so finding them
+  costs no extra syscall; until 22 September 2026 it was an `open` and an
+  `fcntl(F_LOG2PHYS_EXT)` per candidate in a phase of its own, 15–31% of the
+  scan. Only the slow listing path still asks one file at a time. The walk
+  charges the first member it meets, so the running total is right; after it,
+  `Phase::Finishing` moves each family to its member first in `(depth, path)`
+  order (`clones.rs`), so two scans of an unchanged disk charge the same file.
+  This is the one place `alloc` deliberately parts company with `du`, which
+  charges every clone in full.
 - **Shared extents are counted once on btrfs and XFS** (Linux, same switch).
   There is no clone family there, and a file can share only part of itself, so
   the unit is the physical byte range: each regular file is opened and asked
@@ -355,9 +359,11 @@ What a bucket snapshot means:
 
 ## Platform-specific backends
 
-Right now there is a single portable backend (`read_dir` +
-`symlink_metadata`), and metadata reading is split out via `cfg`. Planned
-fast paths:
+The portable backend is `read_dir` + `symlink_metadata`, with metadata
+reading split out via `cfg`. macOS has had its fast path since 11 September
+2026 (B5): `getattrlistbulk` (`bulk.rs`) takes names and metadata in one call, and
+the portable path remains only for directories that hold a mount point. The
+table is the plan it came from; the other rows are still planned:
 
 | Platform | Method | Note |
 |----------|--------|-----|

@@ -43,9 +43,8 @@ it. See [docs/DECISIONS.md](docs/DECISIONS.md) K2.
 | [docs/RELEASING.md](docs/RELEASING.md) | How the three components are built, published and downloaded |
 | [TODO.md](TODO.md) | Live task list |
 
-Project documents under `docs/` that record *reasoning* (WHY, ROADMAP, TODO,
-RESEARCH) are kept in Turkish; everything user-facing — the CLI, this README and
-ARCHITECTURE — is English.
+Everything in this repository is in English, the documents that record
+*reasoning* (WHY, ROADMAP, TODO, DECISIONS, RESEARCH) included.
 
 ## Install
 
@@ -285,7 +284,7 @@ On Linux each watched folder takes one inotify watch. If
 | `--depth N` | Do not descend below N levels |
 | `--min 10M` | Ignore changes smaller than this in a diff |
 | `--files` | Report files in a diff, not just folders |
-| `--threads N` | Walk with N threads (default: `min(cores, 8)`, measured) |
+| `--threads N` | Walk with N threads (default: `min(cores, 6)`, measured) |
 | `--mount-timeout S` | Give a mounted filesystem S seconds to answer before recording it as unreadable and moving on (default 60; `0` waits forever) |
 | `--json` | Emit JSON (available on every command) |
 | `--db path.sqlite` | Use a different snapshot database |

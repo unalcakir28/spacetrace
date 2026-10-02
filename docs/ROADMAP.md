@@ -118,13 +118,20 @@ the webhook. **Remaining:** five real machines.
 
 Not phase-ordered, chosen based on demand.
 
-- Duplicate finder (size → pre-hash → blake3, cached)
-- Filesystem awareness: btrfs/ZFS snapshot and reflink accounting,
-  APFS clones, compressed usage
-- Cloud roots: S3, OneDrive, Google Drive each as a "remote source"
-- Cushion-shaded treemap
-- Incremental rescan via the USN journal (Windows)
-- ncdu/gdu JSON import (existing users' old scans)
+- [x] Duplicate finder (size → pre-hash → blake3, cached) — C4
+- [x] ncdu/gdu JSON import (existing users' old scans) — C8
+- [x] File age heat map — C7
+- [x] Filesystem awareness: APFS clones (A3, B8), btrfs and XFS reflinks
+  and btrfs compression (A6). ZFS is detected, not measured.
+- [x] Cloud roots: S3 and S3-compatible services. OneDrive and Google Drive
+  still open; they need a registered OAuth client.
+- [x] Package manager awareness: `spacetrace pkgs` — C10
+- [x] Live view: `spacetrace watch` — C12
+- [x] SSH mode: `scan --ssh`, nothing installed on the other side
+- [x] Prometheus `/metrics` on the agent
+- [ ] Cushion-shaded treemap: layout done in the core, the desktop half
+  waits for a pin bump
+- [ ] Incremental rescan via the USN journal (Windows)
 
 ---
 

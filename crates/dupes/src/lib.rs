@@ -337,7 +337,7 @@ fn by_size(tree: &Tree, options: &Options) -> Vec<Vec<Candidate>> {
     // touches every entry in the tree, and `Tree::path` walks to the root
     // every time it is called (13x slower over one real tree — debt D6). The
     // order entries arrive in changes with this, which costs nothing here
-    // because every group is sorted by node id before it is used.
+    // because every group is sorted by path before it is used.
     let root = tree.root_path();
     tree.for_each_path(None, |id, rel| {
         let node = tree.node(id);

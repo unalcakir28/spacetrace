@@ -54,7 +54,7 @@ keep = 14                    # snapshots of this root to retain
 
 `threads` is per root rather than per agent because it is really a property of
 the disk: an NVMe root and a spinning-disk root on the same machine want
-different numbers. The default is `min(cores, 8)` — not one per core, which
+different numbers. The default is `min(cores, 6)` — not one per core, which
 measured slower on every corpus tried (docs/COMPETITORS.md §1.2).
 
 `mount_timeout` is per root for the same reason, and it matters most here: a
@@ -115,7 +115,7 @@ failing silently.
 | `roots[].depth` | — | Stop descending below this depth |
 | `roots[].dedupe_hardlinks` | `true` | Count hardlinked files once |
 | `roots[].dedupe_clones` | `true` | Count blocks shared between files once (APFS clones; btrfs/XFS reflinks and snapshots) and, on btrfs, compressed files at their compressed size. Opens files on btrfs and XFS — see [Security notes](#security-notes). The CLI's `--no-clone-dedupe` |
-| `roots[].threads` | `min(cores, 8)` | Threads to walk this root with |
+| `roots[].threads` | `min(cores, 6)` | Threads to walk this root with |
 | `roots[].mount_timeout` | `60` | Seconds a mounted filesystem under this root gets to answer before it is recorded as unreadable; `0` waits forever |
 | `roots[].keep` | — | Snapshots of this root to retain; unset keeps all |
 
@@ -305,9 +305,13 @@ because a path alone cannot answer the question the endpoint is opened for:
 
 Three fields are worth knowing:
 
-- **`phase`** is `walking` or `finishing`. After the walk ends only
-  `clones_probed` moves, so a reader who watches `files` alone reads a healthy
-  scan as a stuck one — on one measured tree that was 1193 ms out of 1989.
+- **`phase`** is `walking`, `finishing`, `saving` or `checksumming`. After
+  the walk ends `files` stops moving and `rows_done` (of `rows_total`, both
+  absent while walking) moves instead — through the clone and shared-extent
+  settlement, the write and the digest — so a reader who watches `files`
+  alone reads a healthy scan as a stuck one. On 412,983 entries the save
+  alone took 571 ms after a 753 ms walk. `clones_probed` moves only on the
+  slow macOS listing path.
 - **`stalled_ms`** is absent while the scan is moving, and otherwise says how
   long *every* counter has stood still. It is measured by a watcher inside the
   agent, not from one request to the next, so polling `/status` rarely does not

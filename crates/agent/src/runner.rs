@@ -69,8 +69,9 @@ pub struct InFlight {
     pub errors: u64,
     pub clones_probed: u64,
     /// Rows written or checked in the phase running now, and how many there
-    /// are. Absent outside the two phases that count rows, because "0 of 0"
-    /// reads as a stalled one rather than as an inapplicable one.
+    /// are. Absent while the running phase counts none (the walk, a
+    /// finishing pass with nothing to settle), because "0 of 0" reads as a
+    /// stalled phase rather than as an inapplicable one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows_done: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
