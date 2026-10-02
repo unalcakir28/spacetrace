@@ -47,6 +47,14 @@ sha2 = "0.10"
 # confirmed remote cleanup rather than in a dead process.
 libc = "0.2"
 
+# `spacetrace watch`, CLI only — never the agent, store or scan-core. Exact pin,
+# because a watcher's guarantees live in its backends (which events are
+# delivered, how loss is flagged) and a minor release may move them. The default
+# feature set is exactly `macos_fsevent`, which is the macOS backend itself;
+# spelled out so this line says what gets built. Everything optional — the
+# crossbeam/flume channels, kqueue, serde — stays off: std's mpsc is the channel.
+notify = { version = "=8.2.0", default-features = false, features = ["macos_fsevent"] }
+
 # Agent (phase 2). HTTP+JSON was chosen over gRPC; see docs/DECISIONS.md K3.
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "fs", "sync"] }

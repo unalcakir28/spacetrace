@@ -243,6 +243,35 @@ static keys are read; for SSO or an assumed role, export keys first with
 - The snapshot's host is the service (`s3.amazonaws.com`, or the endpoint's
   `host:port`), not this machine: two machines listing one bucket see one target.
 
+### Watching it happen
+
+When the disk is filling *now*, `watch` answers where, live:
+
+```bash
+spacetrace watch ~ --exclude node_modules --interval 1
+```
+
+It scans once, then shows which folders grew or shrank since it started, how
+fast, biggest first — the same rows `diff` would report, refreshed in place on
+a terminal, appended as lines into a pipe, one JSON object per refresh with
+`--json`. Filesystem events (FSEvents, inotify, ReadDirectoryChangesW) only say
+*where* to look; every number comes from listing that folder again with the
+scanner, so hardlinks, symlinks and `--exclude`/`-x`/`--depth` mean exactly
+what they mean for `scan`. A change involving a hardlinked file, and any events
+the system reports as dropped, trigger a full rescan, and the screen says so;
+a cheap full rescan also runs every minute or so to catch losses nobody
+reported. Clones are counted at their full size (`--no-clone-dedupe`). The
+`filesystem … free` line is the filesystem's own count, to compare against.
+
+Build output is often hardlinked (cargo's `target/`, pnpm's store), so a build
+running inside the watched folder keeps asking for full rescans. They are
+capped at a tenth of the time, but on a large root that is still real CPU;
+`--exclude target` when the build is not what you are looking for.
+
+On Linux each watched folder takes one inotify watch. If
+`fs.inotify.max_user_watches` is too low, `watch` stops and says so, with the
+`sysctl` to raise it; `--exclude` and `--depth` also reduce how many it needs.
+
 ### Common options
 
 | Option | What it does |

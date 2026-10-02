@@ -6,6 +6,7 @@ mod s3;
 #[cfg(unix)]
 mod ssh;
 mod update;
+mod watch;
 
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -81,6 +82,7 @@ fn run(cli: &Cli) -> Result<()> {
             Command::Prune(_) => Some("prune"),
             Command::Rm(_) => Some("rm"),
             Command::Verify(_) => Some("verify"),
+            Command::Watch(_) => Some("watch"),
             _ => None,
         };
         if let Some(name) = local_only {
@@ -106,6 +108,7 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Rm(a) => cmd_rm(a, &db_path),
         Command::Verify(a) => cmd_verify(a, &db_path, cli.json),
         Command::Pull(a) => cmd_pull(a, &db_path, remote.as_ref(), cli.json),
+        Command::Watch(a) => watch::cmd_watch(a, cli.json),
         Command::Update(a) => {
             if a.check {
                 update::check_only(cli.json)

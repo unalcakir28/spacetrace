@@ -67,6 +67,45 @@ pub enum Command {
     Pull(PullArgs),
     /// Install the newest release over this one
     Update(UpdateArgs),
+    /// Watch a folder live: which folders grow or shrink, and how fast
+    Watch(WatchArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct WatchArgs {
+    /// Folder to watch
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    /// Seconds between refreshes (fractions allowed, e.g. 0.5)
+    #[arg(long, default_value = "2", value_name = "SECONDS", value_parser = parse_interval)]
+    pub interval: std::time::Duration,
+
+    /// How many folders to show
+    #[arg(long, default_value_t = 15, value_name = "N")]
+    pub top: usize,
+
+    /// Ignore folders that changed by less than this (e.g. 1M, 500K)
+    #[arg(long, default_value = "1", value_name = "SIZE", value_parser = parse_size)]
+    pub min: u64,
+
+    #[command(flatten)]
+    pub walk: WalkArgs,
+}
+
+/// Seconds, fractions allowed. Bounded below because a tick lists every
+/// directory that changed since the last one, and a busy disk changes some
+/// directory all the time.
+fn parse_interval(s: &str) -> anyhow::Result<std::time::Duration> {
+    let secs: f64 = s
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("cannot parse seconds: {s:?} (e.g. 2, 0.5)"))?;
+    anyhow::ensure!(
+        secs.is_finite() && secs >= 0.1,
+        "the interval must be at least 0.1 seconds, not {s:?}"
+    );
+    Ok(std::time::Duration::from_secs_f64(secs))
 }
 
 #[derive(Args, Debug)]
