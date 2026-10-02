@@ -790,7 +790,13 @@ if test -n "$pid" && ours "$pid"; then
 fi
 rm -f FILES
 # The name it has now, which is not the one in $PWD if somebody renamed it.
-here=$(pwd -P)
+# The external pwd, because the builtin does not ask the kernel: dash and
+# busybox print the name cached at the last cd, and bash on Linux resolves
+# that old name — through whatever symlink now sits there. The x keeps a
+# trailing newline in a chosen name from being stripped.
+here=$(env pwd -P && echo x)
+here=${here%x}
+here=${here%?}
 if cd -P .. && rmdir "${here##*/}" 2>/dev/null; then echo "removed $dir"; else echo "kept $dir"; fi
 "##;
 
@@ -1342,6 +1348,46 @@ mod tests {
         }
         assert!(step(UPLOAD_SCRIPT).starts_with(ENTER));
         assert!(step(DOWNLOAD_SCRIPT).starts_with(ENTER));
+    }
+
+    /// The lease removes its directory under the name it has *now*. dash,
+    /// busybox and Linux bash all answer the builtin `pwd -P` from the name
+    /// cached at the last `cd`, which after a rename is the wrong one — the
+    /// bug Linux CI caught and macOS's bash 3.2 hid. Runs the lease's own
+    /// lines under this machine's `sh`, with a name ending in a newline,
+    /// which a plain command substitution would also get wrong.
+    #[test]
+    fn the_lease_finds_its_directory_by_its_current_name() {
+        let lines: Vec<&str> = LEASE_SCRIPT
+            .lines()
+            .skip_while(|l| !l.starts_with("here=$("))
+            .take(3)
+            .collect();
+        assert_eq!(lines.len(), 3, "the lines that derive the name moved");
+        assert!(lines[1..].iter().all(|l| l.starts_with("here=${here%")));
+
+        let base = tempfile::tempdir().unwrap();
+        let base = base.path().canonicalize().unwrap();
+        let before = base.join("spacetrace.aaaaaaaaaa");
+        let after = base.join("renamed by someone\n");
+        std::fs::create_dir(&before).unwrap();
+        let script = format!(
+            "cd -P \"$1\" && mv \"$1\" \"$2\" && ln -s / \"$1\" || exit 9\n{}\nprintf '%s' \"$here\"",
+            lines.join("\n")
+        );
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .arg("sh")
+            .arg(&before)
+            .arg(&after)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            after.to_str().unwrap()
+        );
     }
 
     #[test]
