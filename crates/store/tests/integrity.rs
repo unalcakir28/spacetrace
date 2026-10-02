@@ -66,6 +66,32 @@ fn the_digest_survives_export_and_import() {
     );
 }
 
+/// An import says so, and keeps saying so after the snapshot has been pulled
+/// into another database: `pkgs --scan` refuses one whatever host it is filed
+/// under, which only works if the mark travels. The digest covers the column,
+/// so it has to be written at save time, not stamped on afterwards.
+#[test]
+fn an_import_is_marked_and_the_mark_survives_a_pull() {
+    let dir = fixture();
+    let work = tempfile::tempdir().unwrap();
+    let (tree, stats) = scan_fixture(&dir);
+    let mut sender = Store::open(work.path().join("sender.sqlite")).unwrap();
+    let scanned = sender.save(&tree, &stats, "box", None).unwrap();
+    let imported = sender.save_import(&tree, &stats, "box", None).unwrap();
+
+    assert!(!sender.scan(scanned).unwrap().unwrap().is_import());
+    assert!(sender.scan(imported).unwrap().unwrap().is_import());
+    assert_eq!(sender.verify(imported).unwrap(), Integrity::Intact);
+
+    let wire = work.path().join("wire.sqlite");
+    sender.export_snapshot(imported, &wire).unwrap();
+    let mut receiver = Store::open(work.path().join("receiver.sqlite")).unwrap();
+    let pulled = receiver.import_snapshot(&wire).unwrap();
+    let meta = receiver.scan(pulled[0]).unwrap().unwrap();
+    assert!(meta.is_import());
+    assert_eq!(receiver.verify(pulled[0]).unwrap(), Integrity::Intact);
+}
+
 /// The point of the whole exercise: ids are reassigned on arrival, and a
 /// digest that included the id would fail on every single import.
 #[test]

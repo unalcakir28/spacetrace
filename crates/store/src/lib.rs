@@ -31,6 +31,17 @@ pub type ScanId = i64;
 
 pub const SCANNER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// What `scanner_version` starts with when the tree was not scanned here but
+/// imported from another tool's export (`spacetrace import`).
+///
+/// An export says nothing about which machine it describes, and `import`
+/// files it under this one unless told otherwise — so the host column cannot
+/// tell an import from a scan, and anything that reads this machine's disk
+/// against a snapshot (`spacetrace pkgs --scan`) needs to. The column is the
+/// one that already answers "what produced these numbers", and for an import
+/// that is not this scanner: before this marker it claimed it was.
+pub const IMPORTED_PREFIX: &str = "import/";
+
 /// Everything about a stored scan except its entries.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScanMeta {
@@ -74,6 +85,11 @@ impl ScanMeta {
 }
 
 impl ScanMeta {
+    /// Whether this tree came from another tool's export rather than a scan.
+    pub fn is_import(&self) -> bool {
+        self.scanner_version.starts_with(IMPORTED_PREFIX)
+    }
+
     /// `host:root`, the identity used to decide which scans are comparable.
     pub fn target(&self) -> String {
         format!("{}:{}", self.host, self.root)
@@ -164,6 +180,31 @@ impl Store {
         label: Option<&str>,
         progress: &ScanProgress,
     ) -> Result<ScanId> {
+        self.save_as(tree, stats, host, label, progress, SCANNER_VERSION)
+    }
+
+    /// `save`, for a tree read from another tool's export: marked with
+    /// [`IMPORTED_PREFIX`], so it can be told from a scan later.
+    pub fn save_import(
+        &mut self,
+        tree: &Tree,
+        stats: &ScanStats,
+        host: &str,
+        label: Option<&str>,
+    ) -> Result<ScanId> {
+        let version = format!("{IMPORTED_PREFIX}{SCANNER_VERSION}");
+        self.save_as(tree, stats, host, label, &ScanProgress::default(), &version)
+    }
+
+    fn save_as(
+        &mut self,
+        tree: &Tree,
+        stats: &ScanStats,
+        host: &str,
+        label: Option<&str>,
+        progress: &ScanProgress,
+        scanner_version: &str,
+    ) -> Result<ScanId> {
         let started_at = now_unix() - (stats.duration_ms / 1000) as i64;
         let tx = self.write_transaction()?;
         tx.execute(
@@ -182,7 +223,7 @@ impl Store {
                 stats.dirs as i64,
                 stats.errors as i64,
                 stats.hardlinks_deduped as i64,
-                SCANNER_VERSION,
+                scanner_version,
                 label,
                 stats.capacity.map(|c| c.total as i64),
                 stats.capacity.map(|c| c.available as i64),

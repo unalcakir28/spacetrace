@@ -478,7 +478,12 @@ pub struct ScanStats {
 type Probe = fn(&Path, Duration) -> Option<std::io::Result<std::fs::Metadata>>;
 
 /// The real one: `lstat`, on a thread we are prepared to abandon.
-fn probe_mount(path: &Path, limit: Duration) -> Option<std::io::Result<std::fs::Metadata>> {
+///
+/// Public so that anything else that has to step onto a mounted filesystem
+/// outside a walk — `spacetrace pkgs` reading package databases — approaches
+/// it the same way, rather than with a second deadline of its own. `None`
+/// means it did not answer within `limit`.
+pub fn probe_mount(path: &Path, limit: Duration) -> Option<std::io::Result<std::fs::Metadata>> {
     let owned = path.to_path_buf();
     crate::timeout::with_deadline(limit, move || std::fs::symlink_metadata(&owned))
 }

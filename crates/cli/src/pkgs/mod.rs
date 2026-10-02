@@ -5,24 +5,27 @@
 //! so `rpm` itself is asked, and only when it exists; when it does not, the
 //! report says so instead of quietly calling every rpm file unowned.
 //!
-//! **Every path a database names is canonicalised before it is stored.** A
-//! package list says `/bin/ls` and the scan finds `/usr/bin/ls`, because on a
-//! merged-/usr system `/bin` is a symlink to `usr/bin` and the scanner does not
-//! follow symlinks. Matching the strings as written left 396 of bookworm's
-//! paths — `ls`, `bash`, the whole of `/lib` — looking unowned. Only the
-//! directory part is resolved: the last component may itself be a symlink the
-//! package ships, and that link is what the scan found.
+//! **Every path a database names has its directory resolved before it is
+//! stored.** A package list says `/bin/ls` and the scan finds `/usr/bin/ls`,
+//! because on a merged-/usr system `/bin` is a symlink to `usr/bin` and the
+//! scanner does not follow symlinks. Matching the strings as written left 396
+//! of bookworm's paths — `ls`, `bash`, the whole of `/lib` — looking unowned.
+//! Only the directory part is resolved: the last component may itself be a
+//! symlink the package ships, and that link is what the scan found. How that
+//! is done without touching the rest of the system is `load.rs`.
 
+mod load;
 pub mod parse;
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use spacetrace_scan_core::{EntryKind, NodeId, SizeBasis, Tree};
+use spacetrace_scan_core::{probe_mount, EntryKind, Mounts, NodeId, SizeBasis, Tree};
 
 pub type PackageId = u32;
 
@@ -81,6 +84,14 @@ pub enum State {
     },
 }
 
+/// How a mounted filesystem is asked whether it is alive: the scanner's own
+/// [`probe_mount`], or in a test one that never answers.
+pub type Probe = fn(&Path, Duration) -> Option<std::io::Result<std::fs::Metadata>>;
+
+/// How long `rpm -qa` may take. It needs about a second; what it must not do
+/// is wait forever on a stale lock, which it does on RHEL 8.
+pub const RPM_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Where to look. `sysroot` is the filesystem the databases describe — `/` on
 /// a real system, a temporary directory in a test, just as `dpkg --root`.
 #[derive(Debug, Clone)]
@@ -88,33 +99,54 @@ pub struct Sources {
     pub sysroot: PathBuf,
     /// The `rpm` executable. A name to search `PATH` for, normally.
     pub rpm: OsString,
+    pub rpm_timeout: Duration,
+    /// Where other filesystems are mounted, read once without blocking.
+    pub mounts: Mounts,
+    /// How long a mounted filesystem gets to answer; `None` waits forever,
+    /// which is what `--mount-timeout 0` asks of the scan too.
+    pub mount_timeout: Option<Duration>,
+    pub probe: Probe,
+    /// Counters for whoever is showing progress.
+    pub progress: Arc<LoadProgress>,
 }
 
 impl Sources {
-    pub fn system() -> Sources {
+    /// This machine, with the scan's mount timeout.
+    pub fn system(mount_timeout: Option<Duration>) -> Sources {
         Sources {
             sysroot: PathBuf::from("/"),
             rpm: OsString::from("rpm"),
+            rpm_timeout: RPM_TIMEOUT,
+            // The same rule as the scan: switching the protection off does
+            // not pay for a table it will not consult.
+            mounts: match mount_timeout {
+                Some(_) => Mounts::read(),
+                None => Mounts::none(),
+            },
+            mount_timeout,
+            probe: probe_mount,
+            progress: Arc::default(),
         }
     }
 }
 
-/// Where Homebrew lives when nobody moved it: Apple silicon, Intel macOS, and
-/// Linux. Read from the layout rather than by running `brew --prefix`, which
-/// costs a Ruby start-up and is not there for a user who is not the owner.
-const BREW_PREFIXES: [&str; 3] = ["opt/homebrew", "usr/local", "home/linuxbrew/.linuxbrew"];
+/// What reading the databases is doing, for a progress line (invariant 8).
+#[derive(Debug, Default)]
+pub struct LoadProgress {
+    /// Paths read out of the databases so far.
+    pub listed: AtomicU64,
+    /// What is being waited on that no counter can show moving: `rpm`, or a
+    /// mount point being asked whether it is alive.
+    pub waiting_on: Mutex<Option<(String, std::time::Instant)>>,
+}
 
 /// For the error that says none was found.
 pub const WHERE_LOOKED: &str = "dpkg (/var/lib/dpkg/info), rpm (/usr/lib/sysimage/rpm, \
      /var/lib/rpm), pacman (/var/lib/pacman/local), apk (/lib/apk/db/installed) and \
      Homebrew (/opt/homebrew, /usr/local, /home/linuxbrew/.linuxbrew)";
 
-/// The two places an rpm database sits: the current one, and the old one,
-/// which Fedora keeps as a symlink to it.
-const RPM_DATABASES: [&str; 2] = ["usr/lib/sysimage/rpm", "var/lib/rpm"];
-
 #[derive(Debug, Clone, Copy)]
-struct Claim {
+pub(super) struct Claim {
     owner: PackageId,
     /// More than one package lists this path. The bytes still go to `owner`
     /// alone, so the per-package figures add up to the owned total.
@@ -124,7 +156,7 @@ struct Claim {
 /// Homebrew owns by position, not by list: everything under `Cellar/<formula>`
 /// is that formula's, everything under `Caskroom/<cask>` that cask's.
 #[derive(Debug)]
-struct BrewPrefix {
+pub(super) struct BrewPrefix {
     root: String,
     formulae: HashMap<String, PackageId>,
     casks: HashMap<String, PackageId>,
@@ -162,34 +194,65 @@ pub struct Ownership {
     databases: Vec<Database>,
     /// Paths the databases named, before the scope filter.
     listed: u64,
+    /// Directories looked up on disk to resolve what the databases list.
+    looked_up: u64,
+    /// Entries that could not be used — an unreadable list, a pacman
+    /// directory without `files` — and the first few of them by name.
+    damaged: u64,
+    damaged_samples: Vec<(PathBuf, String)>,
+    /// Mount points that did not answer, and below which nothing was read.
+    unanswered: Vec<PathBuf>,
+    /// Every path the resolver looked up, so a test can say what it did not.
+    #[cfg(test)]
+    touched: Vec<PathBuf>,
 }
 
 impl Ownership {
     /// Read every database found under `sources`, keeping only the paths at or
     /// below `scope` — a canonical absolute path. A scan of `/opt` has no use
-    /// for the other 400,000 entries of a Debian desktop.
-    pub fn load(sources: &Sources, scope: &Path) -> Result<Ownership> {
-        let mut loader = Loader {
-            sysroot: &sources.sysroot,
-            scope: scope.to_string_lossy().into_owned(),
-            dirs: HashMap::new(),
-            last_dir: None,
-            by_name: HashMap::new(),
-            own: Ownership {
-                packages: Vec::new(),
-                paths: HashMap::new(),
-                also: HashMap::new(),
-                brew: Vec::new(),
-                databases: Vec::new(),
-                listed: 0,
-            },
-        };
-        loader.dpkg()?;
-        loader.rpm(&sources.rpm)?;
-        loader.pacman()?;
-        loader.apk()?;
-        loader.homebrew()?;
-        Ok(loader.own)
+    /// for the other 400,000 entries of a Debian desktop, and does not look at
+    /// the folders they name either.
+    ///
+    /// Never an error: a database that cannot be read is in [`databases`]
+    /// with the reason, a damaged entry in [`damaged`], a mount that did not
+    /// answer in [`unanswered`].
+    ///
+    /// [`databases`]: Ownership::databases
+    /// [`damaged`]: Ownership::damaged
+    /// [`unanswered`]: Ownership::unanswered
+    pub fn load(sources: &Sources, scope: &Path) -> Ownership {
+        load::load(sources, scope)
+    }
+
+    fn empty() -> Ownership {
+        Ownership {
+            packages: Vec::new(),
+            paths: HashMap::new(),
+            also: HashMap::new(),
+            brew: Vec::new(),
+            databases: Vec::new(),
+            listed: 0,
+            looked_up: 0,
+            damaged: 0,
+            damaged_samples: Vec::new(),
+            unanswered: Vec::new(),
+            #[cfg(test)]
+            touched: Vec::new(),
+        }
+    }
+
+    /// How many entries could not be used, and the first few with the reason.
+    pub fn damaged(&self) -> (u64, &[(PathBuf, String)]) {
+        (self.damaged, &self.damaged_samples)
+    }
+
+    pub fn unanswered(&self) -> &[PathBuf] {
+        &self.unanswered
+    }
+
+    /// Directories looked up on disk while resolving the lists.
+    pub fn looked_up(&self) -> u64 {
+        self.looked_up
     }
 
     pub fn databases(&self) -> &[Database] {
@@ -252,353 +315,12 @@ impl Ownership {
 }
 
 /// `path` relative to `dir`, when it lies strictly below it.
-fn below<'a>(path: &'a str, dir: &str) -> Option<&'a str> {
+pub(super) fn below<'a>(path: &'a str, dir: &str) -> Option<&'a str> {
     let rest = path.strip_prefix(dir)?;
     match dir.ends_with('/') {
         true => Some(rest).filter(|r| !r.is_empty()),
         false => rest.strip_prefix('/').filter(|r| !r.is_empty()),
     }
-}
-
-struct Loader<'a> {
-    sysroot: &'a Path,
-    scope: String,
-    /// Listed directory → its canonical form, `None` when it is not on disk.
-    /// Distinct directories number in the thousands where paths number in the
-    /// hundreds of thousands, so each is resolved once.
-    dirs: HashMap<String, Option<String>>,
-    /// The last directory looked up. Lists are grouped by directory, so this
-    /// answers most lookups without hashing anything.
-    last_dir: Option<(String, Option<String>)>,
-    /// Per manager, so a lookup by `&str` allocates nothing: rpm repeats the
-    /// package name on every one of its lines.
-    by_name: HashMap<Manager, HashMap<String, PackageId>>,
-    own: Ownership,
-}
-
-impl Loader<'_> {
-    fn package(&mut self, manager: Manager, name: &str) -> PackageId {
-        let known = self.by_name.entry(manager).or_default();
-        if let Some(&id) = known.get(name) {
-            return id;
-        }
-        let id = self.own.packages.len() as PackageId;
-        self.own.packages.push(Package {
-            manager,
-            name: name.to_string(),
-        });
-        known.insert(name.to_string(), id);
-        id
-    }
-
-    /// The canonical directory a listed directory resolves to.
-    fn canonical_dir(&mut self, listed: &str) -> Option<String> {
-        if let Some((dir, canonical)) = &self.last_dir {
-            if dir == listed {
-                return canonical.clone();
-            }
-        }
-        let canonical = match self.dirs.get(listed) {
-            Some(known) => known.clone(),
-            None => {
-                // Not found, not a directory, not permitted: in each case the
-                // scan cannot have found anything there either, as this user,
-                // so the entry has nothing to match and is dropped.
-                let resolved = self
-                    .sysroot
-                    .join(listed)
-                    .canonicalize()
-                    .ok()
-                    .map(|p| p.to_string_lossy().into_owned());
-                self.dirs.insert(listed.to_string(), resolved.clone());
-                resolved
-            }
-        };
-        self.last_dir = Some((listed.to_string(), canonical.clone()));
-        canonical
-    }
-
-    /// Record that `pkg` lists `listed`, an absolute path or one relative to
-    /// `/` as the database spells it.
-    fn claim(&mut self, pkg: PackageId, listed: &str) {
-        self.own.listed += 1;
-        let listed = listed.trim_start_matches('/');
-        let (dir, name) = listed.rsplit_once('/').unwrap_or(("", listed));
-        if name.is_empty() || name == "." || name == ".." {
-            return;
-        }
-        let Some(dir) = self.canonical_dir(dir) else {
-            return;
-        };
-        let key = match dir.ends_with('/') {
-            true => format!("{dir}{name}"),
-            false => format!("{dir}/{name}"),
-        };
-        let in_scope = key == self.scope || below(&key, &self.scope).is_some();
-        if !in_scope {
-            return;
-        }
-
-        let entry = match self.own.paths.entry(key.into_boxed_str()) {
-            Entry::Vacant(v) => {
-                v.insert(Claim {
-                    owner: pkg,
-                    shared: false,
-                });
-                return;
-            }
-            Entry::Occupied(o) => o,
-        };
-        let current = entry.get().owner;
-        if current == pkg {
-            return;
-        }
-        let also = self.own.also.entry(entry.key().clone()).or_default();
-        if also.contains(&pkg) {
-            return;
-        }
-        let packages = &self.own.packages;
-        let claim = entry.into_mut();
-        claim.shared = true;
-        if packages[pkg as usize] < packages[current as usize] {
-            claim.owner = pkg;
-            also.push(current);
-        } else {
-            also.push(pkg);
-        }
-    }
-
-    fn found(&mut self, manager: Manager, location: PathBuf, state: State) {
-        self.own.databases.push(Database {
-            manager,
-            location,
-            state,
-        });
-    }
-
-    fn dpkg(&mut self) -> Result<()> {
-        let admin = self.sysroot.join("var/lib/dpkg");
-        let info = admin.join("info");
-        if !info.is_dir() {
-            return Ok(());
-        }
-
-        let diversions = read_optional(&admin.join("diversions"))?;
-        let diversions: HashMap<&str, (&str, Option<&str>)> = parse::dpkg_diversions(&diversions)
-            .into_iter()
-            .map(|d| (d.from, (d.to, d.by)))
-            .collect();
-
-        let mut lists = Vec::new();
-        for entry in
-            std::fs::read_dir(&info).with_context(|| format!("cannot list {}", info.display()))?
-        {
-            let entry = entry.with_context(|| format!("cannot list {}", info.display()))?;
-            let file_name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(name) = parse::dpkg_package(&file_name) {
-                lists.push((name.to_string(), entry.path()));
-            }
-        }
-        // Sorted so that a run reads them in the same order as the last one;
-        // the claim rule does not depend on it, but a debugger should not have
-        // to wonder.
-        lists.sort();
-
-        for (name, path) in &lists {
-            let text = read_text(path)?;
-            let pkg = self.package(Manager::Dpkg, name);
-            // A diversion names the package without its architecture.
-            let base = name.split(':').next().unwrap_or(name);
-            for listed in parse::dpkg_paths(&text) {
-                // Another package's file at a diverted path is installed where
-                // the diversion sends it; the diverting package keeps its own.
-                let listed = match diversions.get(listed) {
-                    Some(&(to, by)) if by != Some(base) => to,
-                    _ => listed,
-                };
-                self.claim(pkg, listed);
-            }
-        }
-        let packages = lists.len();
-        self.found(Manager::Dpkg, info, State::Read { packages });
-        Ok(())
-    }
-
-    fn rpm(&mut self, rpm: &OsString) -> Result<()> {
-        let Some(location) = RPM_DATABASES
-            .iter()
-            .map(|db| self.sysroot.join(db))
-            .find(|db| non_empty_dir(db))
-        else {
-            return Ok(());
-        };
-
-        let mut command = std::process::Command::new(rpm);
-        command.args(["-qa", "--qf", parse::RPM_QUERY]);
-        if self.sysroot != Path::new("/") {
-            command.arg("--root").arg(self.sysroot);
-        }
-        let output = match command.output() {
-            Ok(output) => output,
-            Err(e) if e.kind() == ErrorKind::NotFound => {
-                let reason = format!(
-                    "the database is binary and `{}` is not installed to read it",
-                    rpm.to_string_lossy()
-                );
-                self.found(Manager::Rpm, location, State::Unreadable { reason });
-                return Ok(());
-            }
-            Err(e) => {
-                let reason = format!("cannot run `{}`: {e}", rpm.to_string_lossy());
-                self.found(Manager::Rpm, location, State::Unreadable { reason });
-                return Ok(());
-            }
-        };
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let reason = format!(
-                "`{}` failed ({}): {}",
-                rpm.to_string_lossy(),
-                output.status,
-                stderr.lines().next().unwrap_or("no message")
-            );
-            self.found(Manager::Rpm, location, State::Unreadable { reason });
-            return Ok(());
-        }
-
-        let text = String::from_utf8_lossy(&output.stdout);
-        let first = self.own.packages.len();
-        for (name, path) in parse::rpm_lines(&text) {
-            let pkg = self.package(Manager::Rpm, name);
-            self.claim(pkg, path);
-        }
-        let packages = self.own.packages.len() - first;
-        self.found(Manager::Rpm, location, State::Read { packages });
-        Ok(())
-    }
-
-    fn pacman(&mut self) -> Result<()> {
-        let local = self.sysroot.join("var/lib/pacman/local");
-        if !local.is_dir() {
-            return Ok(());
-        }
-        let mut entries = Vec::new();
-        for entry in
-            std::fs::read_dir(&local).with_context(|| format!("cannot list {}", local.display()))?
-        {
-            let path = entry
-                .with_context(|| format!("cannot list {}", local.display()))?
-                .path();
-            // `ALPM_DB_VERSION` sits beside the package directories.
-            if path.is_dir() {
-                entries.push(path);
-            }
-        }
-        entries.sort();
-
-        for dir in &entries {
-            let desc = read_text(&dir.join("desc"))?;
-            let name = parse::pacman_name(&desc)
-                .with_context(|| format!("no %NAME% in {}", dir.join("desc").display()))?;
-            let pkg = self.package(Manager::Pacman, name);
-            let files = read_text(&dir.join("files"))?;
-            for listed in parse::pacman_files(&files) {
-                self.claim(pkg, listed);
-            }
-        }
-        let packages = entries.len();
-        self.found(Manager::Pacman, local, State::Read { packages });
-        Ok(())
-    }
-
-    fn apk(&mut self) -> Result<()> {
-        let installed = self.sysroot.join("lib/apk/db/installed");
-        if !installed.is_file() {
-            return Ok(());
-        }
-        let text = read_text(&installed)?;
-        let first = self.own.packages.len();
-        for (name, path) in parse::apk_installed(&text) {
-            let pkg = self.package(Manager::Apk, name);
-            self.claim(pkg, &path);
-        }
-        let packages = self.own.packages.len() - first;
-        self.found(Manager::Apk, installed, State::Read { packages });
-        Ok(())
-    }
-
-    fn homebrew(&mut self) -> Result<()> {
-        for prefix in BREW_PREFIXES {
-            let prefix = self.sysroot.join(prefix);
-            let cellar = prefix.join("Cellar");
-            if !cellar.is_dir() {
-                continue;
-            }
-            let root = prefix
-                .canonicalize()
-                .with_context(|| format!("cannot resolve {}", prefix.display()))?
-                .to_string_lossy()
-                .into_owned();
-            if self.own.brew.iter().any(|known| known.root == root) {
-                continue;
-            }
-            let formulae = self.brew_names(&cellar, Manager::Homebrew)?;
-            let casks = self.brew_names(&prefix.join("Caskroom"), Manager::HomebrewCask)?;
-            let packages = formulae.len() + casks.len();
-            self.own.brew.push(BrewPrefix {
-                root,
-                formulae,
-                casks,
-            });
-            self.found(Manager::Homebrew, prefix, State::Read { packages });
-        }
-        Ok(())
-    }
-
-    /// One package per directory in `Cellar` or `Caskroom`.
-    fn brew_names(&mut self, area: &Path, manager: Manager) -> Result<HashMap<String, PackageId>> {
-        let entries = match std::fs::read_dir(area) {
-            Ok(entries) => entries,
-            // No casks installed, no Caskroom.
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(HashMap::new()),
-            Err(e) => return Err(e).with_context(|| format!("cannot list {}", area.display())),
-        };
-        let mut names = Vec::new();
-        for entry in entries {
-            let entry = entry.with_context(|| format!("cannot list {}", area.display()))?;
-            if entry.path().is_dir() {
-                names.push(entry.file_name().to_string_lossy().into_owned());
-            }
-        }
-        names.sort();
-        Ok(names
-            .into_iter()
-            .map(|name| {
-                let id = self.package(manager, &name);
-                (name, id)
-            })
-            .collect())
-    }
-}
-
-/// The file's text, with any byte that is not UTF-8 replaced: the tree's names
-/// went through the same conversion, so the two still compare equal.
-fn read_text(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-/// Like [`read_text`], with a missing file meaning empty.
-fn read_optional(path: &Path) -> Result<String> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(String::new()),
-        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
-    }
-}
-
-fn non_empty_dir(path: &Path) -> bool {
-    std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
 }
 
 // ---------------------------------------------------------------- report

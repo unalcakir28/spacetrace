@@ -2,9 +2,11 @@
 //! symlinks, the databases in their real formats at their real places — and
 //! points the loader at it the way `dpkg --root` would be.
 
-use std::os::unix::fs::symlink;
-use std::path::Path;
+use std::os::unix::fs::{symlink, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use spacetrace_scan_core::{scan, ScanOptions, ScanProgress};
 
@@ -75,7 +77,24 @@ impl System {
             // Never the host's: a test that found a real rpm would be reading
             // this machine's packages.
             rpm: OsString::from("spacetrace-test-no-such-rpm"),
+            rpm_timeout: Duration::from_secs(5),
+            // No mounts inside a temporary directory unless a test says so.
+            mounts: Mounts::none(),
+            mount_timeout: Some(Duration::from_secs(5)),
+            probe: probe_mount,
+            progress: Arc::default(),
         }
+    }
+
+    /// The canonical spelling of `rel`, which is how the mount table and the
+    /// loader both spell it.
+    fn canonical(&self, rel: &str) -> PathBuf {
+        self.root().canonicalize().unwrap().join(rel)
+    }
+
+    /// Load for the scope `rel` with `sources`, without scanning.
+    fn load(&self, sources: &Sources, rel: &str) -> Ownership {
+        Ownership::load(sources, &self.canonical(rel))
     }
 
     /// Scan `rel` and report on it, the way `spacetrace pkgs` does.
@@ -86,7 +105,7 @@ impl System {
             Arc::new(ScanProgress::default()),
         )
         .unwrap();
-        let own = Ownership::load(&self.sources(), tree.root_path()).unwrap();
+        let own = Ownership::load(&self.sources(), tree.root_path());
         let report = report(&tree, &own, SizeBasis::Logical, 50);
         (report, own, tree)
     }
@@ -521,4 +540,211 @@ fn homebrew_on_linux_and_dpkg_report_together() {
     // Everything else under the sysroot — the dpkg list itself, the /bin
     // links nobody listed here — is unowned, and the figures still agree.
     assert_eq!(report.owned.size + report.unowned.size, tree.total_size());
+}
+
+// ------------------------------------------------- filesystems that hang
+
+/// A mount whose server has gone, as the scanner's own tests stand one in:
+/// there is no building a filesystem that hangs from a test, so the probe is
+/// the seam. Each test that uses one has its own counter, since tests run in
+/// parallel.
+macro_rules! dead_probe {
+    ($name:ident, $count:ident) => {
+        static $count: AtomicUsize = AtomicUsize::new(0);
+        fn $name(_: &Path, _: Duration) -> Option<std::io::Result<std::fs::Metadata>> {
+            $count.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+    };
+}
+
+/// Invariant 7. A listed path below a mount point that the scope does not
+/// sit on is never looked at — not the mount point, not anything under it, not
+/// even the probe. Before this, every directory every database named was
+/// canonicalised, so `pkgs /usr` stepped onto every mount the packages
+/// mentioned, and a dead one hung it.
+#[test]
+fn a_mount_outside_the_scope_is_never_looked_at() {
+    dead_probe!(never_answers, PROBES);
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 10);
+    sys.file("mnt/nfs/share/data", 5);
+    sys.dpkg("coreutils", &["/bin/ls"]);
+    sys.dpkg("nfs-data", &["/mnt/nfs/share", "/mnt/nfs/share/data"]);
+    let nfs = sys.canonical("mnt/nfs");
+    let mut sources = sys.sources();
+    sources.mounts = Mounts::from_paths([nfs.clone()]);
+    sources.probe = never_answers;
+
+    let own = sys.load(&sources, "usr");
+
+    let ls = sys.canonical("usr/bin/ls");
+    let owners = own.owners(&ls.to_string_lossy(), EntryKind::File);
+    assert_eq!(owners.len(), 1, "/bin/ls still resolves into /usr");
+    let stepped_on: Vec<&PathBuf> = own.touched.iter().filter(|p| p.starts_with(&nfs)).collect();
+    assert!(stepped_on.is_empty(), "looked at {stepped_on:?}");
+    assert_eq!(PROBES.load(Ordering::SeqCst), 0, "not even asked");
+    assert!(own.unanswered().is_empty());
+}
+
+/// The other half: a scope that reaches past the scope's own filesystem —
+/// here the whole sysroot — asks the mount once, with the deadline, and goes
+/// on without it.
+#[test]
+fn a_mount_inside_the_scope_is_asked_once_and_skipped_when_it_does_not_answer() {
+    dead_probe!(never_answers, PROBES);
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 10);
+    sys.file("mnt/nfs/a/data", 5);
+    sys.file("mnt/nfs/b/data", 5);
+    sys.dpkg("coreutils", &["/bin/ls"]);
+    sys.dpkg("nfs-data", &["/mnt/nfs/a/data", "/mnt/nfs/b/data"]);
+    let nfs = sys.canonical("mnt/nfs");
+    let mut sources = sys.sources();
+    sources.mounts = Mounts::from_paths([nfs.clone()]);
+    sources.probe = never_answers;
+
+    let own = sys.load(&sources, "");
+
+    assert_eq!(PROBES.load(Ordering::SeqCst), 1, "one probe for two paths");
+    assert_eq!(own.unanswered(), std::slice::from_ref(&nfs));
+    assert!(
+        own.touched.iter().all(|p| !p.starts_with(&nfs)),
+        "{:?}",
+        own.touched
+    );
+    let ls = sys.canonical("usr/bin/ls");
+    assert_eq!(own.owners(&ls.to_string_lossy(), EntryKind::File).len(), 1);
+}
+
+/// The databases are needed whatever the scope is, so a dead `/var` is asked
+/// with the deadline and its database reported unread — not waited on.
+#[test]
+fn a_database_on_a_mount_that_does_not_answer_is_reported_unread() {
+    dead_probe!(never_answers, PROBES);
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 10);
+    sys.dpkg("coreutils", &["/bin/ls"]);
+    let mut sources = sys.sources();
+    sources.mounts = Mounts::from_paths([sys.canonical("var")]);
+    sources.probe = never_answers;
+
+    let own = sys.load(&sources, "usr");
+
+    let dpkg = &own.databases()[0];
+    let State::Unreadable { reason } = &dpkg.state else {
+        panic!("{:?}", dpkg.state);
+    };
+    assert!(reason.contains("did not answer in 5 s"), "{reason}");
+    assert_eq!(PROBES.load(Ordering::SeqCst), 1);
+}
+
+/// `/home/linuxbrew` is only Homebrew's when the scope reaches it. A scan of
+/// `/usr` used to probe it on every run, and an autofs `/home` whose server
+/// was down hung every `pkgs` call.
+#[test]
+fn a_homebrew_prefix_unrelated_to_the_scope_is_not_looked_for() {
+    dead_probe!(never_answers, PROBES);
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 10);
+    sys.dpkg("coreutils", &["/bin/ls"]);
+    sys.dir("home/linuxbrew/.linuxbrew/Cellar/hello");
+    let home = sys.canonical("home");
+    let mut sources = sys.sources();
+    sources.mounts = Mounts::from_paths([home.clone()]);
+    sources.probe = never_answers;
+
+    let own = sys.load(&sources, "usr");
+    assert_eq!(PROBES.load(Ordering::SeqCst), 0);
+    assert!(own.touched.iter().all(|p| !p.starts_with(&home)));
+    assert!(own
+        .databases()
+        .iter()
+        .all(|d| d.manager != Manager::Homebrew));
+
+    // A scope that does include it asks, once, and moves on.
+    let own = sys.load(&sources, "");
+    assert_eq!(PROBES.load(Ordering::SeqCst), 1);
+    assert_eq!(own.unanswered(), [home]);
+}
+
+/// Invariant 8. A stale BDB lock makes `rpm -qa` wait forever on RHEL 8; it
+/// is stopped at the deadline and the database is reported unread. The
+/// stand-in is a real `rpm` on disk that sleeps, started through a shell, so
+/// the `sleep` outlives the shell that is killed and still holds the pipe —
+/// waiting for the output to close would hang just the same.
+#[test]
+fn an_rpm_that_does_not_answer_is_stopped_at_the_deadline() {
+    let sys = System::new();
+    sys.file("usr/bin/bash", 100);
+    sys.file_text("var/lib/rpm/rpmdb.sqlite", "locked");
+    sys.file_text("fake/rpm", "#!/bin/sh\nsleep 30\n");
+    let rpm = sys.root().join("fake/rpm");
+    std::fs::set_permissions(&rpm, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut sources = sys.sources();
+    sources.rpm = rpm.into_os_string();
+    sources.rpm_timeout = Duration::from_secs(1);
+
+    let started = Instant::now();
+    let own = sys.load(&sources, "usr");
+    let took = started.elapsed();
+
+    assert!(took < Duration::from_secs(10), "waited {took:?}");
+    let db = own
+        .databases()
+        .iter()
+        .find(|d| d.manager == Manager::Rpm)
+        .unwrap();
+    let State::Unreadable { reason } = &db.state else {
+        panic!("{:?}", db.state);
+    };
+    assert!(reason.contains("did not answer in 1 s"), "{reason}");
+}
+
+/// One damaged entry costs that entry, counted and named, and the rest of
+/// the database still counts. A directory where a list should be fails to
+/// read for root as well, so this holds in a container too.
+#[test]
+fn a_damaged_entry_is_counted_and_the_rest_still_reads() {
+    let sys = System::new();
+    sys.merge_usr();
+    sys.file("usr/bin/ls", 10);
+    sys.file("usr/bin/pacman", 20);
+    sys.file("usr/bin/grep", 30);
+    sys.dpkg("coreutils", &["/bin/ls"]);
+    sys.dir("var/lib/dpkg/info/broken.list");
+    sys.file_text("var/lib/pacman/local/pacman-7.0-1/desc", "%NAME%\npacman\n");
+    sys.file_text(
+        "var/lib/pacman/local/pacman-7.0-1/files",
+        "%FILES%\nusr/bin/pacman\n\n",
+    );
+    // No `files` at all, and a `desc` with no name.
+    sys.file_text("var/lib/pacman/local/grep-3.12-1/desc", "%NAME%\ngrep\n");
+    sys.file_text("var/lib/pacman/local/nameless-1-1/desc", "%VERSION%\n1-1\n");
+    sys.file_text("var/lib/pacman/local/nameless-1-1/files", "%FILES%\n\n");
+
+    let (report, own, _) = sys.report("usr");
+
+    assert_eq!(size_of(&report, "coreutils"), Some(10));
+    assert_eq!(size_of(&report, "pacman"), Some(20));
+    assert_eq!(size_of(&report, "grep"), None, "its files are unknown");
+    let (count, samples) = own.damaged();
+    assert_eq!(count, 3, "{samples:?}");
+    let named: Vec<String> = samples
+        .iter()
+        .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert!(named.contains(&"broken.list".to_string()), "{named:?}");
+    assert!(
+        samples.iter().any(|(_, why)| why.contains("%NAME%")),
+        "{samples:?}"
+    );
+    assert!(own
+        .databases()
+        .iter()
+        .all(|d| matches!(d.state, State::Read { .. })));
 }

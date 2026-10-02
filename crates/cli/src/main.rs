@@ -1,3 +1,31 @@
+// `println!` and `print!` for the whole binary. They come before the modules
+// because a `macro_rules!` is in scope for the code after it, and shadows the
+// standard macro there — so every module uses these without being edited.
+//
+// The standard ones panic when whoever reads stdout has gone: `spacetrace
+// scans | head -1` ended in "failed printing to stdout: Broken pipe". Putting
+// SIGPIPE back to its default would end the process quietly, but on every
+// pipe, and `scan --ssh` depends on a write to its child's pipe failing with
+// EPIPE instead of killing it. So the one pipe whose closing means "stop" is
+// the one handled, here.
+macro_rules! println {
+    () => {
+        $crate::stdout::write(format_args!("\n"))
+    };
+    ($($arg:tt)*) => {
+        $crate::stdout::write(format_args!("{}\n", format_args!($($arg)*)))
+    };
+}
+
+// Nothing calls `print!` today; it is here so the first thing that does is
+// covered too, rather than reintroducing the panic.
+#[allow(unused_macros)]
+macro_rules! print {
+    ($($arg:tt)*) => {
+        $crate::stdout::write(format_args!($($arg)*))
+    };
+}
+
 mod args;
 mod fmt;
 mod pkgs;
@@ -32,6 +60,46 @@ use crate::args::{
 use crate::remote::Remote;
 use crate::s3::S3Url;
 
+mod stdout {
+    use std::io::{ErrorKind, Write};
+
+    /// The reader of stdout went away. Raised by unwinding rather than
+    /// returned, because it happens inside any `println!` anywhere, and
+    /// caught in `main`; unwinding still runs every destructor on the way, so
+    /// a downloaded snapshot's temporary directory is cleaned up as usual.
+    pub struct Closed;
+
+    /// What the standard `print!` does, except on a closed pipe.
+    pub fn write(args: std::fmt::Arguments<'_>) {
+        let result = std::io::stdout().lock().write_fmt(args);
+        match result {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::BrokenPipe => {
+                // `resume_unwind`, not `panic!`: it skips the panic hook, so
+                // nothing is printed on the way out.
+                std::panic::resume_unwind(Box::new(Closed))
+            }
+            Err(e) => panic!("failed printing to stdout: {e}"),
+        }
+    }
+
+    /// The same for a writer that was handed stdout directly — `export --out -`
+    /// — and reports the closed pipe as an error instead.
+    pub fn or_closed<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
+        if let Err(e) = &result {
+            let closed = e.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == ErrorKind::BrokenPipe)
+            });
+            if closed {
+                std::panic::resume_unwind(Box::new(Closed))
+            }
+        }
+        result
+    }
+}
+
 fn main() {
     update::clean_up_after_windows_update();
 
@@ -45,7 +113,15 @@ fn main() {
         update::maybe_check_in_background();
     }
 
-    let outcome = run(&cli);
+    // A closed stdout is a reader that had what it wanted, so it exits 0, as
+    // ripgrep does. 141 would claim a SIGPIPE death that never happened, and
+    // under `set -o pipefail` it would fail `spacetrace scans | head -1` in a
+    // script where nothing went wrong.
+    let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&cli))) {
+        Ok(outcome) => outcome,
+        Err(payload) if payload.is::<stdout::Closed>() => std::process::exit(0),
+        Err(payload) => std::panic::resume_unwind(payload),
+    };
 
     // Only after a command that worked, and never after `update` itself: a
     // notice stapled underneath an error message buries the error, and one
@@ -882,7 +958,7 @@ fn write_csv(tree: &Tree, out: &Path, depth: Option<usize>) -> Result<()> {
     if out == Path::new("-") {
         let stdout = std::io::stdout();
         let mut lock = stdout.lock();
-        export_csv(tree, &mut lock, depth)?;
+        stdout::or_closed(export_csv(tree, &mut lock, depth).map_err(anyhow::Error::from))?;
         return Ok(());
     }
     let file =
@@ -1515,7 +1591,7 @@ fn cmd_import(a: &ImportArgs, db_path: &Path, json: bool) -> Result<()> {
 
     let mut store = open_store(db_path)?;
     let host = a.host.clone().unwrap_or_else(Store::local_host);
-    let id = store.save(&tree, &stats, &host, a.label.as_deref())?;
+    let id = store.save_import(&tree, &stats, &host, a.label.as_deref())?;
 
     if json {
         let payload = serde_json::json!({
@@ -1656,7 +1732,9 @@ fn cmd_pkgs(a: &PkgsArgs, db_path: &Path, json: bool, remote: bool) -> Result<()
         a.scan.is_none() || a.path == Path::new("."),
         "--scan reports on the snapshot's own root; leave the path out"
     );
-    let sources = pkgs::Sources::system();
+    // The scan's own patience with a mount, so `--mount-timeout` means one
+    // thing for the whole command.
+    let sources = pkgs::Sources::system(a.walk.to_options().mount_timeout);
 
     // A file, or anything that is not a folder, is a question about its owner
     // rather than a breakdown. Through `is_dir`, which follows links, so
@@ -1670,14 +1748,7 @@ fn cmd_pkgs(a: &PkgsArgs, db_path: &Path, json: bool, remote: bool) -> Result<()
         Some(id) => {
             let store = open_store(db_path)?;
             let (tree, meta) = store.load(id)?;
-            let here = Store::local_host();
-            anyhow::ensure!(
-                meta.host == here,
-                "snapshot #{id} was taken on {}, and the package databases here describe {here}. \
-                 Run `spacetrace pkgs` on {} instead",
-                meta.host,
-                meta.host
-            );
+            ensure_describes_this_machine(&meta, &Store::local_host())?;
             let source = format!(
                 "snapshot #{} ({}, {}) against the packages installed now",
                 meta.id,
@@ -1693,7 +1764,7 @@ fn cmd_pkgs(a: &PkgsArgs, db_path: &Path, json: bool, remote: bool) -> Result<()
     };
 
     let started = std::time::Instant::now();
-    let own = pkgs::Ownership::load(&sources, tree.root_path())?;
+    let own = load_packages(&sources, tree.root_path(), !json);
     ensure_package_databases(&own)?;
     // Logical, as everywhere in the CLI, and said at the call site
     // (invariant 6).
@@ -1711,6 +1782,7 @@ fn cmd_pkgs(a: &PkgsArgs, db_path: &Path, json: bool, remote: bool) -> Result<()
             "duration_ms": took_ms,
             "listed_paths": listed,
             "kept_paths": kept,
+            "looked_up_dirs": own.looked_up(),
             "total": report.total,
             "owned": report.owned,
             "unowned": report.unowned,
@@ -1719,6 +1791,9 @@ fn cmd_pkgs(a: &PkgsArgs, db_path: &Path, json: bool, remote: bool) -> Result<()
             "packages": report.packages.iter().take(a.top).collect::<Vec<_>>(),
             "unowned_parts": report.unowned_parts,
             "errors": stats.as_ref().map(|s| s.errors),
+            "unanswered_mounts": own.unanswered(),
+            "damaged_entries": own.damaged().0,
+            "damaged_samples": damaged_json(&own),
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
         return Ok(());
@@ -1733,9 +1808,10 @@ fn cmd_pkgs(a: &PkgsArgs, db_path: &Path, json: bool, remote: bool) -> Result<()
     let lists = match listed {
         0 => String::new(),
         n => format!(
-            "{} paths listed, {} of them under this root; ",
+            "{} paths listed, {} of them under this root, {} folders looked up; ",
             fmt::count(n),
-            fmt::count(kept as u64)
+            fmt::count(kept as u64),
+            fmt::count(own.looked_up())
         ),
     };
     println!("  {lists}matched in {}", fmt::duration(took_ms));
@@ -1818,6 +1894,39 @@ fn cmd_pkgs(a: &PkgsArgs, db_path: &Path, json: bool, remote: bool) -> Result<()
     Ok(())
 }
 
+/// Whether a stored snapshot can be checked against this machine's packages.
+///
+/// Three things rule it out. Another host's name, plainly. An import, whatever
+/// host it is filed under: `import` files one under this machine unless
+/// `--host` says otherwise, and the export it came from does not record where
+/// it was made, so the name proves nothing. And the two blanks every import
+/// wrote before imports were marked: no scan time and no filesystem size. A
+/// scan measures the filesystem it stood on at the end of every walk, so one
+/// without either is an import, not a fast scan.
+fn ensure_describes_this_machine(meta: &ScanMeta, here: &str) -> Result<()> {
+    let id = meta.id;
+    anyhow::ensure!(
+        meta.host == here,
+        "snapshot #{id} was taken on {}, and the package databases here describe {here}. \
+         Run `spacetrace pkgs` on {} instead",
+        meta.host,
+        meta.host
+    );
+    anyhow::ensure!(
+        !meta.is_import(),
+        "snapshot #{id} was imported from an export, which does not record the machine it \
+         describes, so this machine's packages cannot be checked against it. Run `spacetrace \
+         pkgs` where the export was made, or scan the folder here"
+    );
+    anyhow::ensure!(
+        meta.duration_ms > 0 || meta.fs_total.is_some(),
+        "snapshot #{id} records neither a scan time nor a filesystem size, which is what an \
+         import wrote before imports were marked, so it may describe another machine. Scan the \
+         folder here instead"
+    );
+    Ok(())
+}
+
 /// `spacetrace pkgs <file>`: every package that lists it.
 fn pkgs_owner(path: &Path, sources: &pkgs::Sources, json: bool) -> Result<()> {
     let target = pkgs::canonical_name(path)?;
@@ -1828,7 +1937,7 @@ fn pkgs_owner(path: &Path, sources: &pkgs::Sources, json: bool) -> Result<()> {
         false => EntryKind::File,
     };
     // Scoped to the one path, so the index holds one entry at most.
-    let own = pkgs::Ownership::load(sources, &target)?;
+    let own = load_packages(sources, &target, !json);
     ensure_package_databases(&own)?;
     let abs = target.to_string_lossy();
     let owners: Vec<&pkgs::Package> = own
@@ -1843,6 +1952,9 @@ fn pkgs_owner(path: &Path, sources: &pkgs::Sources, json: bool) -> Result<()> {
             "path": abs,
             "owners": owners,
             "databases": own.databases(),
+            "unanswered_mounts": own.unanswered(),
+            "damaged_entries": own.damaged().0,
+            "damaged_samples": damaged_json(&own),
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
         return Ok(());
@@ -1904,6 +2016,85 @@ fn package_count(n: usize) -> String {
 }
 
 fn print_package_databases(own: &pkgs::Ownership) {
+    print_database_states(own);
+    for mount in own.unanswered() {
+        println!(
+            "  {} did not answer; nothing below it was read",
+            mount.display()
+        );
+    }
+    // Said where the totals are, like a scan's unreadable paths: the files
+    // these entries list are in the unowned figure, and nothing else says so.
+    let (damaged, samples) = own.damaged();
+    if damaged > 0 {
+        println!(
+            "  {} database entries could not be read; the files they list count as unowned:",
+            fmt::count(damaged)
+        );
+        for (path, why) in samples {
+            println!("    {} — {why}", path.display());
+        }
+        if damaged > samples.len() as u64 {
+            println!("    …");
+        }
+    }
+}
+
+fn damaged_json(own: &pkgs::Ownership) -> Vec<serde_json::Value> {
+    own.damaged()
+        .1
+        .iter()
+        .map(|(path, why)| serde_json::json!({ "path": path, "error": why }))
+        .collect()
+}
+
+/// `Ownership::load`, with a line on stderr that moves while it runs
+/// (invariant 8): a count of paths read, or what it is waiting on — `rpm`, or
+/// a mount being asked whether it is alive — and for how long.
+fn load_packages(sources: &pkgs::Sources, scope: &Path, show: bool) -> pkgs::Ownership {
+    let done = Arc::new(AtomicBool::new(false));
+    let ticker = (show && std::io::stderr().is_terminal()).then(|| {
+        let progress = Arc::clone(&sources.progress);
+        let done = Arc::clone(&done);
+        std::thread::spawn(move || {
+            let mut stderr = std::io::stderr();
+            let mut widest = 0;
+            while !done.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(120));
+                if done.load(Ordering::Relaxed) {
+                    break;
+                }
+                let waiting = progress
+                    .waiting_on
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                let line = match waiting {
+                    Some((what, since)) => {
+                        format!("  {what}… {}s", since.elapsed().as_secs())
+                    }
+                    None => format!(
+                        "  reading package databases… {} paths",
+                        fmt::count(progress.listed.load(Ordering::Relaxed))
+                    ),
+                };
+                widest = widest.max(line.chars().count());
+                let _ = write!(stderr, "\r{line}   ");
+                let _ = stderr.flush();
+            }
+            let _ = write!(stderr, "\r{:width$}\r", "", width = widest + 3);
+            let _ = stderr.flush();
+        })
+    });
+    let own = pkgs::Ownership::load(sources, scope);
+    done.store(true, Ordering::Relaxed);
+    if let Some(ticker) = ticker {
+        let _ = ticker.join();
+    }
+    own
+}
+
+fn print_database_states(own: &pkgs::Ownership) {
     for db in own.databases() {
         match &db.state {
             pkgs::State::Read { packages } => println!(
@@ -1924,6 +2115,16 @@ fn print_package_databases(own: &pkgs::Ownership) {
 }
 
 fn warn_unreadable_databases(own: &pkgs::Ownership) {
+    for mount in own.unanswered() {
+        eprintln!(
+            "warning: {} did not answer; nothing below it was read",
+            mount.display()
+        );
+    }
+    let (damaged, _) = own.damaged();
+    if damaged > 0 {
+        eprintln!("warning: {damaged} database entries could not be read; see damaged_samples");
+    }
     for db in own.databases() {
         if let pkgs::State::Unreadable { reason } = &db.state {
             eprintln!(
@@ -2019,7 +2220,7 @@ fn write_ncdu(tree: &Tree, out: &Path) -> Result<()> {
     if out == Path::new("-") {
         let stdout = std::io::stdout();
         let mut lock = stdout.lock();
-        export_ncdu(tree, &mut lock)?;
+        stdout::or_closed(export_ncdu(tree, &mut lock).map_err(anyhow::Error::from))?;
     } else {
         let file = std::fs::File::create(out)
             .with_context(|| format!("cannot write: {}", out.display()))?;
@@ -2050,6 +2251,63 @@ fn largest_json(tree: &Tree, top: usize) -> Vec<serde_json::Value> {
         .into_iter()
         .map(|id| entry_json(tree, id))
         .collect()
+}
+
+#[cfg(test)]
+mod pkgs_snapshot_tests {
+    use super::*;
+
+    fn meta(host: &str, scanner_version: &str, duration_ms: u64) -> ScanMeta {
+        // What a scan records about the filesystem it stood on; an import
+        // never had it.
+        let fs_total = (!scanner_version.starts_with(spacetrace_store::IMPORTED_PREFIX)
+            && duration_ms > 0)
+            .then_some(1u64 << 40);
+        serde_json::from_value(serde_json::json!({
+            "id": 7, "host": host, "root": "/usr", "started_at": 0,
+            "duration_ms": duration_ms, "total_size": 0, "total_alloc": 0,
+            "files": 0, "dirs": 0, "errors": 0, "hardlinks_deduped": 0,
+            "scanner_version": scanner_version, "label": null, "fs_total": fs_total,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_scan_of_this_machine_is_accepted() {
+        assert!(ensure_describes_this_machine(&meta("box", "0.9.1", 412), "box").is_ok());
+    }
+
+    #[test]
+    fn another_hosts_snapshot_is_refused() {
+        let err = ensure_describes_this_machine(&meta("nas", "0.9.1", 412), "box").unwrap_err();
+        assert!(err.to_string().contains("taken on nas"), "{err}");
+    }
+
+    /// The case the host check alone let through: `import` files an export
+    /// under this machine by default.
+    #[test]
+    fn an_import_filed_under_this_host_is_refused() {
+        let version = format!("{}0.9.1", spacetrace_store::IMPORTED_PREFIX);
+        let err = ensure_describes_this_machine(&meta("box", &version, 0), "box").unwrap_err();
+        assert!(err.to_string().contains("imported from an export"), "{err}");
+    }
+
+    /// An import from before the marker: this scanner's version, and the
+    /// zero duration and missing capacity every import has always written.
+    #[test]
+    fn an_unmarked_old_import_is_refused_by_what_it_never_recorded() {
+        let err = ensure_describes_this_machine(&meta("box", "0.9.1", 0), "box").unwrap_err();
+        assert!(err.to_string().contains("neither a scan time"), "{err}");
+    }
+
+    /// A scan of a tiny folder can finish inside a millisecond. It still
+    /// measured its filesystem, so it is not taken for an old import.
+    #[test]
+    fn a_scan_that_took_under_a_millisecond_is_accepted() {
+        let mut fast = meta("box", "0.9.1", 0);
+        fast.fs_total = Some(1 << 40);
+        assert!(ensure_describes_this_machine(&fast, "box").is_ok());
+    }
 }
 
 #[cfg(test)]

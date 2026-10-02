@@ -1,9 +1,9 @@
 //! The package databases' own file formats, as pure functions over text.
 //!
-//! Nothing here touches the disk: reading the files, canonicalising what they
-//! name and deciding what counts happen in `load.rs`. Keeping the formats apart
-//! is what lets every one of them be tested against text copied off a real
-//! system, without that system.
+//! Nothing here touches the disk: reading the files and resolving the folders
+//! they name happen in `load.rs`, crediting the bytes in `mod.rs`. Keeping the
+//! formats apart is what lets every one of them be tested against text copied
+//! off a real system, without that system.
 
 /// The package a dpkg `.list` file describes, from its file name.
 ///
