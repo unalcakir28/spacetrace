@@ -591,11 +591,14 @@ mod reflinks {
     /// The two oracles at once. `du` minus the on-disk total must be exactly
     /// the bytes the scan says it deduplicated, no more and no less — the
     /// same shape as the hardlink test above, applied to extents.
+    ///
+    /// Signed on both sides: a compressed extent mostly overwritten is still
+    /// held whole, so the on-disk total can be *above* `du`.
     fn assert_du_gap_is_exactly_the_shared_bytes(root: &Path, tree: &Tree, stats: &ScanStats) {
         let du = du_bytes(root).expect("du is part of coreutils");
         assert_eq!(
-            du - tree.total_alloc(),
-            stats.shared_bytes_deduped + stats.compressed_bytes_saved,
+            i128::from(du) - i128::from(tree.total_alloc()),
+            i128::from(stats.shared_bytes_deduped) + i128::from(stats.compressed_bytes_saved),
             "du {du}, alloc {}, shared {}, compressed {}",
             tree.total_alloc(),
             stats.shared_bytes_deduped,
@@ -892,6 +895,23 @@ mod reflinks {
         total.split_whitespace().nth(2)?.parse().ok()
     }
 
+    /// Whether this process may read compressed sizes, decided without asking
+    /// the scanner: `compsize` needs the same privilege, so its answering is
+    /// the oracle. Root without `compsize` cannot be told apart from root
+    /// without `CAP_SYS_ADMIN`, so that combination could not run the check.
+    fn compressed_sizes_readable(test: &str, root: &Path) -> Option<u64> {
+        let disk = compsize_disk(root);
+        // SAFETY: plain call.
+        if disk.is_none() && unsafe { libc::geteuid() } == 0 {
+            could_not_run(
+                test,
+                "running as root, but compsize is missing or refused, so nothing \
+                 independent says whether compressed sizes can be read",
+            );
+        }
+        disk
+    }
+
     /// btrfs compression. `st_blocks` reports a compressed extent at its
     /// uncompressed length, so `du` is high by the compression ratio.
     ///
@@ -948,6 +968,16 @@ mod reflinks {
             stats.compressed_files_inexact
         );
 
+        // Decided by the oracle, not by the scan: a scanner that silently
+        // stopped reading compressed sizes would otherwise take the fallback
+        // branch below and pass.
+        let oracle = compressed_sizes_readable("compressed_file", &root);
+        if oracle.is_some() {
+            assert_eq!(
+                stats.compressed_files_inexact, 0,
+                "compsize could read the compressed sizes, so the scan had to"
+            );
+        }
         if stats.compressed_files_inexact > 0 {
             eprintln!("  no CAP_SYS_ADMIN: checking the du-like fallback");
             assert_eq!(
@@ -963,7 +993,7 @@ mod reflinks {
             tree.total_alloc() < du / 10,
             "a repeated log line compresses far better than ten to one"
         );
-        if let Some(disk) = compsize_disk(&root) {
+        if let Some(disk) = oracle {
             assert_eq!(tree.total_alloc(), disk, "compsize's Disk Usage, exactly");
         }
         assert!(
@@ -972,5 +1002,181 @@ mod reflinks {
             tree.total_alloc(),
         );
         assert_du_gap_is_exactly_the_shared_bytes(&root, &tree, &stats);
+    }
+
+    /// A compressed extent stays whole on disk until nothing references any
+    /// of it. Overwrite 124 KiB of a 128 KiB compressed extent and the file
+    /// references 4 KiB of it while the disk still holds all of it — so the
+    /// file costs *more* than `du` says, `compsize` agrees, and the summary's
+    /// "saved" goes negative instead of claiming a saving that is not there.
+    #[test]
+    fn a_mostly_overwritten_compressed_extent_still_costs_all_of_it() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(dir) = shared_tempdir("mostly_overwritten_compressed") else {
+            return;
+        };
+        if reflink_fs(dir.path()) != Ok("btrfs") {
+            eprintln!("SKIPPED mostly_overwritten_compressed: only btrfs compresses");
+            return;
+        }
+        let root = dir.path().join("z");
+        fs::create_dir(&root).unwrap();
+        if !compress_into(&root) {
+            could_not_run(
+                "mostly_overwritten_compressed",
+                "could not switch compression on",
+            );
+            return;
+        }
+        // Compressible, but not to nothing: hex of noise is half entropy, so
+        // the extent keeps most of its size on disk and the effect is large.
+        let path = root.join("partly.bin");
+        let noise = root.join("noise.bin");
+        write_noise(&noise, 128 * 1024, 9);
+        let hex: Vec<u8> = fs::read(&noise)
+            .unwrap()
+            .iter()
+            .take(64 * 1024)
+            .flat_map(|b| format!("{b:02x}").into_bytes())
+            .collect();
+        fs::write(&path, &hex).unwrap();
+        fs::File::open(&path).unwrap().sync_all().unwrap();
+        let overwrite = fs::read(&noise).unwrap();
+        let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all_at(&overwrite[4096..], 4096).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        fs::remove_file(&noise).unwrap();
+        let du = du_bytes(&root).unwrap();
+
+        let (tree, stats) = run(&root, ScanOptions::default());
+        let oracle = compressed_sizes_readable("mostly_overwritten_compressed", &root);
+        eprintln!(
+            "btrfs bookend: du {du}, alloc {}, compsize {oracle:?}, saved {}, inexact {}",
+            tree.total_alloc(),
+            stats.compressed_bytes_saved,
+            stats.compressed_files_inexact
+        );
+        if oracle.is_none() {
+            assert_eq!(
+                tree.total_alloc(),
+                du,
+                "unmeasured means counted as du counts"
+            );
+            assert_eq!(stats.compressed_files_inexact, 1);
+            return;
+        }
+        assert_eq!(stats.compressed_files_inexact, 0);
+        assert_eq!(
+            Some(tree.total_alloc()),
+            oracle,
+            "compsize's Disk Usage, exactly"
+        );
+        if tree.total_alloc() <= du {
+            could_not_run(
+                "mostly_overwritten_compressed",
+                &format!(
+                    "btrfs did not compress the first write ({} vs du {du})",
+                    tree.total_alloc()
+                ),
+            );
+            return;
+        }
+        assert!(
+            stats.compressed_bytes_saved < 0,
+            "more on disk than du says is not a saving: {}",
+            stats.compressed_bytes_saved
+        );
+        assert_du_gap_is_exactly_the_shared_bytes(&root, &tree, &stats);
+    }
+
+    /// Every entry's on-disk size, by path.
+    fn alloc_by_path(tree: &Tree) -> std::collections::BTreeMap<String, u64> {
+        tree.iter()
+            .map(|id| (tree.rel_path(id), tree.node(id).alloc))
+            .collect()
+    }
+
+    /// Which name carries shared blocks is the same in every scan, whatever
+    /// order the threads met them in — the property a diff of two snapshots
+    /// rests on. Charged by whichever thread came first, the bytes moved
+    /// between `live/` and its copies from one scan to the next, and a diff
+    /// read that as one growing and the other shrinking.
+    ///
+    /// The live tree is shallower than both copies, as `/usr` is shallower
+    /// than `/.snapshots/12/snapshot/usr`, so it is the one that carries them.
+    /// The fixture is built so that only that rule gives that answer: the
+    /// originals are written deepest, under `backup/` (so creation or inode
+    /// order would pick them), and `.snapshots/` sorts first (so plain path
+    /// order would pick it).
+    #[test]
+    fn the_same_names_carry_shared_blocks_whatever_the_thread_count() {
+        let _serial = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(dir) = shared_tempdir("same_names_carry_shared_blocks") else {
+            return;
+        };
+        let root = dir.path();
+        for d in 0..10u64 {
+            let sub = root.join(format!("backup/deep/copy/d{d}"));
+            fs::create_dir_all(&sub).unwrap();
+            for f in 0..20u64 {
+                write_noise(
+                    &sub.join(format!("f{f:02}.bin")),
+                    64 * 1024,
+                    d * 100 + f + 1,
+                );
+            }
+        }
+        fs::create_dir_all(root.join(".snapshots/1")).unwrap();
+        for copy in ["live", ".snapshots/1/snapshot"] {
+            let ok = Command::new("cp")
+                .args(["-a", "--reflink=always"])
+                .arg(root.join("backup/deep/copy"))
+                .arg(root.join(copy))
+                .status()
+                .is_ok_and(|s| s.success());
+            if !ok {
+                could_not_run(
+                    "same_names_carry_shared_blocks",
+                    "this filesystem refuses reflinks",
+                );
+                return;
+            }
+        }
+
+        let scan_with = |threads: usize| {
+            let opts = ScanOptions {
+                threads: Some(threads),
+                ..ScanOptions::default()
+            };
+            let (tree, stats) = run(root, opts);
+            assert_du_gap_is_exactly_the_shared_bytes(root, &tree, &stats);
+            alloc_by_path(&tree)
+        };
+        let first = scan_with(1);
+        for threads in [2, 8, 1, 8, 3] {
+            assert_eq!(
+                scan_with(threads),
+                first,
+                "{threads} threads charged the shared blocks to different names"
+            );
+        }
+
+        let mut carried = 0;
+        for (path, alloc) in &first {
+            if !path.ends_with(".bin") {
+                continue;
+            }
+            if path.starts_with("live/") {
+                assert!(
+                    *alloc > 0,
+                    "{path} is the shallowest name and carries its blocks"
+                );
+                carried += 1;
+            } else {
+                assert_eq!(*alloc, 0, "{path} is deeper than its live/ twin");
+            }
+        }
+        assert_eq!(carried, 200);
     }
 }

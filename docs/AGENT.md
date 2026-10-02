@@ -114,6 +114,7 @@ failing silently.
 | `roots[].one_file_system` | `false` | Do not cross mount points (`du -x`) |
 | `roots[].depth` | — | Stop descending below this depth |
 | `roots[].dedupe_hardlinks` | `true` | Count hardlinked files once |
+| `roots[].dedupe_clones` | `true` | Count blocks shared between files once (APFS clones; btrfs/XFS reflinks and snapshots) and, on btrfs, compressed files at their compressed size. Opens files on btrfs and XFS — see [Security notes](#security-notes). The CLI's `--no-clone-dedupe` |
 | `roots[].threads` | `min(cores, 8)` | Threads to walk this root with |
 | `roots[].mount_timeout` | `60` | Seconds a mounted filesystem under this root gets to answer before it is recorded as unreadable; `0` waits forever |
 | `roots[].keep` | — | Snapshots of this root to retain; unset keeps all |
@@ -484,3 +485,16 @@ snapshot already present with the same host, root and start time is skipped.
   enumerate any directory the agent's user can read.
 - **The agent never deletes anything** outside its own snapshot database, and
   retention only ever removes rows from that database.
+- **On btrfs, and on XFS made with reflink, the agent opens every regular file
+  it scans.** Read-only, `O_NOFOLLOW | O_NONBLOCK`, and no data is read — the
+  open exists to ask `FS_IOC_FIEMAP` which of the file's blocks are shared, and,
+  as root on btrfs, `BTRFS_IOC_TREE_SEARCH_V2` how large its compressed extents
+  are on disk. It is still an open per file, which a scan elsewhere is not (a
+  walk is otherwise `readdir` and `lstat` only), so anything that watches opens
+  sees one per file: fanotify-based EDR and antivirus, IMA measurement, audit
+  rules on reads. FIEMAP also takes the file's inode lock shared for the call,
+  which a writer holding it exclusively waits behind, briefly. Nothing is opened
+  on ext4, XFS without reflink, ZFS, NFS or any other filesystem, nor on macOS
+  or Windows. `dedupe_clones = false` on a root switches it off for that root
+  (`--no-clone-dedupe` in the CLI), and the on-disk total is then what `du`
+  says.

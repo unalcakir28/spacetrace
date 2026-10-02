@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rayon::prelude::*;
 
 use crate::capacity::Capacity;
-use crate::extents::{Claims, FsKind, Mapped, Volume, Volumes};
+use crate::extents::{Claims, Deferred, FsKind, Mapped, Volume, Volumes};
 use crate::meta::{display_name, EntryKind, FileIdentity, NamedMeta, RawMeta};
 use crate::mounts::Mounts;
 use crate::partial::PartialTree;
@@ -136,7 +136,10 @@ fn arena_capacity(hint: Option<usize>) -> usize {
 pub enum Phase {
     /// Reading directories.
     Walking,
-    /// Walk done; deduplicating copy-on-write clones and building the tree.
+    /// Walk done; charging the blocks files share (btrfs, XFS) in a fixed
+    /// order, then building the tree. The first part counts its files in
+    /// `rows_done` of `rows_total`, because on a tree with its snapshots
+    /// inside it that is every file.
     Finishing,
     /// Writing the tree into a snapshot database, one row per entry.
     Saving,
@@ -420,7 +423,11 @@ pub struct ScanStats {
     pub shared_bytes_deduped: u64,
     /// How much less than `du` the compressed files on btrfs were charged,
     /// because they were charged at their on-disk size.
-    pub compressed_bytes_saved: u64,
+    ///
+    /// **Signed.** A compressed extent stays whole on disk until nothing
+    /// references any of it, so a file that overwrote most of one can cost
+    /// more than `du` says — `compsize` agrees — and then this is negative.
+    pub compressed_bytes_saved: i64,
     /// Files on btrfs with compressed extents whose on-disk size could not be
     /// read — it takes `CAP_SYS_ADMIN` — and which therefore count at their
     /// uncompressed size, once per name, as `du` counts them. When this is not
@@ -477,14 +484,14 @@ struct Ctx {
     shared_bytes_deduped: AtomicU64,
     /// The filesystems met so far, and which of them can share blocks.
     volumes: Volumes,
-    /// Physical extents some name has already been charged for, on the
-    /// filesystems that say which extents are shared (Linux).
-    extent_claims: Mutex<Claims>,
+    /// Files whose shared extents are charged after the walk, in `(depth,
+    /// path)` order, so the same name carries them in every scan.
+    deferred: Mutex<Deferred>,
     /// Set by the first btrfs tree search refused for want of privilege, so
     /// the rest of the scan does not ask again.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     compressed_denied: AtomicBool,
-    compressed_bytes_saved: AtomicU64,
+    compressed_bytes_saved: AtomicI64,
     compressed_files_inexact: AtomicU64,
     files_unmapped: AtomicU64,
     unseen_sharing: AtomicBool,
@@ -577,9 +584,11 @@ impl Ctx {
     /// the first thread to claim wins. The guarantee is "once", not "this
     /// path".
     ///
-    /// A third claim follows on Linux, by physical extent rather than by
+    /// A third kind follows on Linux, by physical extent rather than by
     /// family (`extents.rs`), and the same order holds for it: a repeat
-    /// hardlink claims nothing.
+    /// hardlink is not charged for any of it. Its shared extents are not
+    /// claimed here at all but after the walk (`Deferred`); here the file is
+    /// charged only what it holds alone.
     fn claim(&self, pending: &[Pending]) -> Option<Vec<Charge>> {
         let hardlinks =
             self.opts.dedupe_hardlinks && pending.iter().any(|p| p.meta.is_hardlinked());
@@ -627,19 +636,18 @@ impl Ctx {
                 .fetch_add(bytes, Ordering::Relaxed);
         }
         if extents {
-            self.claim_extents(pending, &mut counted);
+            self.charge_own_extents(pending, &mut counted);
         }
         Some(counted)
     }
 
-    /// Charge the entries whose extents were mapped, under one lock for the
-    /// whole directory and only if one of them shares anything.
-    fn claim_extents(&self, pending: &[Pending], counted: &mut [Charge]) {
-        let mut claims = None;
-        let (mut files, mut shared, mut saved, mut inexact) = (0u64, 0u64, 0u64, 0u64);
+    /// Charge the mapped entries what they hold alone. Touches no shared
+    /// state but the statistics: what they share waits for the walk to end.
+    fn charge_own_extents(&self, pending: &[Pending], counted: &mut [Charge]) {
+        let (mut saved, mut inexact) = (0i64, 0u64);
         for (slot, p) in counted.iter_mut().zip(pending) {
-            // A repeat hardlink is not charged at all, so it must not consume
-            // the claim the name that *is* charged needs.
+            // A repeat hardlink is not charged at all, so it must not claim
+            // what the name that *is* charged needs.
             if *slot == Charge::Nothing {
                 continue;
             }
@@ -648,50 +656,99 @@ impl Ctx {
             };
             inexact += u64::from(mapped.compressed_inexact);
             saved += mapped.compressed_saved;
-            if !mapped.claims_anything() {
-                continue;
-            }
-            let claims = claims.get_or_insert_with(|| {
-                self.extent_claims
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-            });
-            let charged = claims.charge(mapped, p.meta.alloc);
-            *slot = Charge::Alloc(charged.alloc);
-            if charged.shared > 0 {
-                files += 1;
-                shared += charged.shared;
-            }
+            *slot = Charge::Alloc(mapped.own_alloc(p.meta.alloc));
         }
-        drop(claims);
-        for (counter, value) in [
-            (&self.clones_deduped, files),
-            (&self.shared_bytes_deduped, shared),
-            (&self.compressed_bytes_saved, saved),
-            (&self.compressed_files_inexact, inexact),
-        ] {
-            if value > 0 {
-                counter.fetch_add(value, Ordering::Relaxed);
-            }
+        if saved != 0 {
+            self.compressed_bytes_saved
+                .fetch_add(saved, Ordering::Relaxed);
+        }
+        if inexact > 0 {
+            self.compressed_files_inexact
+                .fetch_add(inexact, Ordering::Relaxed);
         }
     }
 
-    /// The volume a directory on device `dev` sits on.
+    /// The volume directory `dir`, on device `dev`, sits on; `parent` is the
+    /// one its parent directory was on, `None` for the root. `None` back
+    /// means the filesystem did not answer in time.
+    ///
+    /// Only a change of device asks anything, and not every change:
+    ///
+    /// * **A mount point** — or the root, which may be one — is asked
+    ///   through the same deadline the walk gives any mount point, because a
+    ///   `statfs` on a mount whose server has gone does not return.
+    /// * **A new device where no mount is, under btrfs,** is a subvolume or a
+    ///   snapshot: the same filesystem, so the same domain, and nothing to
+    ///   ask. Asking would be a `statfs` and an `open` per snapshot.
+    /// * Anywhere else it is a mount the table did not list — mounted after
+    ///   the scan started — and is asked like a mount point.
     ///
     /// Nothing is asked with clone deduplication off: that scan counts what
-    /// every name reports, so there is nothing to look up.
-    fn volume_of(&self, dev: u64, dir: &Path) -> Volume {
+    /// every name reports.
+    fn volume_of(&self, dev: u64, dir: &Path, parent: Option<Volume>) -> Option<Volume> {
         if !self.opts.dedupe_clones {
-            return Volume {
+            return Some(Volume {
                 dev,
                 kind: FsKind::Plain,
-            };
+            });
         }
-        let volume = self.volumes.lookup(dev, dir);
+        if let Some(parent) = parent {
+            if parent.dev == dev {
+                return Some(parent);
+            }
+            let subvolume = matches!(parent.kind, FsKind::Reflink { btrfs: true, .. })
+                && !self.mounts.contains(dir);
+            if subvolume {
+                return Some(Volume {
+                    dev,
+                    kind: parent.kind,
+                });
+            }
+        }
+        let volume = self.volumes.lookup(dev, dir, self.opts.mount_timeout)?;
         if volume.kind == FsKind::Opaque {
             self.unseen_sharing.store(true, Ordering::Relaxed);
         }
-        volume
+        Some(volume)
+    }
+
+    /// Charge what the walk deferred into `builder`, in `(depth, path)`
+    /// order. `Err` only for a cancelled scan.
+    ///
+    /// A phase of its own, and on a tree with its snapshots inside it one
+    /// that touches every file, so it counts them in `rows_done` (invariant
+    /// 8) and checks for cancellation as it goes (invariant 5).
+    fn settle_shared(&self, builder: &mut TreeBuilder) -> std::io::Result<()> {
+        let deferred = std::mem::take(
+            &mut *self
+                .deferred
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        if deferred.is_empty() {
+            return Ok(());
+        }
+        let progress = &self.progress;
+        progress.begin_rows(Phase::Finishing, deferred.len() as u64);
+        let mut done = 0u64;
+        let settled = deferred.settle(builder, &mut Claims::default(), |charged| {
+            progress.row_done();
+            if charged > 0 {
+                progress.bytes.fetch_add(charged, Ordering::Relaxed);
+            }
+            done += 1;
+            // Every few thousand files is soon enough to notice a cancel, and
+            // keeps a shared atomic read out of the per-file step.
+            done % 4096 != 0 || !progress.is_cancelled()
+        });
+        let Some(settled) = settled else {
+            return Err(cancelled());
+        };
+        self.clones_deduped
+            .fetch_add(settled.files_sharing, Ordering::Relaxed);
+        self.shared_bytes_deduped
+            .fetch_add(settled.shared_bytes, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Which of a file's extents are shared or compressed, where the
@@ -707,7 +764,15 @@ impl Ctx {
         if meta.alloc == 0 || meta.dev != volume.dev {
             return None;
         }
-        match crate::extents::linux::map(path, meta, domain, btrfs, &self.compressed_denied) {
+        let cancelled = || self.progress.is_cancelled();
+        match crate::extents::linux::map(
+            path,
+            meta,
+            domain,
+            btrfs,
+            &self.compressed_denied,
+            &cancelled,
+        ) {
             Ok(mapped) => mapped.map(Box::new),
             Err(_) => {
                 self.files_unmapped.fetch_add(1, Ordering::Relaxed);
@@ -731,8 +796,9 @@ enum Charge {
     Full,
     /// Nothing: a repeat hardlink, or a clone whose family is already charged.
     Nothing,
-    /// This much: part of it was shared with a name already charged, or it is
-    /// compressed and its on-disk size is known.
+    /// This much for what it holds alone — compressed extents at their
+    /// on-disk size, shared extents left out. What it shares is added after
+    /// the walk.
     Alloc(u64),
 }
 
@@ -908,9 +974,9 @@ fn scan_with(
         clones_deduped: AtomicU64::new(0),
         shared_bytes_deduped: AtomicU64::new(0),
         volumes: Volumes::default(),
-        extent_claims: Mutex::new(Claims::default()),
+        deferred: Mutex::new(Deferred::default()),
         compressed_denied: AtomicBool::new(false),
-        compressed_bytes_saved: AtomicU64::new(0),
+        compressed_bytes_saved: AtomicI64::new(0),
         compressed_files_inexact: AtomicU64::new(0),
         files_unmapped: AtomicU64::new(0),
         unseen_sharing: AtomicBool::new(false),
@@ -923,8 +989,7 @@ fn scan_with(
 
     if root_meta.kind == EntryKind::Dir {
         progress.dirs.fetch_add(1, Ordering::Relaxed);
-        let volume = ctx.volume_of(root_meta.dev, &root_path);
-        pool.install(|| walk(&root_path, root_id, 1, root_meta.dev, volume, &ctx));
+        pool.install(|| walk(&root_path, root_id, 1, root_meta.dev, None, &ctx));
     } else {
         progress.files.fetch_add(1, Ordering::Relaxed);
         progress.bytes.fetch_add(root_meta.alloc, Ordering::Relaxed);
@@ -934,17 +999,17 @@ fn scan_with(
     // never listed, so the tree would look complete while silently missing
     // most of the disk (invariant #5).
     if progress.is_cancelled() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            "scan cancelled",
-        ));
+        return Err(cancelled());
     }
 
     // Taken back rather than copied: the finished tree is built from these
     // exact nodes, and once they are gone a snapshot answers `None` — which is
     // what a refresh still in flight has to be told.
-    let builder = progress.partial.take();
+    let mut builder = progress.partial.take();
     progress.enter_phase(Phase::Finishing);
+    // Before `finish`, whose aggregation then carries what it adds up the
+    // tree like any other leaf value.
+    ctx.settle_shared(&mut builder)?;
     let tree = builder.finish(root_path);
 
     let stats = ScanStats {
@@ -965,6 +1030,11 @@ fn scan_with(
         capacity: crate::capacity::capacity_of(tree.root_path()),
     };
     Ok((tree, stats))
+}
+
+/// What a cancelled scan returns instead of a tree (invariant 5).
+fn cancelled() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Interrupted, "scan cancelled")
 }
 
 /// Whether this entry's identity will actually be read.
@@ -995,8 +1065,8 @@ fn identity_needed(opts: &ScanOptions, is_dir: bool) -> FileIdentity {
 /// something assembled from what the recursion hands back.
 ///
 /// `dev` is this directory's own device and `parent` the volume its parent was
-/// on; only a change between the two costs a filesystem lookup.
-fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Volume, ctx: &Ctx) {
+/// on, `None` for the root; see `Ctx::volume_of` for what a change costs.
+fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Volume>, ctx: &Ctx) {
     // Checked before the syscall, so a cancelled scan stops issuing I/O
     // immediately instead of draining whatever rayon had already queued.
     if ctx.progress.is_cancelled() {
@@ -1007,13 +1077,13 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Volume, c
     // the recursion below runs on the pool where it would only add ancestors
     // to the list. See `ScanProgress::reading_now`.
     let listing = ctx.progress.listing(dir);
-    // Inside the guard: a new device means a `statfs`, which can block on a
-    // dead mount exactly as the `read_dir` after it can, and a watcher must be
-    // able to name the directory either way.
-    let volume = if dev == parent.dev {
-        parent
-    } else {
-        ctx.volume_of(dev, dir)
+    // Inside the guard: a new device can mean a `statfs`, which blocks on a
+    // dead mount exactly as the `read_dir` after it would, and a watcher must
+    // be able to name the directory either way. One that does not answer in
+    // time is unreadable, like any mount past its deadline (invariant 7).
+    let Some(volume) = ctx.volume_of(dev, dir, parent) else {
+        ctx.note_unreachable_mount(dir);
+        return;
     };
     // One lookup for the whole directory. Almost every directory on a real
     // disk holds no mount point, and those pay nothing per entry.
@@ -1160,6 +1230,12 @@ fn place(
     // Resolved for the whole directory before anything is charged, so each
     // process-wide lock is taken once. See `Ctx::claim`.
     let claimed = ctx.claim(&pending);
+    // Files whose shared extents wait for the walk to end, by index in this
+    // block; they get their node ids once the block is in the arena. Until
+    // then such a file is in the arena at what it holds alone, so a live view
+    // of a running scan shows the shared part only once `Finishing` adds it —
+    // low rather than counted twice.
+    let mut deferred: Vec<(NodeId, u64, Box<Mapped>)> = Vec::new();
 
     for (index, entry) in pending.into_iter().enumerate() {
         let Pending {
@@ -1168,7 +1244,7 @@ fn place(
             name_len,
             meta,
             share: _,
-            extents: _,
+            extents,
         } = entry;
         let is_dir = meta.kind == EntryKind::Dir;
         if is_dir {
@@ -1201,6 +1277,11 @@ fn place(
         };
         if charge != Charge::Nothing && !is_dir {
             bytes += alloc;
+        }
+        if let Some(mapped) = extents {
+            if charge != Charge::Nothing && mapped.claims_anything() {
+                deferred.push((index as NodeId, meta.ino, mapped));
+            }
         }
 
         // Kept separate from the caller's own limit, and checked first: this one
@@ -1256,12 +1337,23 @@ fn place(
     // The one critical section: this directory's names and its run of nodes.
     // Everything that could block has already happened.
     let start = ctx.builder().push_block(parent_id, children.into_iter());
+    // A lock of its own, taken once per directory and only by one that has
+    // something shared; never inside the arena's.
+    if !deferred.is_empty() {
+        let mut store = ctx
+            .deferred
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (index, ino, mapped) in &deferred {
+            store.push(start + index, *ino, mapped);
+        }
+    }
 
     if subdirs.is_empty() {
         return;
     }
     subdirs.into_par_iter().for_each(|(index, path, dev)| {
-        walk(&path, start + index, depth + 1, dev, volume, ctx);
+        walk(&path, start + index, depth + 1, dev, Some(volume), ctx);
     });
 }
 

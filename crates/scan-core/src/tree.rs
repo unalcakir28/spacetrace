@@ -586,6 +586,15 @@ impl TreeBuilder {
         self.nodes.is_empty()
     }
 
+    /// The name of node `id`, as the finished tree will report it.
+    pub(crate) fn name(&self, id: NodeId) -> &str {
+        let n = &self.nodes[id as usize];
+        let from = n.name_off as usize;
+        self.names
+            .get(from..from + n.name_len as usize)
+            .unwrap_or_default()
+    }
+
     /// The arena as it stands, copied.
     ///
     /// Deliberately not aggregated: this runs under the lock the walk pushes

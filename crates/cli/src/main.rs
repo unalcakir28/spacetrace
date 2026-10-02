@@ -1242,12 +1242,19 @@ impl Ticker {
                                 fmt::count(counts.1),
                                 fmt::size(counts.2),
                             ),
-                            // Aggregation only, since the clone accounting
-                            // moved into the walk: one reverse pass over the
-                            // arena, and over before it can be read.
-                            Phase::Finishing => {
-                                format!("  finishing… {} files", fmt::count(counts.0))
-                            }
+                            // Aggregation, and on btrfs and XFS first the shared
+                            // blocks, charged in a fixed order — every file on a
+                            // tree with its snapshots in it, so it has a count.
+                            Phase::Finishing => match progress.rows() {
+                                Some((done, total)) => format!(
+                                    "  charging shared blocks… {} of {} files",
+                                    fmt::count(done),
+                                    fmt::count(total)
+                                ),
+                                None => {
+                                    format!("  finishing… {} files", fmt::count(counts.0))
+                                }
+                            },
                             // The walk is over and the database write is not; its
                             // own counter, because "scanning…" would be a lie and
                             // a blank line reads as a hang (invariant 8).
@@ -1350,11 +1357,20 @@ fn bar(share: f64, width: usize) -> String {
 /// errs: a total that is knowingly high and says so is still one a person can
 /// act on, while one that is silently off is not.
 fn print_accounting_notes(stats: &ScanStats) {
-    if stats.compressed_bytes_saved > 0 {
-        println!(
+    // Either sign is possible: a compressed extent stays whole on disk until
+    // nothing references any of it, so a file that overwrote most of one can
+    // hold more than `du` says.
+    match stats.compressed_bytes_saved {
+        0 => {}
+        saved if saved > 0 => println!(
             "  compressed files counted at their compressed size ({} less than du reports)",
-            fmt::size(stats.compressed_bytes_saved)
-        );
+            fmt::size(saved.unsigned_abs())
+        ),
+        saved => println!(
+            "  compressed files counted at their size on disk ({} more than du reports: \
+             partly overwritten compressed blocks are still held whole)",
+            fmt::size(saved.unsigned_abs())
+        ),
     }
     if stats.compressed_files_inexact > 0 {
         println!(

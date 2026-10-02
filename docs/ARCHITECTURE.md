@@ -134,8 +134,33 @@ Decisions:
   the tree references, each block once, not what deleting it would free.
   Measured in Docker, both filesystems: three reflinked 100 MB copies, `df`
   +0 for the copies, `alloc` one copy, `du` three. Code: `scan-core/src/extents.rs`.
+
+  **Which name carries shared blocks is decided after the walk, in `(depth,
+  path)` order**, not by whichever thread met them first. With snapshots inside
+  the root nearly every file is shared, and first-thread-wins moved the bytes
+  between the live tree and its snapshot from scan to scan: five scans of one
+  unchanged btrfs put 166, 615, 615, 844 and 897 MB under `live/`, and a diff
+  reads that as growth. Now it is 1,300.5 MB every time — the shallowest name,
+  so `/usr` rather than `/.snapshots/N/snapshot/usr`. During the walk a shared
+  file is charged what it holds alone; the shared rest is added in
+  `Phase::Finishing`, which counts the files it goes through in `rows_done`.
+  Directories are ranked breadth-first with siblings sorted by name, so no path
+  is built per file. Cost on 200,000 snapshot-shared files: +20 ms (btrfs,
+  195 → 215) and +7 to +12 MiB peak RSS, about 60–75 bytes per deferred file.
+
+  **Only filesystems that can share are asked.** XFS made without reflink is
+  recognised from its geometry (`XFS_IOC_FSGEOMETRY`) and its files are never
+  opened — measured with `strace` over 1,000 files: 1 extra `openat`, 1
+  `statfs` and 1 `ioctl` per scan, against 1,013 and 1,002 on reflink XFS. The
+  `statfs` that identifies a filesystem runs inside the walk's `reading_now`
+  guard, with no lock held, and for a mount point under the mount deadline; a
+  new device under btrfs that is not a mount point is a subvolume and asks
+  nothing.
 - **btrfs compression is charged at its compressed size, where that can be
-  read.** `st_blocks` reports a compressed extent uncompressed (a 100 MB log:
+  read.** That can be *more* than `du`: a compressed extent stays whole on disk
+  until nothing references any of it, so a file that overwrote 124 KiB of a
+  128 KiB compressed extent measured `du` 131,072, `alloc` 204,800, `compsize`
+  204,800, and `compressed_bytes_saved` is signed for that reason. `st_blocks` reports a compressed extent uncompressed (a 100 MB log:
   100 MB in `st_blocks`, 2.9 MiB in `compsize`, 3.4 MB of `df`). FIEMAP flags
   the extent `ENCODED` but gives only its logical length; the compressed length
   is in the file extent item, which `BTRFS_IOC_TREE_SEARCH_V2` reads with
@@ -401,13 +426,14 @@ query. No server setup is required.
   btrfs *inline* files (data of up to 2 KiB kept inside metadata; FIEMAP gives
   no address and no `SHARED` flag), so a snapshot of many tiny files still
   counts them once per name — 166 MB of a 1.3 GB, 100k-file corpus;
-  *bookend* extents (an extent partly overwritten stays whole on disk until
-  every reference is gone, and only the referenced part is charged); RAID
-  copies; and compressed extents without `CAP_SYS_ADMIN`. All of these err
-  high, never low.
-- **The FIEMAP costs a syscall pair per file on btrfs and XFS.** Warm cache,
-  100,000 files, 6 threads: btrfs 16 → 101 ms, XFS 18 → 59 ms; cold cache
-  btrfs 143 → 238 ms. With every extent shared, XFS's answer serialises
+  RAID copies; and compressed extents without `CAP_SYS_ADMIN`. Those err
+  high. One errs **low**, as `du` does: an *uncompressed* bookend extent (partly
+  overwritten, still whole on disk until every reference is gone) is charged
+  only for the part still referenced, because FIEMAP reports references, not
+  extents. Compressed bookends are charged whole when the size can be read.
+- **The FIEMAP costs an open and an ioctl per file on btrfs and reflink XFS.**
+  Warm cache, 100,000 files, 6 threads: btrfs 14 → 81 ms, XFS 13 → 42 ms
+  (2 October); cold cache btrfs 143 → 238 ms. With every extent shared, XFS's answer serialises
   inside the kernel and gets *slower* with more threads (271 ms at 1 thread,
   728 ms at 6, unstable between runs) — measured on a loop device in a VM, so
   to be re-measured on real hardware before anything is tuned to it.
