@@ -29,3 +29,6 @@ reqwest.workspace = true
 toml.workspace = true
 zstd.workspace = true
 tempfile.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

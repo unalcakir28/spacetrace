@@ -1,6 +1,8 @@
 mod args;
 mod fmt;
 mod remote;
+#[cfg(unix)]
+mod ssh;
 mod update;
 
 use std::io::{IsTerminal, Read, Write};
@@ -49,6 +51,12 @@ fn main() {
     }
 
     if let Err(err) = outcome {
+        // 130 is what a shell expects of a command stopped by Ctrl-C, and the
+        // interrupted path has already said what it cleaned up.
+        #[cfg(unix)]
+        if err.is::<ssh::Interrupted>() {
+            std::process::exit(130);
+        }
         eprintln!("error: {err:#}");
         std::process::exit(1);
     }
@@ -112,6 +120,9 @@ fn staging() -> Result<tempfile::TempDir> {
 // ---------------------------------------------------------------- scan
 
 fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
+    if let Some(destination) = &a.ssh {
+        return cmd_scan_ssh(a, destination, db_path, json);
+    }
     let mut options = a.walk.to_options();
     options.expected_entries = entry_count_hint(db_path, &a.path);
 
@@ -164,6 +175,144 @@ fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
         println!("\nSnapshot #{id} saved → {}", db_path.display());
     } else {
         println!("\nAdd --save to store this snapshot (comparing requires it).");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn cmd_scan_ssh(_: &ScanArgs, _: &str, _: &Path, _: bool) -> Result<()> {
+    // Not attempted rather than shipped unverified: the cleanup on Ctrl-C
+    // rests on Unix process groups and signals, and nothing here has been run
+    // against Windows OpenSSH, which has no ControlMaster either.
+    anyhow::bail!("scan --ssh is not available on Windows yet; it works from WSL")
+}
+
+/// `scan --ssh`: the same scan, run on the other machine by a copy of this
+/// version, and brought back as the snapshot it wrote.
+///
+/// Host and root are the remote's own — its hostname, its canonical path — so
+/// the snapshot joins that machine's history, and an agent later installed
+/// there writes snapshots of the same target.
+#[cfg(unix)]
+fn cmd_scan_ssh(a: &ScanArgs, destination: &str, db_path: &Path, json: bool) -> Result<()> {
+    let path = a
+        .path
+        .to_str()
+        .context("the remote path has to be valid UTF-8")?;
+    let mut scan_args = Vec::new();
+    if let Some(label) = &a.label {
+        scan_args.push(format!("--label={label}"));
+    }
+    scan_args.extend(a.walk.to_args());
+
+    let fetched = ssh::scan(&ssh::Request {
+        destination,
+        options: &a.ssh_option,
+        binary: a.binary.as_deref(),
+        path,
+        scan_args,
+        chatty: !json && std::io::stderr().is_terminal(),
+    })?;
+
+    // Opened as `pull` opens a download: through `Store::open`, so the schema
+    // is checked, and `load` below runs the structural check on the tree.
+    let incoming = Store::open(&fetched.file).with_context(|| {
+        format!(
+            "what {destination} sent is not a snapshot database. If its shell prints \
+             anything at login, that text arrived in front of the data"
+        )
+    })?;
+    let scans = incoming.list()?;
+    anyhow::ensure!(
+        scans.len() == 1,
+        "{destination} sent a database holding {} snapshots, not one",
+        scans.len()
+    );
+    let remote_id = scans[0].id;
+
+    // Either way the digest is checked before a number is shown: by
+    // `import_snapshot` when saving, by hand when only printing.
+    let saved_id = match a.save {
+        true => {
+            let mut store = open_store(db_path)?;
+            let imported = store.import_snapshot(&fetched.file)?;
+            Some(
+                imported
+                    .first()
+                    .copied()
+                    .context("this snapshot is already in the local database")?,
+            )
+        }
+        false => {
+            if let Integrity::Mismatch { stored, computed } = incoming.verify(remote_id)? {
+                anyhow::bail!(
+                    "the snapshot from {destination} does not match its digest \
+                     (stored {stored}, computed {computed})"
+                );
+            }
+            None
+        }
+    };
+    let (tree, meta) = incoming.load(remote_id)?;
+
+    if let Some(out) = &a.ncdu {
+        write_ncdu(&tree, out)?;
+    }
+
+    if json {
+        let payload = serde_json::json!({
+            "ssh": destination,
+            "host": meta.host,
+            "root": meta.root,
+            "total_size": meta.total_size,
+            "total_alloc": meta.total_alloc,
+            "files": meta.files,
+            "dirs": meta.dirs,
+            "errors": meta.errors,
+            "hardlinks_deduped": meta.hardlinks_deduped,
+            // Not recorded in a snapshot, so not known here; null rather
+            // than a zero nobody measured.
+            "clones_deduped": null,
+            "duration_ms": meta.duration_ms,
+            "scan_id": saved_id,
+            "fs_total": meta.fs_total,
+            "fs_available": meta.fs_available,
+            "largest": largest_json(&tree, a.top),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    let stats = ScanStats {
+        files: meta.files,
+        dirs: meta.dirs,
+        errors: meta.errors,
+        hardlinks_deduped: meta.hardlinks_deduped,
+        clones_deduped: 0,
+        error_samples: Vec::new(),
+        duration_ms: meta.duration_ms,
+        capacity: match (meta.fs_total, meta.fs_available) {
+            (Some(total), Some(available)) => {
+                Some(spacetrace_scan_core::Capacity { total, available })
+            }
+            _ => None,
+        },
+    };
+    println!("{} (over ssh)", meta.target());
+    print_scan_summary(&tree, &stats);
+    println!();
+    print_children_table(&tree, tree.root(), a.top);
+    if meta.errors > 0 {
+        // The count travels in the snapshot, the paths do not.
+        println!(
+            "\n{} paths on {} could not be read (permission or I/O error).",
+            fmt::count(meta.errors),
+            meta.host
+        );
+    }
+    match saved_id {
+        Some(id) => println!("\nSnapshot #{id} saved → {}", db_path.display()),
+        None => println!("\nAdd --save to store this snapshot (comparing requires it)."),
     }
     Ok(())
 }
@@ -724,6 +873,26 @@ pub(crate) fn default_data_dir() -> Option<PathBuf> {
             .map(PathBuf::from)
             .unwrap_or_else(|_| home().unwrap_or_default().join(".local/share"))
             .join("spacetrace")
+    };
+    Some(dir)
+}
+
+/// Where downloads that can be fetched again are kept: the release builds
+/// `scan --ssh` uploads. Separate from the data directory because a cache is
+/// the thing a user may delete without losing anything.
+#[cfg(unix)]
+pub(crate) fn default_cache_dir() -> Option<PathBuf> {
+    if let Ok(x) = std::env::var("SPACETRACE_HOME") {
+        return Some(PathBuf::from(x).join("cache"));
+    }
+    let dir = if cfg!(target_os = "macos") {
+        home().ok()?.join("Library/Caches/spacetrace")
+    } else {
+        match std::env::var("XDG_CACHE_HOME") {
+            Ok(x) => PathBuf::from(x),
+            Err(_) => home().ok()?.join(".cache"),
+        }
+        .join("spacetrace")
     };
     Some(dir)
 }

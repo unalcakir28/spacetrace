@@ -9,6 +9,10 @@ its own snapshot database. That is a deliberate limit rather than a missing
 feature: software that runs unattended on someone's server earns trust by not
 being able to do damage, not by promising it won't.
 
+For a machine you only look at now and then, an agent may be more than it
+needs: `spacetrace scan --save --ssh host /path` scans it over ssh with nothing
+installed, and keeps the snapshot locally. See [SSH.md](SSH.md).
+
 ## Install
 
 ```bash

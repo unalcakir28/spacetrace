@@ -39,6 +39,12 @@ const CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 /// Short: this is a courtesy, and a slow network must not delay anything.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+/// For the archives themselves, which are megabytes rather than a page of
+/// JSON. reqwest's timeout covers the whole body, so the five seconds above
+/// would demand 2.4 MB/s for a 12 MB archive and fail on an ordinary hotel
+/// connection with a timeout that looks like a network fault.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+
 const OPT_OUT: &str = "SPACETRACE_NO_UPDATE_CHECK";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -56,7 +62,7 @@ struct Cache {
 /// Matched on the same strings the release workflow puts in the file names.
 /// Getting this wrong means a 404 rather than a wrong binary, but a clear
 /// "no build for this platform" is a better answer than a failed download.
-fn target() -> Option<&'static str> {
+pub(crate) fn target() -> Option<&'static str> {
     Some(match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("macos", "x86_64") => "x86_64-apple-darwin",
@@ -67,8 +73,15 @@ fn target() -> Option<&'static str> {
     })
 }
 
+/// Chosen by the target the archive is *for*, not by the machine asking: since
+/// `scan --ssh` this machine also fetches builds for other platforms, and the
+/// workflow zips the Windows build only.
 fn archive_name(version: &str, target: &str) -> String {
-    let extension = if cfg!(windows) { "zip" } else { "tar.gz" };
+    let extension = if target.contains("windows") {
+        "zip"
+    } else {
+        "tar.gz"
+    };
     format!("spacetrace-{version}-{target}.{extension}")
 }
 
@@ -103,9 +116,9 @@ fn write_cache(cache: &Cache) {
     }
 }
 
-fn client() -> Result<reqwest::blocking::Client> {
+fn client(timeout: Duration) -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
-        .timeout(TIMEOUT)
+        .timeout(timeout)
         // GitHub refuses requests with no user agent, and naming the tool is
         // more honest than borrowing a browser's.
         .user_agent(concat!("spacetrace/", env!("CARGO_PKG_VERSION")))
@@ -140,7 +153,7 @@ fn is_ours(tag: &str) -> bool {
 /// The newest tagged release of this tool, or `None` if there has never been
 /// one.
 fn fetch_latest() -> Result<Option<String>> {
-    let releases: Vec<ApiRelease> = client()?
+    let releases: Vec<ApiRelease> = client(TIMEOUT)?
         .get(RELEASES_API)
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -283,24 +296,10 @@ pub fn install(json: bool) -> Result<()> {
     // because of a permission the check could have predicted is rude.
     writable(&directory)?;
 
-    let archive = archive_name(&tag, target);
-    println!("Downloading {archive}…");
-    let bytes = download(&format!(
-        "https://github.com/{REPO}/releases/download/{tag}/{archive}"
-    ))?;
-
-    let sums = String::from_utf8(download(&format!(
-        "https://github.com/{REPO}/releases/download/{tag}/SHA256SUMS"
-    ))?)
-    .context("SHA256SUMS was not text")?;
-
-    verify(&bytes, &archive, &sums)?;
-    println!("Checksum verified.");
-
+    println!("Downloading {}…", archive_name(&tag, target));
     let staging = tempfile::tempdir().context("making a temporary directory")?;
-    let archive_path = staging.path().join(&archive);
-    std::fs::write(&archive_path, &bytes).context("writing the download")?;
-    unpack(&archive_path, staging.path())?;
+    let archive = fetch_release(&tag, target, staging.path())?;
+    println!("Checksum verified.");
 
     let mut replaced = Vec::new();
     for name in ["spacetrace", "spacetrace-agent"] {
@@ -347,11 +346,42 @@ pub fn install(json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Download the release archive of `tag` for `target`, check it against the
+/// release's `SHA256SUMS`, and unpack it into `into`. Returns the archive name.
+///
+/// The one path by which this tool puts a published binary on disk: the
+/// self-update and `scan --ssh` both come through here, so neither can grow a
+/// way of skipping the checksum.
+pub(crate) fn fetch_release(tag: &str, target: &str, into: &Path) -> Result<String> {
+    let archive = archive_name(tag, target);
+    let bytes = download(&format!(
+        "https://github.com/{REPO}/releases/download/{tag}/{archive}"
+    ))?;
+    let sums = String::from_utf8(download(&format!(
+        "https://github.com/{REPO}/releases/download/{tag}/SHA256SUMS"
+    ))?)
+    .context("SHA256SUMS was not text")?;
+    verify(&bytes, &archive, &sums)?;
+
+    let archive_path = into.join(&archive);
+    std::fs::write(&archive_path, &bytes).context("writing the download")?;
+    unpack(&archive_path, into)?;
+    std::fs::remove_file(&archive_path).context("removing the unpacked archive")?;
+    Ok(archive)
+}
+
 fn download(url: &str) -> Result<Vec<u8>> {
-    let response = client()?
+    let response = client(DOWNLOAD_TIMEOUT)?
         .get(url)
         .send()
-        .with_context(|| format!("downloading {url}"))?
+        .with_context(|| format!("downloading {url}"))?;
+    // Named, because it is the answer for every development build and every
+    // platform the release does not cover, and a bare "404 Not Found" from
+    // deep inside reqwest does not say which file was missing.
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        bail!("{url} does not exist");
+    }
+    let response = response
         .error_for_status()
         .with_context(|| format!("downloading {url}"))?;
     Ok(response.bytes().context("reading the download")?.to_vec())
@@ -485,15 +515,22 @@ mod tests {
         assert!(!is_newer("v1.2"));
     }
 
+    /// The extension follows the target, whatever machine asks: the workflow
+    /// zips the Windows build and tars every other one, and `scan --ssh` on a
+    /// Mac fetches the Linux archive.
     #[test]
     fn asset_names_match_what_the_release_workflow_publishes() {
         assert_eq!(
             archive_name("v0.2.0", "x86_64-apple-darwin"),
-            if cfg!(windows) {
-                "spacetrace-v0.2.0-x86_64-apple-darwin.zip"
-            } else {
-                "spacetrace-v0.2.0-x86_64-apple-darwin.tar.gz"
-            }
+            "spacetrace-v0.2.0-x86_64-apple-darwin.tar.gz"
+        );
+        assert_eq!(
+            archive_name("v0.2.0", "aarch64-unknown-linux-musl"),
+            "spacetrace-v0.2.0-aarch64-unknown-linux-musl.tar.gz"
+        );
+        assert_eq!(
+            archive_name("v0.2.0", "x86_64-pc-windows-msvc"),
+            "spacetrace-v0.2.0-x86_64-pc-windows-msvc.zip"
         );
     }
 

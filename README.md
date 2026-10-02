@@ -36,6 +36,7 @@ it. See [docs/DECISIONS.md](docs/DECISIONS.md) K2.
 | [docs/WHY.md](docs/WHY.md) | Why this project exists: the gap it fills, target users, explicit non-goals |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phases, exit criteria, release targets |
 | [docs/AGENT.md](docs/AGENT.md) | Running the agent: install, configure, the HTTP API, Prometheus metrics, security notes |
+| [docs/SSH.md](docs/SSH.md) | Scanning a machine over ssh with nothing installed: what runs where, cleanup, trade-offs |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the code is built and why, technology decisions, known limits |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Settled cross-cutting decisions and their rationale |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | September 2026 market and technical research summary |
@@ -143,6 +144,18 @@ spacetrace --remote https://nas.example.com pull --root /var   # keep a local co
 A remote snapshot is downloaded as the same standalone SQLite file the agent
 stores, so listing, browsing and diffing it run the identical code as a local
 one. See [docs/AGENT.md](docs/AGENT.md) to set the agent up.
+
+No agent there? Scan it over ssh, with nothing installed:
+
+```bash
+spacetrace scan --save --ssh admin@nas.lan /volume1
+```
+
+A copy of this version is uploaded into a private temporary directory, scans,
+sends its snapshot back into your local database, and is removed — also on
+failure, on Ctrl-C, and when the CLI is killed outright. The cost: ssh access,
+a ~7 MB upload per run, and room in the remote `/tmp` (or `$HOME`) for the
+snapshot. Details and limits: [docs/SSH.md](docs/SSH.md).
 
 Every snapshot carries a checksum of its contents, and one that changed on the
 way here is refused rather than believed — a flipped bit leaves a structurally

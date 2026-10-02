@@ -42,6 +42,10 @@ tempfile = "3"
 # Verifying a download against the published SHA256SUMS. std has no hash,
 # and a self-update that installs what it did not check is not an update.
 sha2 = "0.10"
+# Not a new crate: scan-core already compiles it on every Unix. The CLI names
+# it for one thing, the signal handler `scan --ssh` needs so Ctrl-C ends in a
+# confirmed remote cleanup rather than in a dead process.
+libc = "0.2"
 
 # Agent (phase 2). HTTP+JSON was chosen over gRPC; see docs/DECISIONS.md K3.
 axum = "0.8"

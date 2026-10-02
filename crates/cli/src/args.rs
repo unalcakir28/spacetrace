@@ -94,9 +94,24 @@ pub struct PullArgs {
 
 #[derive(Args, Debug)]
 pub struct ScanArgs {
-    /// Path to scan
+    /// Path to scan (with --ssh, a path on that machine; relative paths start
+    /// at the remote home directory)
     #[arg(default_value = ".")]
     pub path: PathBuf,
+
+    /// Scan on another machine over ssh, with nothing installed there:
+    /// [user@]host, ssh://[user@]host[:port], or a Host from ~/.ssh/config
+    #[arg(long, value_name = "DESTINATION")]
+    pub ssh: Option<String>,
+
+    /// Pass an option to ssh as -o KEY=VALUE (repeatable)
+    #[arg(long = "ssh-option", value_name = "KEY=VALUE", requires = "ssh")]
+    pub ssh_option: Vec<String>,
+
+    /// Upload this spacetrace build instead of the published release of this
+    /// version (needed for a development build)
+    #[arg(long, value_name = "FILE", requires = "ssh")]
+    pub binary: Option<PathBuf>,
 
     /// Store the result in the database
     #[arg(long)]
@@ -330,6 +345,44 @@ pub fn parse_size(s: &str) -> anyhow::Result<u64> {
 }
 
 impl WalkArgs {
+    /// The same flags as command-line arguments, for a `scan` run elsewhere.
+    ///
+    /// Destructured rather than read field by field, so a flag added to
+    /// `WalkArgs` without being forwarded here is a compile error instead of
+    /// an option `scan --ssh` silently drops. Values go as `--flag=value`, so
+    /// an excluded name that starts with `-` stays a value.
+    pub fn to_args(&self) -> Vec<String> {
+        let WalkArgs {
+            exclude,
+            one_file_system,
+            depth,
+            no_dedupe,
+            no_clone_dedupe,
+            threads,
+            mount_timeout,
+        } = self;
+        let mut args: Vec<String> = exclude.iter().map(|n| format!("--exclude={n}")).collect();
+        if *one_file_system {
+            args.push("--one-file-system".into());
+        }
+        if let Some(depth) = depth {
+            args.push(format!("--depth={depth}"));
+        }
+        if *no_dedupe {
+            args.push("--no-dedupe".into());
+        }
+        if *no_clone_dedupe {
+            args.push("--no-clone-dedupe".into());
+        }
+        if let Some(threads) = threads {
+            args.push(format!("--threads={threads}"));
+        }
+        if let Some(secs) = mount_timeout {
+            args.push(format!("--mount-timeout={secs}"));
+        }
+        args
+    }
+
     pub fn to_options(&self) -> spacetrace_scan_core::ScanOptions {
         spacetrace_scan_core::ScanOptions {
             exclude_names: self.exclude.clone(),
@@ -378,6 +431,43 @@ mod tests {
     fn the_cli_definition_is_valid() {
         use clap::CommandFactory;
         Cli::command().debug_assert();
+    }
+
+    /// What `scan --ssh` forwards must parse back into exactly the flags it
+    /// came from, including a name that looks like an option.
+    #[test]
+    fn walk_flags_survive_the_trip_to_another_machine() {
+        #[derive(Parser)]
+        struct Wrap {
+            #[command(flatten)]
+            walk: WalkArgs,
+        }
+        let given = Wrap::parse_from([
+            "spacetrace",
+            "--exclude",
+            "node_modules",
+            "--exclude=-rf",
+            "--exclude",
+            "a b=c",
+            "-x",
+            "--depth",
+            "3",
+            "--no-dedupe",
+            "--no-clone-dedupe",
+            "--threads",
+            "2",
+            "--mount-timeout",
+            "0",
+        ])
+        .walk;
+
+        let mut again = vec!["spacetrace".to_string()];
+        again.extend(given.to_args());
+        let parsed = Wrap::parse_from(again).walk;
+        assert_eq!(format!("{parsed:?}"), format!("{given:?}"));
+
+        let none = Wrap::parse_from(["spacetrace"]).walk;
+        assert!(none.to_args().is_empty(), "defaults travel as nothing");
     }
 
     /// `0` is the escape hatch back to the old behaviour, so it has to mean
