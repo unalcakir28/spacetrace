@@ -308,6 +308,79 @@ fn the_encoding_is_pinned() {
     );
 }
 
+/// The digest proves the body is what the sender wrote, not that the sender
+/// wrote a tree. Somebody who can change the body can recompute the digest, so
+/// a broken arena with a correct digest has to be stopped by the structural
+/// check — before the import commits, or the receiving database holds a
+/// snapshot that every later read of it fails on.
+#[test]
+fn a_broken_arena_with_a_recomputed_digest_imports_nothing() {
+    let dir = fixture();
+    let work = tempfile::tempdir().unwrap();
+    let (sender, id) = stored(&dir, &work.path().join("sender.sqlite"));
+    let wire = work.path().join("wire.sqlite");
+    sender.export_snapshot(id, &wire).unwrap();
+
+    // The root's children now start past the end of the arena.
+    corrupt(
+        &wire,
+        "UPDATE entries SET children_start = 9999 WHERE id = 0",
+    );
+    reseal(&wire, id);
+    assert_eq!(
+        Store::open(&wire).unwrap().verify(id).unwrap(),
+        Integrity::Intact,
+        "the forged digest must pass, or this test proves nothing"
+    );
+
+    // A receiver that already holds something, so "unchanged" is a claim
+    // about real content and not about an empty file.
+    // Another host, so the import is not skipped as a duplicate of it.
+    let mut receiver = Store::open(work.path().join("receiver.sqlite")).unwrap();
+    let (tree, stats) = scan_fixture(&dir);
+    let existing = receiver.save(&tree, &stats, "receiver", None).unwrap();
+    let before = receiver.list().unwrap();
+
+    let refused = receiver.import_snapshot(&wire).unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("not a usable tree"),
+        "the error must say what went wrong: {refused:#}"
+    );
+    let after = receiver.list().unwrap();
+    assert_eq!(after.len(), before.len());
+    assert_eq!(after[0].id, existing);
+    receiver.load(existing).expect("what was there still loads");
+}
+
+/// The entry count in a snapshot is a memory hint read from a file that may
+/// have crossed a network. An absurd one must not abort the process.
+#[test]
+fn an_absurd_entry_count_is_only_a_hint() {
+    let dir = fixture();
+    let work = tempfile::tempdir().unwrap();
+    let path = work.path().join("db.sqlite");
+    let (store, id) = stored(&dir, &path);
+    drop(store);
+    corrupt(&path, "UPDATE scans SET files = 1099511627776");
+
+    let (tree, meta) = Store::open(&path).unwrap().load(id).unwrap();
+    assert_eq!(meta.files, 1 << 40);
+    assert_eq!(tree.total_size(), 1000 + 4096);
+}
+
+/// Write the digest the current content hashes to, as a forger would.
+fn reseal(path: &std::path::Path, id: ScanId) {
+    let store = Store::open(path).unwrap();
+    let Integrity::Mismatch { computed, .. } = store.verify(id).unwrap() else {
+        return;
+    };
+    drop(store);
+    corrupt(
+        path,
+        &format!("UPDATE scans SET content_hash = '{computed}' WHERE id = {id}"),
+    );
+}
+
 /// Reach past the API to damage a snapshot the way a bad cable would.
 fn corrupt(path: &std::path::Path, sql: &str) {
     let conn = Connection::open(path).unwrap();

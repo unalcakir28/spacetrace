@@ -247,46 +247,8 @@ impl Store {
         let meta = self
             .scan(scan_id)?
             .with_context(|| format!("no scan with id {scan_id}"))?;
-
-        let mut stmt = self.conn.prepare(
-            "SELECT parent_id, name, kind, size, alloc, mtime, nlink, files, dirs,
-                    children_start, children_len
-             FROM entries WHERE scan_id = ?1 ORDER BY id",
-        )?;
-        // Names are interned into the tree's shared arena as the rows arrive,
-        // so the assembler holds the only offsets and no caller can invent one.
-        let mut rows = stmt.query([scan_id])?;
-        let mut assembler = TreeAssembler::with_capacity(meta.files as usize + meta.dirs as usize);
-        while let Some(row) = rows.next()? {
-            let parent: Option<i64> = row.get(0)?;
-            let name: String = row.get(1)?;
-            assembler.push(StoredNode {
-                parent: parent.map_or(Tree::NO_PARENT, |p| p as u32),
-                name: &name,
-                kind: EntryKind::from_u8(row.get::<_, u8>(2)?),
-                size: row.get::<_, i64>(3)? as u64,
-                alloc: row.get::<_, i64>(4)? as u64,
-                // Not stored: a snapshot keeps subtree totals, and the entry's
-                // own share of them is only used while a live tree is being
-                // edited. Loading one back therefore reports zero here, which
-                // is pre-existing behaviour and not introduced by the arena.
-                own_size: 0,
-                own_alloc: 0,
-                mtime: row.get(5)?,
-                nlink: row.get::<_, i64>(6)? as u32,
-                files: row.get::<_, i64>(7)? as u32,
-                dirs: row.get::<_, i64>(8)? as u32,
-                children_start: row.get::<_, i64>(9)? as u32,
-                children_len: row.get::<_, i64>(10)? as u32,
-            });
-        }
-
-        // Checked rather than trusted: this same code path loads snapshots
-        // downloaded from an agent, and a malformed arena would panic on an
-        // out-of-range index or loop forever on a backwards child pointer.
-        let tree = assembler
-            .finish(PathBuf::from(&meta.root))
-            .map_err(|e| anyhow::anyhow!("scan {scan_id} is not a usable tree: {e}"))?;
+        let hint = meta.files.saturating_add(meta.dirs);
+        let tree = assemble(&self.conn, "main", scan_id, hint, &meta.root)?;
         Ok((tree, meta))
     }
 
@@ -534,6 +496,27 @@ impl Store {
                 );
             }
 
+            // And the structure, before anything is written. A digest says
+            // the body is what the sender meant, not that the sender meant a
+            // tree: whoever wrote the body can recompute it over a broken
+            // arena. Checking only on `load` would commit that snapshot first,
+            // and every later read of the database would trip over it.
+            // Only a hint, so a column that does not read as a number is no
+            // reason to refuse; the rows themselves are what gets checked.
+            let entries: u64 = tx
+                .query_row(
+                    "SELECT files, dirs FROM incoming.scans WHERE id = ?1",
+                    [source_id],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .map(|(f, d)| (f.max(0) as u64).saturating_add(d.max(0) as u64))
+                .unwrap_or(0);
+            if let Err(e) = assemble(&tx, "incoming", source_id, entries, &root) {
+                anyhow::bail!(
+                    "the snapshot of {root} from {host} is refused: {e}; nothing was imported"
+                );
+            }
+
             // `content_hash` travels with the row it describes. Leaving it
             // out would drop the digest at exactly the moment it stops being
             // recomputable: the receiver would hold a snapshot it can never
@@ -602,6 +585,66 @@ impl Store {
         tx.commit()?;
         Ok(removed)
     }
+}
+
+/// A memory hint is all the stored entry count is, and it comes from the file
+/// being read — which may have crossed a network. Unclamped, a scan claiming
+/// 2^40 files asks `with_capacity` for 72 TiB and aborts the process before a
+/// single row is read. Sixteen million entries is past any root measured here;
+/// a larger real one costs reallocations, not correctness.
+const MAX_CAPACITY_HINT: u64 = 1 << 24;
+
+/// Read one scan's rows from `schema` (`main`, or the alias of an ATTACHed
+/// file) and assemble them into a checked tree.
+///
+/// One function for `load` and for `import_snapshot`, so the check a snapshot
+/// passes on the way in is the same one it passes on every later read.
+fn assemble(
+    conn: &Connection,
+    schema: &str,
+    scan_id: ScanId,
+    entries_hint: u64,
+    root: &str,
+) -> Result<Tree> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT parent_id, name, kind, size, alloc, mtime, nlink, files, dirs,
+                children_start, children_len
+         FROM {schema}.entries WHERE scan_id = ?1 ORDER BY id"
+    ))?;
+    // Names are interned into the tree's shared arena as the rows arrive,
+    // so the assembler holds the only offsets and no caller can invent one.
+    let mut rows = stmt.query([scan_id])?;
+    let mut assembler = TreeAssembler::with_capacity(entries_hint.min(MAX_CAPACITY_HINT) as usize);
+    while let Some(row) = rows.next()? {
+        let parent: Option<i64> = row.get(0)?;
+        let name: String = row.get(1)?;
+        assembler.push(StoredNode {
+            parent: parent.map_or(Tree::NO_PARENT, |p| p as u32),
+            name: &name,
+            kind: EntryKind::from_u8(row.get::<_, u8>(2)?),
+            size: row.get::<_, i64>(3)? as u64,
+            alloc: row.get::<_, i64>(4)? as u64,
+            // Not stored: a snapshot keeps subtree totals, and the entry's
+            // own share of them is only used while a live tree is being
+            // edited. Loading one back therefore reports zero here, which
+            // is pre-existing behaviour and not introduced by the arena.
+            own_size: 0,
+            own_alloc: 0,
+            mtime: row.get(5)?,
+            nlink: row.get::<_, i64>(6)? as u32,
+            files: row.get::<_, i64>(7)? as u32,
+            dirs: row.get::<_, i64>(8)? as u32,
+            children_start: row.get::<_, i64>(9)? as u32,
+            children_len: row.get::<_, i64>(10)? as u32,
+        });
+    }
+
+    // Checked rather than trusted: this same code path loads snapshots
+    // downloaded from an agent, and a malformed arena would panic on an
+    // out-of-range index or loop forever on a backwards child pointer.
+    assembler
+        .finish(PathBuf::from(root))
+        .map_err(|e| anyhow::anyhow!("scan {scan_id} is not a usable tree: {e}"))
 }
 
 /// Compare the stored digest of one scan against the content beside it.

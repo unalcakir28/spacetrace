@@ -33,3 +33,8 @@ notify.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+[dev-dependencies]
+# Not a new crate: the store builds it. The tests reach past the API with it
+# to forge the snapshot a hostile sender would send.
+rusqlite.workspace = true
