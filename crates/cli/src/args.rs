@@ -77,7 +77,7 @@ pub struct WatchArgs {
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
-    /// Seconds between refreshes (fractions allowed, e.g. 0.5)
+    /// Seconds between refreshes, 0.1 to 3600 (fractions allowed, e.g. 0.5)
     #[arg(long, default_value = "2", value_name = "SECONDS", value_parser = parse_interval)]
     pub interval: std::time::Duration,
 
@@ -101,9 +101,11 @@ fn parse_interval(s: &str) -> anyhow::Result<std::time::Duration> {
         .trim()
         .parse()
         .map_err(|_| anyhow::anyhow!("cannot parse seconds: {s:?} (e.g. 2, 0.5)"))?;
+    // Bounded above too: `from_secs_f64` panics on what does not fit a
+    // `Duration`, and an hour between frames is already no longer "live".
     anyhow::ensure!(
-        secs.is_finite() && secs >= 0.1,
-        "the interval must be at least 0.1 seconds, not {s:?}"
+        secs.is_finite() && (0.1..=3600.0).contains(&secs),
+        "the interval must be between 0.1 and 3600 seconds, not {s:?}"
     );
     Ok(std::time::Duration::from_secs_f64(secs))
 }
@@ -533,6 +535,7 @@ impl WalkArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn sizes_accept_units() {
@@ -541,6 +544,17 @@ mod tests {
         assert_eq!(parse_size("10M").unwrap(), 10 * 1024 * 1024);
         assert_eq!(parse_size("1.5G").unwrap(), 1610612736);
         assert_eq!(parse_size(" 2g ").unwrap(), 2 * 1024 * 1024 * 1024);
+    }
+
+    /// `Duration::from_secs_f64` panics past `u64::MAX` seconds, so a typo
+    /// like `1e20` used to abort the command instead of being refused.
+    #[test]
+    fn an_interval_is_refused_outside_its_bounds_rather_than_panicking() {
+        assert_eq!(parse_interval("0.5").unwrap(), Duration::from_millis(500));
+        assert_eq!(parse_interval("3600").unwrap(), Duration::from_secs(3600));
+        for bad in ["1e20", "3601", "inf", "NaN", "0.05", "-1", "two"] {
+            assert!(parse_interval(bad).is_err(), "{bad:?} was accepted");
+        }
     }
 
     #[test]

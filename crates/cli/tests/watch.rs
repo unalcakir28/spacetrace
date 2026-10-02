@@ -89,6 +89,26 @@ impl Watch {
     }
 }
 
+/// The watch's own check, a full rescan, runs at most once a minute
+/// (`VERIFY_FLOOR`); a frame from before then shows what the events alone
+/// found.
+const BEFORE_THE_CHECK: Duration = Duration::from_secs(50);
+
+impl Watch {
+    /// [`Watch::until`], for a change the events must find on their own. The
+    /// periodic full rescan would put a missed one right within a minute,
+    /// inside [`PATIENCE`], and a test that waits that long proves nothing.
+    fn until_seen_by_events(&mut self, what: &str, ok: impl Fn(&Value) -> bool) -> Value {
+        let frame = self.until(what, ok);
+        let at = Duration::from_millis(frame["elapsed_ms"].as_u64().unwrap());
+        assert!(
+            at < BEFORE_THE_CHECK,
+            "{what} showed only after {at:?}, which is the periodic rescan's doing, not an event's"
+        );
+        frame
+    }
+}
+
 /// A root under the target directory rather than the system temp dir, which
 /// on macOS sits behind a symlink and on some CI images on a filesystem whose
 /// events are not delivered.
@@ -235,6 +255,100 @@ fn an_excluded_folder_never_shows_its_growth() {
         !later.to_string().contains("node_modules"),
         "an excluded folder is never a row: {later}"
     );
+}
+
+/// A folder removed and made again under the same name is a new folder. On
+/// inotify its watch, and every watch below it, went with the old one, so
+/// unless the watch notices, nothing written into it is ever seen again.
+#[test]
+fn a_folder_deleted_and_made_again_is_still_watched() {
+    let (_dir, root) = root();
+    write(&root.join("build/old.o"), 1_000);
+    write(&root.join("build/sub/old.o"), 1_000);
+    let mut watch = Watch::start(&root, &[]);
+
+    std::fs::remove_dir_all(root.join("build")).unwrap();
+    std::fs::create_dir(root.join("build")).unwrap();
+    // Wait until the recreated folder has been taken in before writing, so
+    // the write cannot ride on the same tick as the recreate.
+    watch.until("build/ emptied", |f| delta(f) == -2_000);
+    write(&root.join("build/new.bin"), 5_000_000);
+    write(&root.join("build/sub2/deeper.bin"), 1_000_000);
+
+    let frame = watch.until_seen_by_events("the writes into the new build/", |f| {
+        delta(f) == 6_000_000 - 2_000
+    });
+    assert_eq!(
+        row(&frame, "build"),
+        Some(("grown".into(), 6_000_000 - 2_000))
+    );
+    assert_eq!(frame["unwatched"], 0);
+}
+
+/// Renamed away and straight back: the same folder, the same inode, and on
+/// inotify no watch any more.
+#[test]
+fn a_folder_renamed_away_and_back_is_still_watched() {
+    let (_dir, root) = root();
+    write(&root.join("d/f"), 10);
+    write(&root.join("d/inner/f"), 10);
+    let mut watch = Watch::start(&root, &[]);
+
+    std::fs::rename(root.join("d"), root.join("d2")).unwrap();
+    std::fs::rename(root.join("d2"), root.join("d")).unwrap();
+    // A marker elsewhere, so the renames are known to have been handled.
+    write(&root.join("marker/m"), 1);
+    watch.until("the marker", |f| row(f, "marker").is_some());
+    write(&root.join("d/big"), 4_000_000);
+    write(&root.join("d/inner/big"), 1_000_000);
+
+    let frame = watch.until_seen_by_events("5 000 000 more under d", |f| {
+        row(f, "d") == Some(("grown".into(), 5_000_000))
+    });
+    assert_eq!(delta(&frame), 5_000_001);
+}
+
+/// A folder replaced by another of the same name — what `npm install` and
+/// most deploys do — holds what the new one holds, not what the old one did.
+#[test]
+fn a_folder_swapped_for_another_of_the_same_name_shows_the_new_contents() {
+    let (_dir, root) = root();
+    let (_staging, staging) = self::root();
+    write(&root.join("app/v1.bin"), 2_000_000);
+    write(&staging.join("new/v2.bin"), 6_000_000);
+    write(&staging.join("new/lib/v2.so"), 1_000_000);
+    let mut watch = Watch::start(&root, &[]);
+
+    std::fs::rename(root.join("app"), root.join("app.old")).unwrap();
+    std::fs::rename(staging.join("new"), root.join("app")).unwrap();
+
+    let frame = watch.until_seen_by_events("the new app/ and the old one beside it", |f| {
+        delta(f) == 7_000_000
+    });
+    assert_eq!(row(&frame, "app"), Some(("grown".into(), 5_000_000)));
+    assert_eq!(row(&frame, "app.old"), Some(("added".into(), 2_000_000)));
+}
+
+/// Names that are not UTF-8 are legal on Linux, and the bytes in them count.
+#[cfg(target_os = "linux")]
+#[test]
+fn folders_whose_names_are_not_utf8_are_watched_like_any_other() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let (_dir, root) = root();
+    let odd = root.join(OsStr::from_bytes(b"\xffx"));
+    write(&odd.join("f"), 10);
+    let mut watch = Watch::start(&root, &[]);
+
+    write(&odd.join("grows"), 3_000_000);
+    write(
+        &root.join(OsStr::from_bytes(b"\xfenew")).join("f"),
+        2_000_000,
+    );
+
+    let frame =
+        watch.until_seen_by_events("both non-UTF-8 folders counted", |f| delta(f) == 5_000_000);
+    assert_eq!(frame["unwatched"], 0);
 }
 
 #[test]

@@ -24,12 +24,15 @@
 //! away, so the watch counts every clone at its own size — `--no-clone-dedupe`
 //! semantics, said in the output — rather than charge some and not others.
 
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use spacetrace_scan_core::{
-    scan, EntryKind, FileIdentity, NodeId, RawMeta, ScanOptions, ScanStats, Tree,
+    scan, with_deadline, EntryKind, FileIdentity, Mounts, NodeId, RawMeta, ScanOptions, ScanStats,
+    Tree,
 };
 
 pub(crate) type DirId = u32;
@@ -60,7 +63,11 @@ const BASELINE: u8 = 2;
 const SHARED: u8 = 4;
 
 struct Dir {
-    name: Box<str>,
+    /// The name as the filesystem has it, not as the tree prints it. The tree
+    /// keeps names lossily, and a path rebuilt from a lossy name names a file
+    /// that does not exist — so a folder called `\xffx` on Linux could never
+    /// be listed again. Same 16 bytes as the `Box<str>` it replaces.
+    name: Box<OsStr>,
     parent: DirId,
     /// Tracked subdirectories, sorted by name. A directory that went away stays
     /// here, absent, so that the space it held is reported as gone rather than
@@ -104,6 +111,10 @@ impl Dir {
 pub(crate) enum Refusal {
     /// A hardlinked file was met, at the path given.
     Hardlinks(PathBuf),
+    /// A folder whose name the tree only keeps lossily, and which more than
+    /// one real name fits, so it cannot be listed on its own. Only a full scan,
+    /// which walks the real names, counts it.
+    Unnamed(PathBuf),
 }
 
 /// What one update did.
@@ -162,6 +173,9 @@ pub(crate) struct Model {
     root: PathBuf,
     opts: ScanOptions,
     root_dev: u64,
+    /// The mount table, read without blocking. A folder in it is approached
+    /// the way the scanner approaches one: on a thread that can be abandoned.
+    mounts: Mounts,
     dirs: Vec<Dir>,
     /// Unreadable paths, by name, at most [`MAX_SAMPLES`].
     samples: Vec<(PathBuf, String)>,
@@ -209,6 +223,79 @@ pub(crate) fn device_of(path: &Path) -> Option<u64> {
     Some(meta.dev)
 }
 
+/// The mount table, when the walk consults one: exactly when `scan` does.
+pub(crate) fn read_mounts(opts: &ScanOptions) -> Mounts {
+    match opts.mount_timeout {
+        Some(_) => Mounts::read(),
+        None => Mounts::none(),
+    }
+}
+
+/// `lstat` of a folder that may be a mount point, with the scanner's patience.
+///
+/// `None` when it did not answer in time, or could not be read: either way it
+/// is not a folder to enter. A folder that is not in the table is asked
+/// directly, as the walk asks it — only a boundary can belong to a server that
+/// has gone.
+pub(crate) fn probe(opts: &ScanOptions, mounts: &Mounts, path: &Path) -> Option<std::fs::Metadata> {
+    let Some(limit) = opts.mount_timeout.filter(|_| mounts.contains(path)) else {
+        return std::fs::symlink_metadata(path).ok();
+    };
+    let owned = path.to_path_buf();
+    with_deadline(limit, move || std::fs::symlink_metadata(&owned))?.ok()
+}
+
+/// The device a folder lives on, read through [`probe`].
+pub(crate) fn device_through(opts: &ScanOptions, mounts: &Mounts, path: &Path) -> Option<u64> {
+    let md = probe(opts, mounts, path)?;
+    let (meta, _) = RawMeta::for_path(path, &md, FileIdentity::Needed);
+    Some(meta.dev)
+}
+
+/// The real names in `dir` that a lossy name stands for, for the names that
+/// lost something. Read only when a listing holds such a name, which on
+/// anything but an old Linux disk is never.
+fn real_names(dir: &Path) -> HashMap<String, Vec<OsString>> {
+    let mut map: HashMap<String, Vec<OsString>> = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return map;
+    };
+    for entry in entries.flatten() {
+        let real = entry.file_name();
+        let lossy = real.to_string_lossy();
+        if lossy.contains('\u{FFFD}') {
+            map.entry(lossy.into_owned()).or_default().push(real);
+        }
+    }
+    map
+}
+
+/// Turns the tree's lossy names back into real ones, one directory at a time.
+struct Names<'a> {
+    dir: &'a Path,
+    lossy: Option<HashMap<String, Vec<OsString>>>,
+}
+
+impl<'a> Names<'a> {
+    fn new(dir: &'a Path) -> Self {
+        Names { dir, lossy: None }
+    }
+
+    /// The real name behind `name`, or `None` when more than one fits (or
+    /// none does any more).
+    fn real(&mut self, name: &str) -> Option<OsString> {
+        if !name.contains('\u{FFFD}') {
+            return Some(OsString::from(name));
+        }
+        let dir = self.dir;
+        let map = self.lossy.get_or_insert_with(|| real_names(dir));
+        match map.get(name).map(Vec::as_slice) {
+            Some([only]) => Some(only.clone()),
+            _ => None,
+        }
+    }
+}
+
 fn hardlinked(tree: &Tree, id: NodeId) -> bool {
     let n = tree.node(id);
     n.kind == EntryKind::File && n.nlink > 1
@@ -222,10 +309,11 @@ impl Model {
         let now = Instant::now();
         let mut model = Model {
             root,
+            mounts: read_mounts(&opts),
             opts,
             root_dev,
             dirs: vec![Dir {
-                name: Box::from(""),
+                name: Box::from(OsStr::new("")),
                 parent: ROOT,
                 children: Vec::new(),
                 depth: 0,
@@ -318,11 +406,47 @@ impl Model {
         let mut cur = id;
         while cur != ROOT {
             let d = &self.dirs[cur as usize];
-            parts.push(&*d.name);
+            parts.push(d.name.to_string_lossy());
             cur = d.parent;
         }
         parts.reverse();
         parts.join("/")
+    }
+
+    /// The tracked folder at exactly `path`, if there is one.
+    pub(crate) fn dir_at(&self, path: &Path) -> Option<DirId> {
+        let id = self.locate(path, true)?;
+        let rel = path.strip_prefix(&self.root).ok()?;
+        (rel.components().count() == self.depth(id)).then_some(id)
+    }
+
+    /// Every tracked folder at or below `id`, with its path, built on the way
+    /// down (D6).
+    pub(crate) fn subtree_paths(&self, id: DirId) -> Vec<(DirId, PathBuf)> {
+        let mut out = Vec::new();
+        let mut stack = vec![(id, self.path(id))];
+        while let Some((id, path)) = stack.pop() {
+            let d = &self.dirs[id as usize];
+            if !d.has(PRESENT) {
+                continue;
+            }
+            for &c in &d.children {
+                stack.push((c, path.join(&*self.dirs[c as usize].name)));
+            }
+            out.push((id, path));
+        }
+        out
+    }
+
+    /// Hand every tracked folder at or below `id` to the watcher again: what
+    /// was under a folder that was replaced or renamed back has lost its
+    /// watches on inotify, whatever the folder's name says.
+    pub(crate) fn announce_subtree(&mut self, id: DirId) {
+        if !self.announce {
+            return;
+        }
+        let all = self.subtree_paths(id);
+        self.new_dirs.extend(all);
     }
 
     /// Records that became tracked since the last call, with their paths.
@@ -348,8 +472,7 @@ impl Model {
         }
         let mut cur = ROOT;
         for part in parts {
-            let name = part.as_os_str().to_string_lossy();
-            match self.child(cur, &name) {
+            match self.child(cur, part.as_os_str()) {
                 Some(next) if self.dirs[next as usize].has(PRESENT) => cur = next,
                 _ => break,
             }
@@ -357,7 +480,7 @@ impl Model {
         Some(cur)
     }
 
-    fn child(&self, parent: DirId, name: &str) -> Option<DirId> {
+    fn child(&self, parent: DirId, name: &OsStr) -> Option<DirId> {
         let children = &self.dirs[parent as usize].children;
         children
             .binary_search_by(|&c| (*self.dirs[c as usize].name).cmp(name))
@@ -365,49 +488,69 @@ impl Model {
             .map(|i| children[i])
     }
 
-    /// The record for `name` under `parent`, created or brought back if need
-    /// be. A new or returning directory is announced through `new_dirs`.
-    fn ensure_child(&mut self, parent: DirId, name: &str, path: &Path) -> DirId {
-        let pos = self.dirs[parent as usize]
-            .children
-            .binary_search_by(|&c| (*self.dirs[c as usize].name).cmp(name));
-        let id = match pos {
-            Ok(i) => {
-                let id = self.dirs[parent as usize].children[i];
-                if self.dirs[id as usize].has(PRESENT) {
-                    return id;
+    /// The records for these folders under `parent`, created or brought back
+    /// as need be; a new or returning one is announced through `new_dirs`.
+    ///
+    /// A batch, because one folder can hold tens of thousands of others:
+    /// finding each against the children that were already sorted and sorting
+    /// once at the end is `n log n`, where inserting each in place was a
+    /// shift of the whole list per folder (40k of them: 9.5 s, measured).
+    fn adopt(&mut self, parent: DirId, wanted: Vec<(OsString, PathBuf)>) -> Vec<DirId> {
+        let known = self.dirs[parent as usize].children.len();
+        let depth = self.dirs[parent as usize].depth + 1;
+        let mut ids = Vec::with_capacity(wanted.len());
+        let mut added = false;
+        for (name, path) in wanted {
+            let found = self.dirs[parent as usize].children[..known]
+                .binary_search_by(|&c| (*self.dirs[c as usize].name).cmp(&*name))
+                .ok()
+                .map(|i| self.dirs[parent as usize].children[i]);
+            let id = match found {
+                Some(id) if self.dirs[id as usize].has(PRESENT) => {
+                    ids.push(id);
+                    continue;
                 }
-                self.dirs[id as usize].set(PRESENT, true);
-                id
+                Some(id) => {
+                    self.dirs[id as usize].set(PRESENT, true);
+                    id
+                }
+                None => {
+                    let id = self.dirs.len() as DirId;
+                    self.dirs.push(Dir {
+                        name: name.into_boxed_os_str(),
+                        parent,
+                        children: Vec::new(),
+                        depth,
+                        flags: PRESENT,
+                        direct_size: 0,
+                        direct_alloc: 0,
+                        own_alloc: 0,
+                        size: 0,
+                        alloc: 0,
+                        base_size: 0,
+                        base_alloc: 0,
+                        // It did not exist at either mark, so it held nothing.
+                        marks: [0; 2],
+                        errors: 0,
+                    });
+                    self.dirs[parent as usize].children.push(id);
+                    added = true;
+                    id
+                }
+            };
+            if self.announce {
+                self.new_dirs.push((id, path));
             }
-            Err(i) => {
-                let id = self.dirs.len() as DirId;
-                let depth = self.dirs[parent as usize].depth + 1;
-                self.dirs.push(Dir {
-                    name: Box::from(name),
-                    parent,
-                    children: Vec::new(),
-                    depth,
-                    flags: PRESENT,
-                    direct_size: 0,
-                    direct_alloc: 0,
-                    own_alloc: 0,
-                    size: 0,
-                    alloc: 0,
-                    base_size: 0,
-                    base_alloc: 0,
-                    // It did not exist at either mark, so it held nothing.
-                    marks: [0; 2],
-                    errors: 0,
-                });
-                self.dirs[parent as usize].children.insert(i, id);
-                id
-            }
-        };
-        if self.announce {
-            self.new_dirs.push((id, path.to_path_buf()));
+            ids.push(id);
         }
-        id
+        if added {
+            let mut children = std::mem::take(&mut self.dirs[parent as usize].children);
+            children.sort_unstable_by(|&a, &b| {
+                self.dirs[a as usize].name.cmp(&self.dirs[b as usize].name)
+            });
+            self.dirs[parent as usize].children = children;
+        }
+        ids
     }
 
     /// Whether the scanner would descend into this directory of a listing.
@@ -426,8 +569,12 @@ impl Model {
     }
 
     /// The one-file-system rule, for a directory the model has not met.
+    ///
+    /// Through [`probe`]: a folder on another device is a mount point, and a
+    /// mount point may belong to a server that has stopped answering — an
+    /// `lstat` there would hang the whole watch (invariant 7).
     fn same_device(&self, path: &Path) -> bool {
-        device_of(path).is_some_and(|dev| dev == self.root_dev)
+        device_through(&self.opts, &self.mounts, path).is_some_and(|dev| dev == self.root_dev)
     }
 
     /// Write a scan of `at`'s whole subtree into the model.
@@ -441,34 +588,46 @@ impl Model {
             let depth = self.depth(m) + 1;
             let mut direct = (0u64, 0u64);
             let mut shared = false;
-            let mut seen = Vec::new();
+            let mut names = Names::new(&path);
+            let mut wanted = Vec::new();
+            let mut nodes = Vec::new();
             for c in tree.children(t) {
                 let n = tree.node(c);
                 let name = tree.name(c);
-                let child_path = path.join(name);
-                let known = self.child(m, name).is_some();
-                if n.is_dir() && self.tracks(depth, name, &child_path, known, n.children_len > 0) {
-                    let id = self.ensure_child(m, name, &child_path);
-                    seen.push(id);
-                    stack.push((c, id, child_path));
-                    continue;
+                // A folder no single real name fits is counted here, whole,
+                // from what the scan found — right for this scan; a listing
+                // of `m` that meets it again refuses (`Refusal::Unnamed`).
+                let real = n.is_dir().then(|| names.real(name)).flatten();
+                if let Some(real) = real {
+                    let child_path = path.join(&real);
+                    let known = self.child(m, &real).is_some();
+                    if self.tracks(depth, name, &child_path, known, n.children_len > 0) {
+                        wanted.push((real, child_path));
+                        nodes.push(c);
+                        continue;
+                    }
                 }
                 direct.0 += n.size;
                 direct.1 += n.alloc;
                 shared |= self.opts.dedupe_hardlinks && hardlinked(tree, c);
+            }
+            let paths: Vec<PathBuf> = wanted.iter().map(|w| w.1.clone()).collect();
+            let ids = self.adopt(m, wanted);
+            for ((id, c), child_path) in ids.iter().zip(nodes).zip(paths) {
+                stack.push((c, *id, child_path));
             }
             let d = &mut self.dirs[m as usize];
             d.own_alloc = tree.node(t).own_alloc;
             d.direct_size = direct.0;
             d.direct_alloc = direct.1;
             d.set(SHARED, shared);
-            self.drop_unseen(m, &seen);
+            self.drop_unseen(m, &ids.into_iter().collect());
         }
         self.record_errors(stats, at);
     }
 
     /// Mark every tracked child of `m` that is not in `seen` as gone.
-    fn drop_unseen(&mut self, m: DirId, seen: &[DirId]) {
+    fn drop_unseen(&mut self, m: DirId, seen: &HashSet<DirId>) {
         let gone: Vec<DirId> = self.dirs[m as usize]
             .children
             .iter()
@@ -549,26 +708,45 @@ impl Model {
         let (listing, stats) = scan(&path, self.shallow_options(), Arc::default())?;
         let top = listing.root();
 
-        let mut refused = self.dirs[id as usize].has(SHARED).then(|| path.clone());
-        let mut seen = Vec::new();
+        // One pass over the listing, deciding everything and writing nothing:
+        // a refusal must leave the model as it was.
+        let mut refused = self.dirs[id as usize]
+            .has(SHARED)
+            .then(|| Refusal::Hardlinks(path.clone()));
+        let mut names = Names::new(&path);
+        let mut direct = (0u64, 0u64);
+        let mut seen: HashSet<DirId> = HashSet::new();
+        let mut own_allocs = Vec::new();
         let mut fresh = Vec::new();
         for c in listing.children(top) {
             let n = listing.node(c);
             let name = listing.name(c);
             if self.opts.dedupe_hardlinks && hardlinked(&listing, c) {
-                refused.get_or_insert_with(|| path.join(name));
+                refused.get_or_insert_with(|| Refusal::Hardlinks(path.join(name)));
             }
-            if !n.is_dir() {
+            let real = match n.is_dir() && descends(&self.opts, depth, name) {
+                true => names.real(name),
+                false => None,
+            };
+            let Some(real) = real else {
+                if n.is_dir() && descends(&self.opts, depth, name) {
+                    refused.get_or_insert_with(|| Refusal::Unnamed(path.join(name)));
+                }
+                direct.0 += n.size;
+                direct.1 += n.alloc;
                 continue;
-            }
-            let child_path = path.join(name);
-            let known = self.child(id, name);
-            let present = known.is_some_and(|k| self.dirs[k as usize].has(PRESENT));
+            };
+            let child_path = path.join(&real);
+            let known = self.child(id, &real);
             if !self.tracks(depth, name, &child_path, known.is_some(), false) {
+                direct.0 += n.size;
+                direct.1 += n.alloc;
                 continue;
             }
-            if let Some(k) = known.filter(|_| present) {
-                seen.push(k);
+            if let Some(k) = known.filter(|&k| self.dirs[k as usize].has(PRESENT)) {
+                seen.insert(k);
+                // The parent's listing is where a folder's own blocks are read.
+                own_allocs.push((k, n.own_alloc));
                 continue;
             }
             // Gone between the listing and this scan: a later event says so.
@@ -578,10 +756,10 @@ impl Model {
             };
             if self.opts.dedupe_hardlinks {
                 if let Some(at) = tree.iter().find(|&n| hardlinked(&tree, n)) {
-                    refused.get_or_insert_with(|| tree.path(at));
+                    refused.get_or_insert_with(|| Refusal::Hardlinks(tree.path(at)));
                 }
             }
-            fresh.push((name.to_string(), child_path, tree, stats));
+            fresh.push((real, child_path, tree, stats));
         }
         let vanished: Vec<DirId> = self.dirs[id as usize]
             .children
@@ -591,35 +769,18 @@ impl Model {
             .collect();
         if refused.is_none() {
             if let Some(&v) = vanished.iter().find(|&&v| self.subtree_shares(v)) {
-                refused = Some(self.path(v));
+                refused = Some(Refusal::Hardlinks(self.path(v)));
             }
         }
-        if let Some(at) = refused {
+        if let Some(refusal) = refused {
             return Ok(Update {
-                refused: Some(Refusal::Hardlinks(at)),
+                refused: Some(refusal),
             });
         }
 
-        // Accepted: this directory's own entries, then each new subtree.
-        let mut direct = (0u64, 0u64);
-        for c in listing.children(top) {
-            let n = listing.node(c);
-            let name = listing.name(c);
-            let tracked = n.is_dir()
-                && (self.child(id, name).is_some_and(|k| seen.contains(&k))
-                    || fresh.iter().any(|f| f.0 == name));
-            if tracked {
-                continue;
-            }
-            direct.0 += n.size;
-            direct.1 += n.alloc;
-        }
-        for &k in &seen {
-            // The parent's listing is where a directory's own blocks are read.
-            let name = self.dirs[k as usize].name.clone();
-            if let Some(c) = listing.children(top).find(|&c| listing.name(c) == &*name) {
-                self.dirs[k as usize].own_alloc = listing.node(c).own_alloc;
-            }
+        // Accepted: this folder's own entries, then each new subtree.
+        for (k, own_alloc) in own_allocs {
+            self.dirs[k as usize].own_alloc = own_alloc;
         }
         let d = &mut self.dirs[id as usize];
         d.own_alloc = listing.node(top).own_alloc;
@@ -632,8 +793,9 @@ impl Model {
         self.forget_own_errors(id, &path);
         self.dirs[id as usize].errors = u32::try_from(stats.errors).unwrap_or(u32::MAX);
         self.keep_samples(&stats);
-        for (name, child_path, tree, stats) in fresh {
-            let k = self.ensure_child(id, &name, &child_path);
+        let wanted = fresh.iter().map(|f| (f.0.clone(), f.1.clone())).collect();
+        let ids = self.adopt(id, wanted);
+        for (k, (_, _, tree, stats)) in ids.into_iter().zip(fresh) {
             self.absorb(&tree, &stats, k);
         }
         Ok(Update::default())
@@ -661,6 +823,9 @@ impl Model {
     /// right, whatever the events missed — this is the fallback every other
     /// path in the watch ends in.
     pub(crate) fn resync(&mut self, tree: &Tree, stats: &ScanStats) {
+        // Read again with every full scan, which reads it too: a share
+        // mounted since the start is a boundary like any other.
+        self.mounts = read_mounts(&self.opts);
         self.absorb(tree, stats, ROOT);
     }
 
@@ -733,9 +898,10 @@ impl Model {
                 if delta.unsigned_abs() < min {
                     continue;
                 }
+                let name = d.name.to_string_lossy();
                 let path = match prefix.is_empty() {
-                    true => d.name.to_string(),
-                    false => format!("{prefix}/{}", d.name),
+                    true => name.into_owned(),
+                    false => format!("{prefix}/{name}"),
                 };
                 let kind = match (d.has(BASELINE), d.has(PRESENT)) {
                     (false, _) => MoverKind::Added,
@@ -821,15 +987,19 @@ impl Model {
     }
 
     /// Drop what a long watch leaves behind: directories that came and went
-    /// and were never part of the baseline. Ids change, so only between ticks.
-    pub(crate) fn compact_if_worth_it(&mut self) {
+    /// and were never part of the baseline.
+    ///
+    /// Ids change, so the old-to-new map is handed back — `DirId::MAX` for a
+    /// record that was dropped — and whatever the caller holds by id must go
+    /// through it. `None` when nothing moved.
+    pub(crate) fn compact_if_worth_it(&mut self) -> Option<Vec<DirId>> {
         let dead = self
             .dirs
             .iter()
             .filter(|d| !d.has(PRESENT) && !d.has(BASELINE))
             .count();
         if dead < 1024 || dead < self.dirs.len() / 2 {
-            return;
+            return None;
         }
         let old = std::mem::take(&mut self.dirs);
         let mut remap = vec![DirId::MAX; old.len()];
@@ -863,10 +1033,16 @@ impl Model {
                 .collect();
             self.dirs.push(d);
         }
-        // Pending announcements name old ids; they are re-announced by path.
-        for (id, _) in &mut self.new_dirs {
-            *id = remap.get(*id as usize).copied().unwrap_or(ROOT);
-        }
+        // Announcements name old ids. One whose record was dropped is a
+        // folder that came and went before anyone watched it: nothing to do.
+        self.new_dirs = std::mem::take(&mut self.new_dirs)
+            .into_iter()
+            .filter_map(|(id, path)| {
+                let new = remap.get(id as usize).copied()?;
+                (new != DirId::MAX).then_some((new, path))
+            })
+            .collect();
+        Some(remap)
     }
 
     fn forget_errors_under(&mut self, at: DirId) {
@@ -929,9 +1105,9 @@ impl Model {
             }
             out.push((path.clone(), d.size, d.alloc));
             for &c in &d.children {
-                let name = &self.dirs[c as usize].name;
+                let name = self.dirs[c as usize].name.to_string_lossy();
                 let child = match path.is_empty() {
-                    true => name.to_string(),
+                    true => name.into_owned(),
                     false => format!("{path}/{name}"),
                 };
                 stack.push((c, child));
@@ -1483,5 +1659,27 @@ mod tests {
             after, at_start,
             "listed twice more, still one unreadable folder"
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn tmp_bench_wide_relist() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = &dir.path().canonicalize().unwrap();
+        for i in 0..40_000 {
+            fs::create_dir(root.join(format!("d{i}"))).unwrap();
+        }
+        let (mut model, _) = start(root, opts());
+        write(&root.join("f"), 10);
+        let t = Instant::now();
+        model.relist(ROOT).unwrap();
+        eprintln!("TMPBENCH relist of 40000 subfolders: {:?}", t.elapsed());
+        fs::create_dir(root.join("zz-new")).unwrap();
+        for i in 0..std::env::var("TMPN").map_or(20_000, |v| v.parse().unwrap()) {
+            fs::create_dir(root.join(format!("n{i}"))).unwrap();
+        }
+        let t = Instant::now();
+        model.relist(ROOT).unwrap();
+        eprintln!("TMPBENCH relist adding 20001 subfolders: {:?}", t.elapsed());
     }
 }

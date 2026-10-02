@@ -29,11 +29,13 @@ mod model;
 use std::collections::HashSet;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use notify::event::ModifyKind;
 use notify::{EventKind, RecursiveMode, Watcher, WatcherKind};
 use spacetrace_scan_core::{capacity_of, scan, ScanOptions, ScanStats, Tree};
 
@@ -47,6 +49,15 @@ const VERIFY_FLOOR: Duration = Duration::from_secs(60);
 
 /// How many recent notes the screen keeps under the table.
 const NOTES_SHOWN: usize = 3;
+
+/// How many events may wait between the watcher and this loop. Bounded,
+/// because the kernel's own queue overflowing is the backends' only way of
+/// saying "too fast", and an unbounded channel in between swallows that
+/// signal and grows instead — through a long full rescan with a build writing
+/// beside it, without limit. Past this the events are dropped and counted as
+/// a loss, which a full rescan puts right. A few hundred bytes each, so this
+/// is a few megabytes at the most.
+const EVENT_QUEUE: usize = 1 << 16;
 
 type EventResult = notify::Result<notify::Event>;
 
@@ -65,8 +76,9 @@ pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
     // The watcher starts before the first scan, so that whatever changes while
     // the scan runs is reported rather than missed. It is reconciled with the
     // scan's result straight after.
-    let (tx, rx) = mpsc::channel::<EventResult>();
-    let mut events = Events::start(&root, tx)?;
+    let (tx, rx) = mpsc::sync_channel::<EventResult>(EVENT_QUEUE);
+    let overflowed = Arc::new(AtomicBool::new(false));
+    let mut events = Events::start(&root, tx, Arc::clone(&overflowed))?;
     let prewatched = match events.per_dir {
         true => events.watch_tree(&root, &opts)?,
         false => HashSet::new(),
@@ -82,6 +94,7 @@ pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
         model,
         events,
         rx,
+        overflowed,
         pending: Pending::default(),
         interval: a.interval,
         min: a.min.max(1),
@@ -131,8 +144,18 @@ struct Events {
 }
 
 impl Events {
-    fn start(root: &Path, tx: mpsc::Sender<EventResult>) -> Result<Events> {
-        let watcher = notify::recommended_watcher(tx).map_err(|e| explain(e, root, None))?;
+    fn start(
+        root: &Path,
+        tx: SyncSender<EventResult>,
+        overflowed: Arc<AtomicBool>,
+    ) -> Result<Events> {
+        let handler = move |event: EventResult| {
+            // Disconnected is the session ending; nothing left to tell.
+            if let Err(TrySendError::Full(_)) = tx.try_send(event) {
+                overflowed.store(true, Ordering::Relaxed);
+            }
+        };
+        let watcher = notify::recommended_watcher(handler).map_err(|e| explain(e, root, None))?;
         let per_dir = <notify::RecommendedWatcher as Watcher>::kind() == WatcherKind::Inotify;
         let mut events = Events {
             watcher,
@@ -153,8 +176,15 @@ impl Events {
     /// Watch first and scan second, so there is no moment at which a
     /// directory is already read and not yet watched. Returns what was
     /// watched, to compare against what the scan then found.
+    ///
+    /// It runs before the guarded first scan, so it approaches a mount point
+    /// the way the scanner does (invariant 7): through the mount table, on a
+    /// thread that can be abandoned. One that does not answer is neither
+    /// watched nor entered — `inotify_add_watch` looks the path up, and that
+    /// lookup is what hangs — and the scan reports it with the rest.
     fn watch_tree(&mut self, root: &Path, opts: &ScanOptions) -> Result<HashSet<PathBuf>> {
-        let root_dev = model::device_of(root);
+        let mounts = model::read_mounts(opts);
+        let root_dev = model::device_through(opts, &mounts, root);
         let mut watched = HashSet::new();
         let mut stack = vec![(root.to_path_buf(), 0usize)];
         while let Some((dir, depth)) = stack.pop() {
@@ -174,7 +204,10 @@ impl Events {
                     continue;
                 }
                 let path = entry.path();
-                if opts.one_filesystem && model::device_of(&path) != root_dev {
+                if mounts.contains(&path) && model::probe(opts, &mounts, &path).is_none() {
+                    continue;
+                }
+                if opts.one_filesystem && model::device_through(opts, &mounts, &path) != root_dev {
                     continue;
                 }
                 stack.push((path, depth + 1));
@@ -257,12 +290,6 @@ struct Pending {
     resync: Option<String>,
 }
 
-impl Pending {
-    fn is_empty(&self) -> bool {
-        self.dirty.is_empty() && self.subtrees.is_empty() && self.resync.is_none()
-    }
-}
-
 struct Note {
     at: Instant,
     text: String,
@@ -272,6 +299,8 @@ struct Session {
     model: Model,
     events: Events,
     rx: Receiver<EventResult>,
+    /// Set by the watcher when [`EVENT_QUEUE`] was full and an event dropped.
+    overflowed: Arc<AtomicBool>,
     pending: Pending,
     interval: Duration,
     min: u64,
@@ -349,7 +378,22 @@ impl Session {
             }
             return Ok(());
         }
+        // A folder created, or renamed into place, under a name the model
+        // already tracks is not the folder the model knows: deleted and made
+        // again, swapped for another (`npm install`, most deploys), or renamed
+        // away and back. Its parent's listing sees the same name and cannot
+        // tell; and on inotify its watch, and every watch below it, went with
+        // the old one. So the whole subtree is read again and watched again.
+        let replaced = matches!(
+            event.kind,
+            EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
+        );
         for path in &event.paths {
+            if replaced {
+                if let Some(id) = self.model.dir_at(path).filter(|&id| id != ROOT) {
+                    self.pending.subtrees.insert(id);
+                }
+            }
             if let Some(id) = self.model.locate(path, false) {
                 self.pending.dirty.insert(id);
             }
@@ -379,11 +423,18 @@ impl Session {
         self.reread = 0;
         let now = Instant::now();
         let since_full = now.duration_since(self.last_full_end);
+        if self.overflowed.swap(false, Ordering::Relaxed) {
+            self.pending.resync =
+                Some("events arrived faster than they could be read, and some were dropped".into());
+        }
 
         if self.pending.resync.is_some() && since_full >= self.resync_gap() {
             let reason = self.pending.resync.clone().unwrap_or_default();
             self.resync(Some(reason))?;
-        } else if self.pending.is_empty() && since_full >= self.verify_every() {
+        } else if since_full >= self.verify_every() {
+            // Due whatever is pending: a full rescan covers it, and a disk
+            // that is written to every tick would otherwise never be checked
+            // — the losses nobody flagged would stay wrong all session.
             self.resync(None)?;
         } else {
             self.apply_pending()?;
@@ -403,8 +454,19 @@ impl Session {
                 self.pending.dirty.insert(id);
             }
         }
-        if self.pending.is_empty() {
-            self.model.compact_if_worth_it();
+        // Also when work is pending, for the same reason as the check: under
+        // steady writes the folders that come and go would pile up otherwise.
+        // What is pending is held by id, and ids move.
+        if let Some(remap) = self.model.compact_if_worth_it() {
+            let moved = |ids: &mut HashSet<DirId>| {
+                *ids = ids
+                    .iter()
+                    .filter_map(|&id| remap.get(id as usize).copied())
+                    .filter(|&id| id != DirId::MAX)
+                    .collect();
+            };
+            moved(&mut self.pending.dirty);
+            moved(&mut self.pending.subtrees);
         }
         Ok(())
     }
@@ -429,10 +491,10 @@ impl Session {
                         continue;
                     }
                     rescanned.push(id);
-                    self.note(format!(
-                        "rescanned {}: events were dropped below it",
-                        shown(&rel)
-                    ));
+                    // Watched again from the top: on inotify a replaced
+                    // folder's watches went with the folder it replaced.
+                    self.model.announce_subtree(id);
+                    self.note(format!("rescanned {}", shown(&rel)));
                 }
                 // Gone since the loss was flagged: its parent's listing,
                 // next, is what says so.
@@ -640,7 +702,7 @@ impl Session {
 
     fn screen(&mut self, f: &Frame, now: Instant) -> String {
         let elapsed = now.duration_since(self.started);
-        let mut lines = vec![
+        let mut head = vec![
             format!("spacetrace watch  {}", self.model.root().display()),
             format!(
                 "{} so far · every {} · {} folders",
@@ -665,30 +727,40 @@ impl Session {
         if let (Some(now_free), Some(start)) = (f.fs_available, self.fs_start) {
             // The filesystem's own count, which no event can miss: the one
             // number here that is not ours.
-            lines.push(format!(
+            head.push(format!(
                 "filesystem  {} free ({} since start)",
                 fmt::size(now_free),
                 fmt::delta(now_free as i64 - start as i64),
             ));
         }
-        lines.push(String::new());
-        self.table(f, &mut lines);
-        lines.push(String::new());
+        head.push(String::new());
+        let mut tail = vec![String::new()];
         for note in &self.notes {
             let ago = now.duration_since(note.at).as_secs();
-            lines.push(format!("{} ({ago} s ago)", note.text));
+            tail.push(format!("{} ({ago} s ago)", note.text));
         }
-        lines.extend(self.status_lines(f));
+        tail.extend(self.status_lines(f));
         if let Some(at) = self.last_verified {
-            lines.push(format!(
+            tail.push(format!(
                 "checked against a full rescan {} s ago",
                 now.duration_since(at).as_secs()
             ));
         }
-        if cfg!(target_os = "macos") {
-            lines.push("clones are counted at their full size, as --no-clone-dedupe".to_string());
+        if let Some(note) = CLONE_NOTE {
+            tail.push(note.to_string());
         }
-        lines.push("Ctrl-C to stop".to_string());
+        tail.push("Ctrl-C to stop".to_string());
+
+        // Fitted to the terminal: a frame taller than the screen scrolls on
+        // every tick instead of redrawing in place, and a line wider than it
+        // wraps and pushes the rest down. The table gives way first — its
+        // header and the "… and N more" line stay, the rows shrink.
+        let (rows, cols) = terminal_size().unwrap_or((usize::MAX, usize::MAX));
+        let room = rows.saturating_sub(head.len() + tail.len() + 1);
+        let mut lines = head;
+        self.table(f, &mut lines, room);
+        lines.extend(tail);
+        lines.truncate(rows.saturating_sub(1).max(1));
 
         let first = matches!(self.output, Output::Screen { drawn: false });
         if let Output::Screen { drawn } = &mut self.output {
@@ -699,14 +771,15 @@ impl Session {
         // wrapped is put right by the next frame instead of piling up.
         let mut out = String::from(if first { "\x1b[2J\x1b[H" } else { "\x1b[H" });
         for line in lines {
-            out.push_str(&line);
+            out.push_str(&clip(&line, cols.saturating_sub(1).max(1)));
             out.push_str("\x1b[K\n");
         }
         out.push_str("\x1b[J");
         out
     }
 
-    fn table(&self, f: &Frame, lines: &mut Vec<String>) {
+    /// The table, in at most `room` lines when there is a screen to fit.
+    fn table(&self, f: &Frame, lines: &mut Vec<String>, room: usize) {
         if f.rows.is_empty() {
             lines.push(if self.min <= 1 {
                 "No folder has changed since the watch began.".to_string()
@@ -722,11 +795,17 @@ impl Session {
             "{:>12}  {:>12}  {:<7}  {:>10}  PATH",
             "CHANGE", "RATE", "STATUS", "NOW"
         ));
-        for row in &f.rows {
+        // The header, and a line for what did not fit, are part of the room.
+        let fits = match f.rows.len() + usize::from(f.more > 0) < room {
+            true => f.rows.len(),
+            false => room.saturating_sub(2).max(1).min(f.rows.len()),
+        };
+        for row in &f.rows[..fits] {
             lines.push(row.line());
         }
-        if f.more > 0 {
-            lines.push(format!("… and {} more", f.more));
+        let more = f.more + (f.rows.len() - fits);
+        if more > 0 {
+            lines.push(format!("… and {more} more"));
         }
     }
 
@@ -939,6 +1018,48 @@ impl Output {
     }
 }
 
+/// What the watch does not count the way `scan` does, said where it applies.
+///
+/// It runs with clone deduplication off (see `model::watch_options`): which
+/// name a shared block belongs to is settled by a full walk, never by one
+/// listing. On macOS that is APFS clones; on Linux, since the scanner charges
+/// btrfs and XFS shared and compressed extents once, it is those.
+const CLONE_NOTE: Option<&str> = if cfg!(target_os = "macos") {
+    Some("clones are counted at their full size, as --no-clone-dedupe")
+} else if cfg!(target_os = "linux") {
+    Some("on btrfs and XFS shared and compressed blocks count in full, as --no-clone-dedupe")
+} else {
+    None
+};
+
+/// The terminal's rows and columns, when stdout is one that says.
+#[cfg(unix)]
+fn terminal_size() -> Option<(usize, usize)> {
+    // SAFETY: TIOCGWINSZ writes one `winsize` into the struct it is given,
+    // and fails without touching it when stdout is not a terminal.
+    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+    let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut size) } == 0;
+    (ok && size.ws_row > 0 && size.ws_col > 0)
+        .then(|| (usize::from(size.ws_row), usize::from(size.ws_col)))
+}
+
+/// Windows Terminal has no ioctl to ask; a frame that is too tall scrolls
+/// there, as it did everywhere before.
+#[cfg(not(unix))]
+fn terminal_size() -> Option<(usize, usize)> {
+    None
+}
+
+/// `line` cut to `width` characters, with an ellipsis where it was cut.
+fn clip(line: &str, width: usize) -> std::borrow::Cow<'_, str> {
+    if line.chars().count() <= width {
+        return line.into();
+    }
+    let mut cut: String = line.chars().take(width.saturating_sub(1)).collect();
+    cut.push('…');
+    cut.into()
+}
+
 fn shown(rel: &str) -> String {
     match rel.is_empty() {
         true => "the root".to_string(),
@@ -958,6 +1079,13 @@ fn refusal_text(refusal: &Refusal, root: &Path) -> String {
                 rel
             };
             format!("hardlinked files at {at}: only a full scan counts a hardlink once")
+        }
+        Refusal::Unnamed(at) => {
+            let rel = at.strip_prefix(root).unwrap_or(at).to_string_lossy();
+            format!(
+                "{rel} has a name that is not valid UTF-8 and more than one real name \
+                 fits it: only a full scan counts it"
+            )
         }
     }
 }

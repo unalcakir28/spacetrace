@@ -32,6 +32,7 @@ pub use scan::{
     probe_mount, scan, Phase, ScanOptions, ScanProgress, ScanStats, StallWatch, MAX_CAPACITY_HINT,
     MOUNT_TIMEOUT, STALL_GRACE,
 };
+pub use timeout::with_deadline;
 pub use tree::{
     ImportedNode, Node, NodeId, Removed, SizeBasis, StoredNode, Tree, TreeAssembler, TreeError,
 };

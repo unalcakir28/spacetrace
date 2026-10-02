@@ -1,6 +1,8 @@
 //! Give up on work that may never finish.
 //!
-//! There is exactly one caller: the first `lstat` into a mounted filesystem.
+//! Its one use is the first `lstat` into a mounted filesystem — the walk's, and
+//! anything else that has to approach a mount point before the walk does
+//! (`spacetrace watch` sets up its watches ahead of the first scan).
 //! That syscall is uninterruptible — no signal, no flag, no `close` on the
 //! other side will bring it back once the server has gone — so the only way
 //! to survive it is to stop waiting and leave it where it is.
@@ -18,7 +20,7 @@ use std::time::Duration;
 ///
 /// `None` means it did not answer in time. The work keeps running; the caller
 /// has only stopped caring.
-pub(crate) fn with_deadline<T, F>(limit: Duration, work: F) -> Option<T>
+pub fn with_deadline<T, F>(limit: Duration, work: F) -> Option<T>
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
