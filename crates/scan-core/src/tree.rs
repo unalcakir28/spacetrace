@@ -711,7 +711,18 @@ impl Tree {
     /// Every directory's children go in as one contiguous run after their
     /// parent ([`TreeBuilder::push_block`]), so the arena invariants hold by
     /// construction rather than by an importer remembering them.
+    ///
+    /// Panics if the names add up to more than 4 GiB, which no tree built in
+    /// a test comes near; input from outside goes through
+    /// [`Tree::try_from_nested`] and gets an error instead.
     pub fn from_nested(root_path: PathBuf, root: ImportedNode) -> Tree {
+        Tree::try_from_nested(root_path, root).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`Tree::from_nested`], refusing a tree whose names do not fit the
+    /// arena's 32-bit offsets — about 30 million keys of a long S3 listing —
+    /// instead of building one whose names point at each other's bytes.
+    pub fn try_from_nested(root_path: PathBuf, root: ImportedNode) -> Result<Tree, TreeError> {
         let mut builder = TreeBuilder::with_capacity(root.count());
         // `NO_PARENT`, not `0`. A root that names itself as its parent looks
         // harmless — every path walk here stops at id 0 by index — but two
@@ -760,7 +771,16 @@ impl Tree {
             }
         }
 
-        builder.finish(root_path)
+        names_fit(builder.names.len())?;
+        Ok(builder.finish(root_path))
+    }
+}
+
+/// Whether a name arena of `len` bytes can be addressed by `u32` offsets.
+fn names_fit(len: usize) -> Result<(), TreeError> {
+    match u32::try_from(len) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(TreeError::NamesTooLarge(len)),
     }
 }
 
@@ -780,7 +800,9 @@ fn intern(arena: &mut String, name: &str) -> (u32, u16) {
         }
         name = &name[..end];
     }
-    let off = arena.len() as u32;
+    // Saturating, not `as u32`: a wrapped offset would point into another
+    // name and look valid. The tree is then refused by `names_fit`.
+    let off = u32::try_from(arena.len()).unwrap_or(u32::MAX);
     arena.push_str(name);
     (off, name.len() as u16)
 }
@@ -857,6 +879,7 @@ impl TreeAssembler {
 
     /// Check the arena invariants and hand back the tree.
     pub fn finish(self, root_path: PathBuf) -> Result<Tree, TreeError> {
+        names_fit(self.names.len())?;
         Tree::check(&self.nodes)?;
         Ok(Tree::new(self.nodes, self.names, root_path))
     }
@@ -879,6 +902,8 @@ pub struct Removed {
 pub enum TreeError {
     Empty,
     TooLarge(usize),
+    /// The names come to more bytes than a 32-bit offset reaches.
+    NamesTooLarge(usize),
     RootHasParent,
     ChildrenOutOfBounds {
         node: NodeId,
@@ -903,6 +928,10 @@ impl std::fmt::Display for TreeError {
             TreeError::TooLarge(n) => write!(
                 f,
                 "the snapshot has {n} entries, more than the arena can address"
+            ),
+            TreeError::NamesTooLarge(n) => write!(
+                f,
+                "the entries' names come to {n} bytes, more than the arena can address (4 GiB)"
             ),
             TreeError::RootHasParent => write!(f, "entry 0 is not a root: it claims a parent"),
             TreeError::ChildrenOutOfBounds {
@@ -932,6 +961,17 @@ impl std::error::Error for TreeError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Past 4 GiB of names an offset used to wrap and point into another
+    /// name. Four gigabytes cannot be allocated in a test, so the check is
+    /// exercised at its boundary directly.
+    #[test]
+    fn names_past_four_gibibytes_are_refused_not_wrapped() {
+        assert_eq!(names_fit(u32::MAX as usize), Ok(()));
+        let over = u32::MAX as usize + 1;
+        assert_eq!(names_fit(over), Err(TreeError::NamesTooLarge(over)));
+        assert!(TreeError::NamesTooLarge(over).to_string().contains("4 GiB"));
+    }
 
     fn file(name: &str, size: u64) -> NewNode<'_> {
         NewNode {

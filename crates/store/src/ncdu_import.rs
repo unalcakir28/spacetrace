@@ -58,7 +58,7 @@ pub fn import_ncdu(json: &str, root_path: Option<PathBuf>) -> Result<Tree> {
 
     let root = node_from(&top[3]).context("reading the tree")?;
     let root_path = root_path.unwrap_or_else(|| PathBuf::from(&root.name));
-    Ok(Tree::from_nested(root_path, root))
+    Ok(Tree::try_from_nested(root_path, root)?)
 }
 
 /// One entry, and its children when it is a directory.
