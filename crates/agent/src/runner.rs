@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -120,6 +120,47 @@ pub struct Runner {
     /// real ten seconds. Production always gets the constants; only the
     /// numbers vary, never the path through the code.
     stall_timings: (Duration, Duration),
+    /// Configured root to the path its snapshots are stored under, learned
+    /// once per root. See `recorded_root`.
+    recorded: Mutex<HashMap<PathBuf, Arc<Recorded>>>,
+}
+
+/// The stored name of one configured root, filled in by whoever learns it
+/// first: the thread `recorded_root` starts, or a scan that has just written it.
+#[derive(Default)]
+struct Recorded {
+    path: Mutex<Option<String>>,
+    ready: Condvar,
+}
+
+impl Recorded {
+    /// What a finished scan wrote. Always wins, because it is the one answer
+    /// known to match the rows.
+    fn set(&self, path: String) {
+        *self.path.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
+        self.ready.notify_all();
+    }
+
+    /// What resolving the configured path found. Never overwrites a scan's
+    /// answer: a resolution that was stuck on a dead mount can return long
+    /// after a later scan recorded something newer.
+    fn fill(&self, path: String) {
+        let mut slot = self.path.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_none() {
+            *slot = Some(path);
+        }
+        self.ready.notify_all();
+    }
+
+    fn wait_until(&self, deadline: Instant) -> Option<String> {
+        let slot = self.path.lock().unwrap_or_else(|e| e.into_inner());
+        let wait = deadline.saturating_duration_since(Instant::now());
+        let (slot, _) = self
+            .ready
+            .wait_timeout_while(slot, wait, |path| path.is_none())
+            .unwrap_or_else(|e| e.into_inner());
+        slot.clone()
+    }
 }
 
 impl Runner {
@@ -130,6 +171,7 @@ impl Runner {
             roots: config.roots.clone(),
             in_flight: Mutex::new(HashMap::new()),
             stall_timings: (WATCH_EVERY, STALL_GRACE),
+            recorded: Mutex::new(HashMap::new()),
         }
     }
 
@@ -156,6 +198,57 @@ impl Runner {
         self.roots.iter().find(|r| r.path == path)
     }
 
+    /// The path snapshots of the configured root `configured` are stored
+    /// under, or `None` if that is still unknown at `deadline`.
+    ///
+    /// The scanner records the canonical path, so a root configured as `/data`
+    /// and symlinked to `/mnt/disk1` is stored as `/mnt/disk1`, and a lookup
+    /// by the configured spelling finds nothing. Canonicalising means an
+    /// `lstat` per component, which on a network share whose server has gone
+    /// never returns and cannot be interrupted (invariant 7). `/metrics` asks
+    /// on every scrape, so doing it inline would hang the scrape and leave one
+    /// more stuck thread behind every fifteen seconds. Instead it happens once
+    /// per root, on a thread that can be abandoned, and every later caller
+    /// reads the answer or waits for it until its own deadline. A scan
+    /// overwrites the answer with the path it really wrote, so a root
+    /// re-pointed since is caught up by its next scan.
+    pub fn recorded_root(&self, configured: &Path, deadline: Instant) -> Option<String> {
+        let (recorded, fresh) = {
+            let mut map = self.recorded.lock().unwrap_or_else(|e| e.into_inner());
+            match map.get(configured) {
+                Some(known) => (Arc::clone(known), false),
+                None => {
+                    let created = Arc::new(Recorded::default());
+                    map.insert(configured.to_path_buf(), Arc::clone(&created));
+                    (created, true)
+                }
+            }
+        };
+        if fresh {
+            let resolving = Arc::clone(&recorded);
+            let path = configured.to_path_buf();
+            let spawned = std::thread::Builder::new()
+                .name("spacetrace-resolve-root".to_string())
+                .spawn(move || resolving.fill(stored_name(&path)));
+            if spawned.is_err() {
+                // Forget the attempt so the next caller makes another, rather
+                // than waiting forever on a thread that never existed.
+                let mut map = self.recorded.lock().unwrap_or_else(|e| e.into_inner());
+                map.remove(configured);
+                return None;
+            }
+        }
+        recorded.wait_until(deadline)
+    }
+
+    /// Record the path a scan of `configured` was stored under.
+    fn remember_recorded(&self, configured: &Path, stored: &str) {
+        let mut map = self.recorded.lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(configured.to_path_buf())
+            .or_default()
+            .set(stored.to_string());
+    }
+
     /// Open the snapshot database, creating its parent directory if needed.
     pub fn open_store(&self) -> Result<Store> {
         if let Some(parent) = self.db.parent() {
@@ -173,11 +266,10 @@ impl Runner {
     /// no database yet, a root scanned for the first time — is `None` rather
     /// than an error the scan should care about.
     fn entry_count_hint(&self, root: &Path) -> Option<usize> {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let previous = self
             .open_store()
             .ok()?
-            .latest_for(&root.to_string_lossy(), Some(&self.host))
+            .latest_for(&stored_name(root), Some(&self.host))
             .ok()??;
         usize::try_from(previous.files + previous.dirs).ok()
     }
@@ -220,6 +312,11 @@ impl Runner {
         // the configured string, so a symlinked or relative-ish path still
         // matches the rows that were just written.
         let stored_root = tree.root_path().to_string_lossy().into_owned();
+        // Configured roots only: an ad-hoc path is not reported per root, and
+        // remembering every one ever asked for would grow without bound.
+        if self.configured_root(&root.path).is_some() {
+            self.remember_recorded(&root.path, &stored_root);
+        }
         let pruned = match root.keep {
             Some(keep) => store
                 .prune_target(&stored_root, &self.host, keep)
@@ -305,6 +402,16 @@ impl Runner {
             done,
         })
     }
+}
+
+/// The name the scanner stores a root under: its canonical path, or the path
+/// as given when that cannot be resolved. The same expression `scan` uses, so
+/// the two cannot disagree about which rows belong to a root.
+fn stored_name(root: &Path) -> String {
+    root.canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The phase as `/status` names it.
@@ -759,5 +866,86 @@ mod tests {
                 .is_some()),
             "nothing moved this scan's counters, so /status should say it is stalled"
         );
+    }
+
+    // ------------------------------------------------ what /metrics reports
+
+    /// `scan_running` reads the same claim table `/status` and the 409 do, so
+    /// a scan already running is 1 in the scrape. Here rather than over HTTP
+    /// because only this module can hold a claim without running a scan.
+    #[test]
+    fn a_claimed_root_is_reported_as_scanning() {
+        let dir = fixture();
+        let home = tempfile::tempdir().unwrap();
+        let cfg = config_for(dir.path(), &home.path().join("db.sqlite"));
+        let runner = Runner::new(&cfg);
+
+        let claim = runner.try_claim(&cfg.roots[0].path, Arc::new(ScanProgress::default()));
+        let readings = crate::metrics::collect(&runner).unwrap();
+        assert!(readings[0].scanning);
+
+        drop(claim);
+        let readings = crate::metrics::collect(&runner).unwrap();
+        assert!(!readings[0].scanning, "released with the claim");
+    }
+
+    /// Nothing stops a config listing a root twice, and the same series twice
+    /// in one scrape makes Prometheus reject the scrape.
+    #[test]
+    fn a_root_listed_twice_is_reported_once() {
+        let dir = fixture();
+        let home = tempfile::tempdir().unwrap();
+        let toml = format!(
+            "db = {:?}\n[[roots]]\npath = {:?}\n[[roots]]\npath = {:?}\n",
+            home.path().join("db.sqlite").to_string_lossy(),
+            dir.path().to_string_lossy(),
+            dir.path().to_string_lossy()
+        );
+        let cfg: Config = toml::from_str(&toml).unwrap();
+        let runner = Runner::new(&cfg);
+
+        assert_eq!(crate::metrics::collect(&runner).unwrap().len(), 1);
+    }
+
+    /// A root that does not exist resolves to its own path, as the scanner
+    /// would store it, rather than staying unresolved: "unknown" is kept for
+    /// a path that has not answered, not for one that answered "no".
+    #[test]
+    fn a_missing_root_resolves_to_the_path_as_given() {
+        let home = tempfile::tempdir().unwrap();
+        let missing = home.path().join("not-there");
+        let cfg = config_for(&missing, &home.path().join("db.sqlite"));
+        let runner = Runner::new(&cfg);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        assert_eq!(
+            runner.recorded_root(&missing, deadline).as_deref(),
+            Some(missing.to_string_lossy().as_ref())
+        );
+    }
+
+    /// What a scan wrote is the answer from then on, even if resolving the
+    /// configured path would now say something else: those are the rows the
+    /// scrape has to find.
+    #[cfg(unix)]
+    #[test]
+    fn a_scan_replaces_what_resolving_found() {
+        let first = fixture();
+        let second = fixture();
+        let home = tempfile::tempdir().unwrap();
+        let link = home.path().join("data");
+        std::os::unix::fs::symlink(first.path(), &link).unwrap();
+        let cfg = config_for(&link, &home.path().join("db.sqlite"));
+        let runner = Runner::new(&cfg);
+        let deadline = || Instant::now() + Duration::from_secs(5);
+
+        let resolved = runner.recorded_root(&link, deadline()).unwrap();
+        assert_eq!(resolved, stored_name(first.path()));
+
+        // Re-point the root and scan: the stored name follows the scan.
+        fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(second.path(), &link).unwrap();
+        let outcome = runner.scan_root(&cfg.roots[0]).unwrap();
+        assert_eq!(runner.recorded_root(&link, deadline()), Some(outcome.root));
     }
 }

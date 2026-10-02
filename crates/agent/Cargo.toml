@@ -37,4 +37,7 @@ zstd.workspace = true
 
 [dev-dependencies]
 rcgen.workspace = true
+# Already in the graph through the store. The tests use it only to hold a
+# write transaction open while they scrape.
+rusqlite.workspace = true
 

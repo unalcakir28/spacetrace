@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod cron;
+pub mod metrics;
 pub mod push;
 pub mod ratelimit;
 pub mod runner;

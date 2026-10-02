@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use axum::body::{Body, Bytes};
@@ -36,6 +36,10 @@ pub struct AppState {
     allow_adhoc_scans: bool,
     max_upload_bytes: usize,
     started: Instant,
+    /// The same moment on the wall clock, for `/metrics`. Read once rather
+    /// than derived from `started` per scrape, which would drift with every
+    /// clock adjustment and turn a constant into a jittering one.
+    started_wall: SystemTime,
     /// `None` when the configuration switched limiting off.
     rate_limit: Option<crate::ratelimit::RateLimit>,
 }
@@ -48,6 +52,7 @@ pub fn router(runner: Arc<Runner>, config: &Config, token: String) -> Router {
         allow_adhoc_scans: config.server.allow_adhoc_scans,
         max_upload_bytes: config.server.max_upload_bytes,
         started: Instant::now(),
+        started_wall: SystemTime::now(),
         rate_limit: crate::ratelimit::RateLimit::new(
             config.server.rate_limit_per_minute,
             config.server.rate_limit_burst,
@@ -66,6 +71,10 @@ pub fn router(runner: Arc<Runner>, config: &Config, token: String) -> Router {
         .route("/snapshots", post(receive_snapshot))
         .layer(DefaultBodyLimit::max(config.server.max_upload_bytes))
         .route("/status", get(status))
+        // Behind the token like everything else that names a path. Root paths
+        // and how full they are is the inventory the token exists to guard,
+        // and Prometheus sends a bearer token as readily as any client.
+        .route("/metrics", get(metrics))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
 
     // Outside the auth layer and above both halves, because the two things a
@@ -305,6 +314,18 @@ async fn status(State(state): State<Arc<AppState>>) -> Result<Json<Status>, ApiF
         snapshots,
         update_available: state.updates.available(),
     }))
+}
+
+/// The Prometheus text exposition. See `metrics`.
+async fn metrics(State(state): State<Arc<AppState>>) -> Result<Response, ApiFailure> {
+    let runner = Arc::clone(&state.runner);
+    // A blocking thread, unlike `/status`: this may wait on a root's path
+    // (`Runner::recorded_root`), and that wait must not hold a runtime worker.
+    let roots = tokio::task::spawn_blocking(move || crate::metrics::collect(&runner))
+        .await
+        .map_err(|e| ApiFailure::internal(format!("metrics task failed: {e}")))??;
+    let body = crate::metrics::render(&roots, state.started_wall);
+    Ok(([(header::CONTENT_TYPE, crate::metrics::CONTENT_TYPE)], body).into_response())
 }
 
 async fn list_scans(

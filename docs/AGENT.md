@@ -270,6 +270,7 @@ All routes except `/health` require `Authorization: Bearer <token>`.
 |--------|-------|---------|
 | GET | `/health` | Liveness and which build. No token, and nothing about the machine or what it scans |
 | GET | `/status` | Host, uptime, configured roots, running scans with their counters, snapshot count |
+| GET | `/metrics` | The same picture per root, in the Prometheus text format — see [Prometheus](#prometheus) |
 | GET | `/scans` | Every snapshot's metadata, newest first |
 | GET | `/scans/{id}` | One snapshot's metadata |
 | GET | `/scans/{id}/download` | The snapshot itself, as a standalone SQLite file |
@@ -355,6 +356,91 @@ allowance by typing one.
 
 A path that is not in `[[roots]]` returns **403** unless
 `server.allow_adhoc_scans` is on.
+
+### Prometheus
+
+`GET /metrics` serves the text exposition format, version 0.0.4. It needs the
+token like every route but `/health`: root paths and how full their disks are
+is exactly the inventory the token guards, and Prometheus sends a bearer token
+as readily as any other client.
+
+```yaml
+scrape_configs:
+  - job_name: spacetrace-agent
+    scheme: https                      # or http on loopback / behind a proxy
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/spacetrace-token
+    # tls_config:
+    #   ca_file: /etc/prometheus/agent.pem   # an agent with its own certificate
+    static_configs:
+      - targets: ["nas.lan:7878"]
+```
+
+`credentials_file` holds the agent's token and nothing else. Older Prometheus
+versions spell it `bearer_token_file: …` at the job level; both send the same
+header.
+
+**The default rate limit leaves plenty of room.** A 15-second interval is four
+requests a minute against the default 120 with 60 allowed at once, so a scrape
+never meets a 429 — not even behind a reverse proxy, where every client shares
+one allowance, unless the other clients already use most of it. A 1-second
+interval would still fit. If `up` drops to 0 with a 429 in the target's last
+error, the agent's limit is the reason; raise it or switch it off as
+described under [Rate limiting](#rate-limiting).
+
+Every family is a gauge, labelled by `root` with the path exactly as written in
+`[[roots]]`:
+
+| Family | Meaning |
+|--------|---------|
+| `spacetrace_agent_info{version,commit,channel}` | Always 1; which build is running |
+| `spacetrace_agent_start_time_seconds` | When the agent started serving; `time() - …` is the uptime |
+| `spacetrace_root_scan_running` | 1 while a scan of this root is running |
+| `spacetrace_root_snapshots` | Snapshots of this root, from this host, still stored |
+| `spacetrace_root_last_scan_timestamp_seconds` | When the newest snapshot started |
+| `spacetrace_root_last_scan_duration_seconds` | How long its walk took |
+| `spacetrace_root_size_bytes` | Logical size: file bytes only |
+| `spacetrace_root_alloc_bytes` | What the root holds on disk, shared blocks counted once |
+| `spacetrace_root_files`, `spacetrace_root_directories` | Entry counts |
+| `spacetrace_root_unreadable_paths` | Paths the scan could not read; the totals are short by them |
+| `spacetrace_root_filesystem_available_bytes`, `…_size_bytes` | Free and total space on the root's filesystem |
+
+Four things to know before writing alerts:
+
+- **Everything describes the newest stored snapshot, not the disk right now.**
+  A scrape starts no scan, loads no tree, and does not touch the scanned
+  filesystems at all — including for the two filesystem families, which are
+  what that snapshot recorded. A fresh `statvfs` per scrape would hang on a
+  network share whose server has gone, which is the moment this endpoint is
+  for. For live free space use node_exporter's `node_filesystem_avail_bytes`.
+- **Free and total, never a percentage.** On APFS and btrfs `size - available`
+  is the whole container's usage and disagrees with `df`
+  ([DECISIONS.md](DECISIONS.md) K6).
+- **A root that has never been scanned is still there**, with
+  `scan_running` and `snapshots` at 0, so "never scanned" can be alerted on.
+  The snapshot families are absent for it rather than 0, because a size of 0
+  draws as the disk being emptied. The same goes for the two filesystem
+  families of a snapshot that could not measure them.
+- **A root whose path does not answer** — a dead share configured as a root —
+  keeps `scan_running` and loses everything else, including `snapshots`, until
+  its path answers again. Finding which stored rows belong to a root means
+  resolving its path, which is done once, on a thread the scrape can abandon
+  after half a second.
+
+```yaml
+- alert: SpacetraceScanStale
+  expr: time() - spacetrace_root_last_scan_timestamp_seconds > 26 * 3600
+- alert: SpacetraceNeverScanned
+  expr: spacetrace_root_snapshots == 0 and on(instance) (time() - spacetrace_agent_start_time_seconds) > 26 * 3600
+- alert: SpacetraceScanIncomplete
+  expr: spacetrace_root_unreadable_paths > 0
+```
+
+A scrape costs two indexed queries per root. Measured on an Apple-silicon
+laptop with two roots, median of 50 scrapes over loopback: 0.8 ms against a store of 29 snapshots, 2.2 ms against 20,005,
+and 14.8 ms against 200,005, where counting a root's 100,000 rows is what
+remains. Snapshots pushed in from other hosts are not counted against a root.
 
 ## Push
 

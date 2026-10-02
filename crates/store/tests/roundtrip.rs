@@ -82,6 +82,40 @@ fn scans_are_listed_newest_first_and_can_be_looked_up() {
     assert!(store.scan(first).unwrap().is_none());
 }
 
+/// `count_for` is what `/metrics` reports as a root's history, so it has to
+/// count one target and nothing beside it: not another root, and not the same
+/// root pushed in from a different host.
+#[test]
+fn counting_a_target_counts_that_target_and_nothing_else() {
+    let dir = fixture();
+    let other = fixture();
+    let (tree, stats) = scan_fixture(&dir);
+    let (other_tree, other_stats) = scan_fixture(&other);
+    let mut store = Store::open_in_memory().unwrap();
+    let root = tree.root_path().to_string_lossy().to_string();
+
+    assert_eq!(store.count_for(&root, "h1").unwrap(), 0);
+
+    store.save(&tree, &stats, "h1", None).unwrap();
+    store.save(&tree, &stats, "h1", None).unwrap();
+    store.save(&tree, &stats, "h2", None).unwrap();
+    store.save(&other_tree, &other_stats, "h1", None).unwrap();
+
+    assert_eq!(store.count_for(&root, "h1").unwrap(), 2);
+    assert_eq!(store.count_for(&root, "h2").unwrap(), 1);
+    assert_eq!(store.count_for("/not/scanned", "h1").unwrap(), 0);
+
+    // `latest_for` has two statements behind it now, one per arm; both must
+    // still pick the newest of their own target.
+    let h2_only = store.latest_for(&root, Some("h2")).unwrap().unwrap();
+    assert_eq!(h2_only.host, "h2");
+    let any = store.latest_for(&root, None).unwrap().unwrap();
+    assert_eq!(any.id, h2_only.id, "the h2 scan was saved last");
+    let h1 = store.latest_for(&root, Some("h1")).unwrap().unwrap();
+    assert_eq!(h1.host, "h1");
+    assert!(h1.id < h2_only.id);
+}
+
 #[test]
 fn deleting_a_scan_removes_its_entries() {
     let dir = fixture();

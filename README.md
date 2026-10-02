@@ -35,7 +35,7 @@ it. See [docs/DECISIONS.md](docs/DECISIONS.md) K2.
 |----------|----------|
 | [docs/WHY.md](docs/WHY.md) | Why this project exists: the gap it fills, target users, explicit non-goals |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phases, exit criteria, release targets |
-| [docs/AGENT.md](docs/AGENT.md) | Running the agent: install, configure, the HTTP API, security notes |
+| [docs/AGENT.md](docs/AGENT.md) | Running the agent: install, configure, the HTTP API, Prometheus metrics, security notes |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the code is built and why, technology decisions, known limits |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Settled cross-cutting decisions and their rationale |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | September 2026 market and technical research summary |

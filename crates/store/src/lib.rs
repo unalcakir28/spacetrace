@@ -328,15 +328,53 @@ impl Store {
 
     /// The most recent scan of a given root (optionally on a given host).
     pub fn latest_for(&self, root: &str, host: Option<&str>) -> Result<Option<ScanMeta>> {
-        let sql = format!(
-            "{SELECT_SCAN} WHERE root = ?1 AND (?2 IS NULL OR host = ?2)
-             ORDER BY started_at DESC, id DESC LIMIT 1"
-        );
-        let meta = self
-            .conn
-            .query_row(&sql, params![root, host], row_to_meta)
-            .optional()?;
+        let meta = match host {
+            // Two statements rather than `(?2 IS NULL OR host = ?2)`: SQLite
+            // plans a statement once for every binding, so that form cannot
+            // seek the `(host, root, started_at)` index and reads all of it
+            // and sorts instead. Measured through `/metrics`, which asks this
+            // per root on every scrape: 102 ms at 200,005 snapshots and
+            // linear in the store, where the seek does not grow with it.
+            Some(host) => self
+                .conn
+                .query_row(
+                    &format!(
+                        "{SELECT_SCAN} WHERE host = ?1 AND root = ?2
+                         ORDER BY started_at DESC, id DESC LIMIT 1"
+                    ),
+                    params![host, root],
+                    row_to_meta,
+                )
+                .optional()?,
+            None => self
+                .conn
+                .query_row(
+                    &format!(
+                        "{SELECT_SCAN} WHERE root = ?1
+                         ORDER BY started_at DESC, id DESC LIMIT 1"
+                    ),
+                    params![root],
+                    row_to_meta,
+                )
+                .optional()?,
+        };
         Ok(meta)
+    }
+
+    /// How many scans of a given root this host has stored.
+    ///
+    /// A count rather than `list().len()`: the agent's `/metrics` asks this
+    /// on every scrape, and an agent that has kept every snapshot for years
+    /// should not read them all to answer with one number. The host is
+    /// required so the count is a seek on the `(host, root, …)` index; see
+    /// `latest_for` for what the optional form costs.
+    pub fn count_for(&self, root: &str, host: &str) -> Result<u64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM scans WHERE host = ?1 AND root = ?2",
+            params![host, root],
+            |row| row.get(0),
+        )?;
+        Ok(count as u64)
     }
 
     /// The two most recent scans of the same target, newest first. This is what

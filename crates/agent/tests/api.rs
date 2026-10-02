@@ -68,8 +68,20 @@ async fn start_agent_limited(allow_adhoc: bool, per_minute: u32, burst: u32) -> 
         scanned.path().to_string_lossy(),
     );
     let config: Config = toml::from_str(&toml).unwrap();
-    let runner = Arc::new(Runner::new(&config));
-    let app = serve::router(Arc::clone(&runner), &config, TOKEN.to_string());
+    let (addr, runner) = serve_config(&config).await;
+
+    Agent {
+        addr,
+        runner,
+        _home: home,
+        _scanned: scanned,
+    }
+}
+
+/// Serve `config` on a free loopback port, with a runner of its own.
+async fn serve_config(config: &Config) -> (SocketAddr, Arc<Runner>) {
+    let runner = Arc::new(Runner::new(config));
+    let app = serve::router(Arc::clone(&runner), config, TOKEN.to_string());
 
     // Port 0 lets the OS pick, so tests never collide on a fixed port.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -86,13 +98,7 @@ async fn start_agent_limited(allow_adhoc: bool, per_minute: u32, burst: u32) -> 
         .await
         .unwrap();
     });
-
-    Agent {
-        addr,
-        runner,
-        _home: home,
-        _scanned: scanned,
-    }
+    (addr, runner)
 }
 
 fn client() -> reqwest::Client {
@@ -387,7 +393,13 @@ async fn health_needs_no_token_and_leaks_nothing() {
 #[tokio::test]
 async fn protected_routes_reject_a_missing_token() {
     let agent = start_agent(false).await;
-    for path in ["/scans", "/status", "/scans/1", "/scans/1/download"] {
+    for path in [
+        "/scans",
+        "/status",
+        "/scans/1",
+        "/scans/1/download",
+        "/metrics",
+    ] {
         let response = client().get(agent.url(path)).send().await.unwrap();
         assert_eq!(response.status(), 401, "{path} should require a token");
         assert!(
@@ -840,4 +852,488 @@ async fn a_rate_of_zero_switches_the_limit_off() {
         let response = client().get(agent.url("/health")).send().await.unwrap();
         assert_eq!(response.status(), 200, "request {i} with no limit set");
     }
+}
+// ---------------------------------------------------------------- metrics
+
+/// One sample line: `name{label="value",…} value`.
+#[derive(Debug)]
+struct Sample {
+    name: String,
+    labels: Vec<(String, String)>,
+    value: f64,
+}
+
+/// A scrape, parsed.
+#[derive(Debug, Default)]
+struct Exposition {
+    /// (name, help, type) of every family, in the order they appeared.
+    families: Vec<(String, String, String)>,
+    samples: Vec<Sample>,
+}
+
+impl Exposition {
+    /// The value of `name` for one root, if the scrape carries it.
+    fn for_root(&self, name: &str, root: &str) -> Option<f64> {
+        self.samples
+            .iter()
+            .find(|s| s.name == name && s.labels == [("root".to_string(), root.to_string())])
+            .map(|s| s.value)
+    }
+
+    fn has_family(&self, name: &str) -> bool {
+        self.families.iter().any(|(n, _, _)| n == name)
+    }
+}
+
+fn is_metric_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == ':')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+}
+
+fn is_label_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !name.starts_with("__")
+}
+
+/// Parse `{a="x",b="y"}` from the start of `rest`, unescaping the values.
+/// Returns the labels and what follows the closing brace.
+fn parse_labels(rest: &str, line: usize) -> (Vec<(String, String)>, &str) {
+    let mut labels: Vec<(String, String)> = Vec::new();
+    let mut chars = rest.char_indices().peekable();
+    assert_eq!(chars.next().map(|(_, c)| c), Some('{'), "line {line}");
+    loop {
+        let start = chars
+            .peek()
+            .unwrap_or_else(|| panic!("line {line}: unterminated label set"))
+            .0;
+        let eq = chars
+            .by_ref()
+            .find(|&(_, c)| c == '=')
+            .unwrap_or_else(|| panic!("line {line}: label without '='"))
+            .0;
+        let name = &rest[start..eq];
+        assert!(is_label_name(name), "line {line}: bad label name {name:?}");
+        assert_eq!(
+            chars.next().map(|(_, c)| c),
+            Some('"'),
+            "line {line}: label value must be quoted"
+        );
+        let mut value = String::new();
+        loop {
+            let (_, c) = chars
+                .next()
+                .unwrap_or_else(|| panic!("line {line}: unterminated label value"));
+            match c {
+                '"' => break,
+                '\\' => match chars.next().map(|(_, c)| c) {
+                    Some('\\') => value.push('\\'),
+                    Some('"') => value.push('"'),
+                    Some('n') => value.push('\n'),
+                    other => panic!("line {line}: invalid escape \\{other:?}"),
+                },
+                // A raw line feed cannot occur: the text was split on them.
+                c => value.push(c),
+            }
+        }
+        assert!(
+            !labels.iter().any(|(n, _)| n == name),
+            "line {line}: label {name} given twice"
+        );
+        labels.push((name.to_string(), value));
+        match chars.next() {
+            Some((_, ',')) => continue,
+            Some((i, '}')) => return (labels, &rest[i + 1..]),
+            other => panic!("line {line}: expected ',' or '}}', got {other:?}"),
+        }
+    }
+}
+
+/// A strict reader of the text exposition format, version 0.0.4.
+///
+/// Stricter than the grammar in three places, all things the agent never
+/// writes and whose appearance would therefore be a bug: blank lines and free
+/// comments are refused, so is a sample timestamp, and every family must have
+/// `# HELP` directly before `# TYPE`. Everything Prometheus itself refuses is
+/// refused too — a sample before its `# TYPE`, a family split in two, a series
+/// given twice, an escape other than the three the format defines.
+fn parse_exposition(text: &str) -> Exposition {
+    assert!(
+        text.ends_with('\n'),
+        "the last line must end with a line feed"
+    );
+    let mut out = Exposition::default();
+    let mut helps: Vec<(String, String)> = Vec::new();
+    let mut current: Option<String> = None;
+    let mut series: Vec<String> = Vec::new();
+
+    for (n, line) in text.lines().enumerate() {
+        let n = n + 1;
+        assert!(!line.is_empty(), "line {n}: blank line");
+        if let Some(rest) = line.strip_prefix("# HELP ") {
+            let (name, help) = rest
+                .split_once(' ')
+                .unwrap_or_else(|| panic!("line {n}: HELP needs a docstring"));
+            assert!(is_metric_name(name), "line {n}: bad name {name:?}");
+            assert!(
+                !helps.iter().any(|(h, _)| h == name),
+                "line {n}: second HELP for {name}"
+            );
+            // A docstring may only escape a backslash or a line feed.
+            let mut chars = help.chars();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    assert!(
+                        matches!(chars.next(), Some('\\' | 'n')),
+                        "line {n}: invalid escape in HELP"
+                    );
+                }
+            }
+            helps.push((name.to_string(), help.to_string()));
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# TYPE ") {
+            let (name, kind) = rest
+                .split_once(' ')
+                .unwrap_or_else(|| panic!("line {n}: TYPE needs a type"));
+            assert!(is_metric_name(name), "line {n}: bad name {name:?}");
+            assert!(
+                ["counter", "gauge", "histogram", "summary", "untyped"].contains(&kind),
+                "line {n}: unknown type {kind}"
+            );
+            assert!(!out.has_family(name), "line {n}: second TYPE for {name}");
+            let help = match helps.last() {
+                Some((h, help)) if h == name => help.clone(),
+                _ => panic!("line {n}: every family here has HELP just before TYPE"),
+            };
+            out.families
+                .push((name.to_string(), help, kind.to_string()));
+            current = Some(name.to_string());
+            continue;
+        }
+        assert!(!line.starts_with('#'), "line {n}: unexpected comment");
+
+        let name_end = line
+            .find(['{', ' '])
+            .unwrap_or_else(|| panic!("line {n}: no value"));
+        let name = &line[..name_end];
+        assert!(is_metric_name(name), "line {n}: bad name {name:?}");
+        assert_eq!(
+            current.as_deref(),
+            Some(name),
+            "line {n}: sample of {name} outside its own family"
+        );
+        let (labels, rest) = if line[name_end..].starts_with('{') {
+            parse_labels(&line[name_end..], n)
+        } else {
+            (Vec::new(), &line[name_end..])
+        };
+        let value = rest
+            .strip_prefix(' ')
+            .unwrap_or_else(|| panic!("line {n}: one space before the value"));
+        assert!(!value.contains(' '), "line {n}: unexpected timestamp");
+        let value: f64 = value
+            .parse()
+            .unwrap_or_else(|_| panic!("line {n}: {value:?} is not a float"));
+
+        let key = format!("{name}{labels:?}");
+        assert!(!series.contains(&key), "line {n}: duplicate series {key}");
+        series.push(key);
+        out.samples.push(Sample {
+            name: name.to_string(),
+            labels,
+            value,
+        });
+    }
+    out
+}
+
+async fn scrape(addr: SocketAddr) -> Exposition {
+    let response = client()
+        .get(format!("http://{addr}/metrics"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/plain; version=0.0.4; charset=utf-8"
+    );
+    parse_exposition(&response.text().await.unwrap())
+}
+
+/// The parser above is what every assertion here rests on, so it has to
+/// refuse what Prometheus refuses. A parser that accepted everything would
+/// make every metrics test pass.
+#[test]
+fn the_test_parser_refuses_what_prometheus_refuses() {
+    let ok = "# HELP a x\n# TYPE a gauge\na{root=\"/q\\\"\"} 1\n";
+    assert_eq!(parse_exposition(ok).for_root("a", "/q\""), Some(1.0));
+
+    for bad in [
+        // No final line feed.
+        "# HELP a x\n# TYPE a gauge\na 1",
+        // A sample with no TYPE before it.
+        "a 1\n",
+        // The same series twice.
+        "# HELP a x\n# TYPE a gauge\na{root=\"x\"} 1\na{root=\"x\"} 2\n",
+        // An escape the format does not define.
+        "# HELP a x\n# TYPE a gauge\na{root=\"\\t\"} 1\n",
+        // A label value that never closes.
+        "# HELP a x\n# TYPE a gauge\na{root=\"x} 1\n",
+        // A family split around another one.
+        "# HELP a x\n# TYPE a gauge\na 1\n# HELP b y\n# TYPE b gauge\nb 1\na 2\n",
+        // TYPE given twice.
+        "# HELP a x\n# TYPE a gauge\n# HELP a x\n# TYPE a gauge\na 1\n",
+        // A value that is not a number.
+        "# HELP a x\n# TYPE a gauge\na one\n",
+    ] {
+        let result = std::panic::catch_unwind(|| parse_exposition(bad));
+        assert!(result.is_err(), "the parser accepted {bad:?}");
+    }
+}
+
+#[tokio::test]
+async fn metrics_need_the_token() {
+    let agent = start_agent(false).await;
+    let missing = client().get(agent.url("/metrics")).send().await.unwrap();
+    assert_eq!(missing.status(), 401);
+    let wrong = client()
+        .get(agent.url("/metrics"))
+        .bearer_auth("not-the-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), 401);
+}
+
+/// The values are the stored snapshot's, read back through a parser rather
+/// than by searching the text, so a well-formed number in the wrong family
+/// or under the wrong label cannot pass.
+#[tokio::test]
+async fn metrics_report_the_newest_snapshot_of_each_root() {
+    let agent = start_agent(false).await;
+    let root = agent.runner.roots()[0].path.to_string_lossy().into_owned();
+    agent.runner.scan_root(&agent.runner.roots()[0]).unwrap();
+    agent.runner.scan_root(&agent.runner.roots()[0]).unwrap();
+    let newest = agent.runner.list_scans().unwrap()[0].clone();
+
+    let m = scrape(agent.addr).await;
+
+    assert_eq!(m.for_root("spacetrace_root_snapshots", &root), Some(2.0));
+    assert_eq!(m.for_root("spacetrace_root_scan_running", &root), Some(0.0));
+    assert_eq!(
+        m.for_root("spacetrace_root_last_scan_timestamp_seconds", &root),
+        Some(newest.started_at as f64)
+    );
+    assert_eq!(
+        m.for_root("spacetrace_root_last_scan_duration_seconds", &root),
+        Some(newest.duration_ms as f64 / 1000.0)
+    );
+    // The fixture holds 40,005 bytes of file content, so the logical size is
+    // known exactly and not only "whatever the store says".
+    assert_eq!(
+        m.for_root("spacetrace_root_size_bytes", &root),
+        Some(40_005.0)
+    );
+    assert_eq!(
+        m.for_root("spacetrace_root_alloc_bytes", &root),
+        Some(newest.total_alloc as f64)
+    );
+    assert_eq!(m.for_root("spacetrace_root_files", &root), Some(2.0));
+    assert_eq!(
+        m.for_root("spacetrace_root_directories", &root),
+        Some(newest.dirs as f64)
+    );
+    assert_eq!(
+        m.for_root("spacetrace_root_unreadable_paths", &root),
+        Some(0.0)
+    );
+    assert_eq!(
+        m.for_root("spacetrace_root_filesystem_size_bytes", &root),
+        newest.fs_total.map(|v| v as f64)
+    );
+    assert_eq!(
+        m.for_root("spacetrace_root_filesystem_available_bytes", &root),
+        newest.fs_available.map(|v| v as f64)
+    );
+
+    // Every family carries a type, and none claims to be a counter: nothing
+    // here only ever rises for the life of the process.
+    for (name, help, kind) in &m.families {
+        assert_eq!(kind, "gauge", "{name}");
+        assert!(!help.is_empty(), "{name} has no help");
+        assert!(!name.ends_with("_total"), "{name} is not a counter");
+    }
+    let info = m
+        .samples
+        .iter()
+        .find(|s| s.name == "spacetrace_agent_info")
+        .expect("the build info is always reported");
+    assert_eq!(info.value, 1.0);
+    assert!(info
+        .labels
+        .contains(&("version".to_string(), env!("CARGO_PKG_VERSION").to_string())));
+    let started = m
+        .samples
+        .iter()
+        .find(|s| s.name == "spacetrace_agent_start_time_seconds")
+        .expect("the start time is always reported")
+        .value;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    assert!(
+        started <= now && now - started < 60.0,
+        "started at {started}, now {now}"
+    );
+}
+
+/// A root with no snapshot yet must still be in the scrape, or an alert on
+/// "this root has never been scanned" would have nothing to fire on.
+#[tokio::test]
+async fn a_root_never_scanned_is_listed_with_nothing_invented() {
+    let agent = start_agent(false).await;
+    let root = agent.runner.roots()[0].path.to_string_lossy().into_owned();
+
+    let m = scrape(agent.addr).await;
+
+    assert_eq!(m.for_root("spacetrace_root_scan_running", &root), Some(0.0));
+    assert_eq!(m.for_root("spacetrace_root_snapshots", &root), Some(0.0));
+    // No size of 0, which would draw as the disk being emptied, and no
+    // timestamp of 0, which would read as a scan in 1970.
+    for absent in [
+        "spacetrace_root_size_bytes",
+        "spacetrace_root_last_scan_timestamp_seconds",
+        "spacetrace_root_filesystem_available_bytes",
+    ] {
+        assert!(!m.has_family(absent), "{absent} should not be reported");
+    }
+}
+
+/// The three characters the format reserves, in a real directory name, end
+/// to end: the scan stores the name, the scrape escapes it, and a strict
+/// parser unescapes it back to the path that was configured.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_root_path_with_reserved_characters_is_escaped() {
+    let home = tempfile::tempdir().unwrap();
+    let plain = scannable_dir();
+    let weird = home.path().join("back\\slash \"quoted\"\nnewline");
+    std::fs::create_dir(&weird).unwrap();
+    std::fs::write(weird.join("f.bin"), vec![1u8; 1234]).unwrap();
+
+    let toml = format!(
+        "db = {:?}\n[server]\ntoken = {:?}\n[[roots]]\npath = {:?}\n",
+        home.path().join("snapshots.sqlite").to_string_lossy(),
+        TOKEN,
+        plain.path().to_string_lossy(),
+    );
+    let mut config: Config = toml::from_str(&toml).unwrap();
+    // Added directly: a line feed in a TOML string is an escape the test
+    // would then be checking instead of ours.
+    config
+        .roots
+        .push(spacetrace_agent::config::RootConfig::new(weird.clone()));
+    let (addr, runner) = serve_config(&config).await;
+    runner.scan_root(&config.roots[1]).unwrap();
+
+    let m = scrape(addr).await;
+    let label = weird.to_str().unwrap();
+    assert_eq!(
+        m.for_root("spacetrace_root_size_bytes", label),
+        Some(1234.0)
+    );
+    assert_eq!(m.for_root("spacetrace_root_snapshots", label), Some(1.0));
+    // And the other root, in the same families, is still its own series.
+    let other = plain.path().to_str().unwrap();
+    assert_eq!(m.for_root("spacetrace_root_snapshots", other), Some(0.0));
+    assert_eq!(m.for_root("spacetrace_root_scan_running", other), Some(0.0));
+}
+
+/// The scanner stores the canonical path, the scrape reports the configured
+/// one. After a restart there is no scan in memory to connect the two, so
+/// this is the case `Runner::recorded_root` exists for: without it a root
+/// configured through a symlink reports no history until its next scan.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_root_configured_through_a_symlink_keeps_its_history_across_a_restart() {
+    let home = tempfile::tempdir().unwrap();
+    let real = scannable_dir();
+    let link = home.path().join("data");
+    std::os::unix::fs::symlink(real.path(), &link).unwrap();
+
+    let toml = format!(
+        "db = {:?}\n[server]\ntoken = {:?}\n[[roots]]\npath = {:?}\n",
+        home.path().join("snapshots.sqlite").to_string_lossy(),
+        TOKEN,
+        link.to_string_lossy(),
+    );
+    let config: Config = toml::from_str(&toml).unwrap();
+    let before_restart = Runner::new(&config);
+    before_restart.scan_root(&config.roots[0]).unwrap();
+    let stored = before_restart.list_scans().unwrap()[0].root.clone();
+    assert_ne!(stored, link.to_string_lossy(), "sanity: stored canonical");
+    drop(before_restart);
+
+    // A fresh runner, as after a restart: nothing scanned in this process.
+    let (addr, _runner) = serve_config(&config).await;
+    let m = scrape(addr).await;
+    let label = link.to_str().unwrap();
+    assert_eq!(m.for_root("spacetrace_root_snapshots", label), Some(1.0));
+    assert_eq!(
+        m.for_root("spacetrace_root_size_bytes", label),
+        Some(40_005.0)
+    );
+}
+/// A scrape lands every fifteen seconds whatever the agent is doing, so it
+/// will land in the middle of a snapshot being saved. It must read past the
+/// writer rather than wait for it (invariant 0): the store's busy timeout is
+/// thirty seconds, which is a failed scrape, not a slow one.
+#[tokio::test]
+async fn a_scrape_does_not_wait_for_a_snapshot_being_written() {
+    let agent = start_agent(false).await;
+    agent.runner.scan_root(&agent.runner.roots()[0]).unwrap();
+    let root = agent.runner.roots()[0].path.to_string_lossy().into_owned();
+
+    let writer = rusqlite::Connection::open(agent.runner.db_path()).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    writer
+        .execute(
+            "INSERT INTO scans (host, root, started_at, duration_ms, total_size, total_alloc,
+                                files, dirs, errors, hardlinks_deduped, scanner_version, label)
+             SELECT host, root, started_at + 1, 1, 1, 1, 1, 1, 0, 0, 't', NULL FROM scans",
+            [],
+        )
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let response = client()
+        .get(agent.url("/metrics"))
+        .bearer_auth(TOKEN)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .expect("the scrape must not wait out the writer");
+    assert_eq!(response.status(), 200);
+    let m = parse_exposition(&response.text().await.unwrap());
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
+    // And it sees what is stored, not what is half written.
+    assert_eq!(m.for_root("spacetrace_root_snapshots", &root), Some(1.0));
+
+    writer.execute_batch("COMMIT").unwrap();
+    let m = scrape(agent.addr).await;
+    assert_eq!(m.for_root("spacetrace_root_snapshots", &root), Some(2.0));
 }
