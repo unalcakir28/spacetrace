@@ -121,45 +121,79 @@ pub struct Runner {
     /// numbers vary, never the path through the code.
     stall_timings: (Duration, Duration),
     /// Configured root to the path its snapshots are stored under, learned
-    /// once per root. See `recorded_root`.
+    /// once per root. See `recorded_roots`.
     recorded: Mutex<HashMap<PathBuf, Arc<Recorded>>>,
 }
 
 /// The stored name of one configured root, filled in by whoever learns it
-/// first: the thread `recorded_root` starts, or a scan that has just written it.
-#[derive(Default)]
+/// first: the thread `recorded_roots` starts, or a scan that has just written
+/// it.
 struct Recorded {
-    path: Mutex<Option<String>>,
+    state: Mutex<Resolution>,
     ready: Condvar,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Resolution {
+    /// A resolver thread is running. At most one per root: while this holds,
+    /// nobody starts another, so a root on a dead share costs one stuck thread
+    /// however many scrapes ask.
+    Resolving,
+    /// The answer: a path that canonicalised, or what a scan really wrote.
+    Known(String),
+    /// The last resolution failed. Not an answer worth keeping — a symlinked
+    /// root whose target is mounted after the agent starts fails at boot and
+    /// succeeds a minute later — so the next caller starts another.
+    Failed,
+}
+
 impl Recorded {
+    fn resolving() -> Self {
+        Recorded {
+            state: Mutex::new(Resolution::Resolving),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Resolution> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// What a finished scan wrote. Always wins, because it is the one answer
     /// known to match the rows.
     fn set(&self, path: String) {
-        *self.path.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
+        *self.lock() = Resolution::Known(path);
         self.ready.notify_all();
     }
 
-    /// What resolving the configured path found. Never overwrites a scan's
-    /// answer: a resolution that was stuck on a dead mount can return long
-    /// after a later scan recorded something newer.
-    fn fill(&self, path: String) {
-        let mut slot = self.path.lock().unwrap_or_else(|e| e.into_inner());
-        if slot.is_none() {
-            *slot = Some(path);
+    /// What the resolver thread found. Never overwrites a scan's answer: a
+    /// resolution that was stuck on a dead mount can return long after a
+    /// later scan recorded something newer.
+    fn finish(&self, outcome: Option<String>) {
+        let mut state = self.lock();
+        if *state == Resolution::Resolving {
+            *state = match outcome {
+                Some(path) => Resolution::Known(path),
+                None => Resolution::Failed,
+            };
         }
         self.ready.notify_all();
     }
 
-    fn wait_until(&self, deadline: Instant) -> Option<String> {
-        let slot = self.path.lock().unwrap_or_else(|e| e.into_inner());
+    /// Wait for the resolver until `deadline`. `None` while it is still
+    /// running; for a failed one, the path as configured — what the scanner
+    /// itself stores a root under when it cannot resolve it.
+    fn wait_until(&self, deadline: Instant, configured: &Path) -> Option<String> {
         let wait = deadline.saturating_duration_since(Instant::now());
-        let (slot, _) = self
+        let (state, _) = self
             .ready
-            .wait_timeout_while(slot, wait, |path| path.is_none())
+            .wait_timeout_while(self.lock(), wait, |s| *s == Resolution::Resolving)
             .unwrap_or_else(|e| e.into_inner());
-        slot.clone()
+        match &*state {
+            Resolution::Resolving => None,
+            Resolution::Known(path) => Some(path.clone()),
+            Resolution::Failed => Some(configured.to_string_lossy().into_owned()),
+        }
     }
 }
 
@@ -198,8 +232,8 @@ impl Runner {
         self.roots.iter().find(|r| r.path == path)
     }
 
-    /// The path snapshots of the configured root `configured` are stored
-    /// under, or `None` if that is still unknown at `deadline`.
+    /// The paths snapshots of each configured root in `configured` are stored
+    /// under, in the same order; `None` for one still unknown at `deadline`.
     ///
     /// The scanner records the canonical path, so a root configured as `/data`
     /// and symlinked to `/mnt/disk1` is stored as `/mnt/disk1`, and a lookup
@@ -207,45 +241,78 @@ impl Runner {
     /// `lstat` per component, which on a network share whose server has gone
     /// never returns and cannot be interrupted (invariant 7). `/metrics` asks
     /// on every scrape, so doing it inline would hang the scrape and leave one
-    /// more stuck thread behind every fifteen seconds. Instead it happens once
-    /// per root, on a thread that can be abandoned, and every later caller
-    /// reads the answer or waits for it until its own deadline. A scan
-    /// overwrites the answer with the path it really wrote, so a root
-    /// re-pointed since is caught up by its next scan.
-    pub fn recorded_root(&self, configured: &Path, deadline: Instant) -> Option<String> {
-        let (recorded, fresh) = {
+    /// more stuck thread behind every fifteen seconds. Instead it happens on a
+    /// thread that can be abandoned, at most one per root at a time, and every
+    /// caller reads the answer or waits for it until its own deadline.
+    ///
+    /// Only a path that resolved is kept. A failure answers this caller with
+    /// the path as configured and is retried by the next one, because the
+    /// usual cause is temporary: an agent started at boot before its root's
+    /// symlink target is mounted would otherwise report that root as never
+    /// scanned until its next scan, which can be days away. A scan overwrites
+    /// the answer with the path it really wrote, so a root re-pointed since is
+    /// caught up by its next scan.
+    ///
+    /// Every resolver is started before any is waited for, so one dead root
+    /// spends the shared deadline once rather than starving the roots after it.
+    pub fn recorded_roots(&self, configured: &[&Path], deadline: Instant) -> Vec<Option<String>> {
+        let started: Vec<Option<Arc<Recorded>>> = configured
+            .iter()
+            .map(|path| self.start_resolving(path))
+            .collect();
+        configured
+            .iter()
+            .zip(started)
+            .map(|(path, recorded)| recorded?.wait_until(deadline, path))
+            .collect()
+    }
+
+    /// The slot for `configured`, starting a resolver unless one is running or
+    /// the answer is known. `None` if no thread could be started; the slot is
+    /// forgotten then, so the next caller tries again rather than waiting on a
+    /// thread that never existed.
+    fn start_resolving(&self, configured: &Path) -> Option<Arc<Recorded>> {
+        let recorded = {
             let mut map = self.recorded.lock().unwrap_or_else(|e| e.into_inner());
             match map.get(configured) {
-                Some(known) => (Arc::clone(known), false),
+                Some(known) => {
+                    let mut state = known.lock();
+                    if *state != Resolution::Failed {
+                        drop(state);
+                        return Some(Arc::clone(known));
+                    }
+                    *state = Resolution::Resolving;
+                    drop(state);
+                    Arc::clone(known)
+                }
                 None => {
-                    let created = Arc::new(Recorded::default());
+                    let created = Arc::new(Recorded::resolving());
                     map.insert(configured.to_path_buf(), Arc::clone(&created));
-                    (created, true)
+                    created
                 }
             }
         };
-        if fresh {
-            let resolving = Arc::clone(&recorded);
-            let path = configured.to_path_buf();
-            let spawned = std::thread::Builder::new()
-                .name("spacetrace-resolve-root".to_string())
-                .spawn(move || resolving.fill(stored_name(&path)));
-            if spawned.is_err() {
-                // Forget the attempt so the next caller makes another, rather
-                // than waiting forever on a thread that never existed.
-                let mut map = self.recorded.lock().unwrap_or_else(|e| e.into_inner());
-                map.remove(configured);
-                return None;
-            }
+        let resolving = Arc::clone(&recorded);
+        let path = configured.to_path_buf();
+        let spawned = std::thread::Builder::new()
+            .name("spacetrace-resolve-root".to_string())
+            .spawn(move || {
+                let canonical = path.canonicalize().ok();
+                resolving.finish(canonical.map(|p| p.to_string_lossy().into_owned()));
+            });
+        if spawned.is_err() {
+            let mut map = self.recorded.lock().unwrap_or_else(|e| e.into_inner());
+            map.remove(configured);
+            return None;
         }
-        recorded.wait_until(deadline)
+        Some(recorded)
     }
 
     /// Record the path a scan of `configured` was stored under.
     fn remember_recorded(&self, configured: &Path, stored: &str) {
         let mut map = self.recorded.lock().unwrap_or_else(|e| e.into_inner());
         map.entry(configured.to_path_buf())
-            .or_default()
+            .or_insert_with(|| Arc::new(Recorded::resolving()))
             .set(stored.to_string());
     }
 
@@ -919,7 +986,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         assert_eq!(
-            runner.recorded_root(&missing, deadline).as_deref(),
+            recorded_one(&runner, &missing, deadline).as_deref(),
             Some(missing.to_string_lossy().as_ref())
         );
     }
@@ -939,13 +1006,111 @@ mod tests {
         let runner = Runner::new(&cfg);
         let deadline = || Instant::now() + Duration::from_secs(5);
 
-        let resolved = runner.recorded_root(&link, deadline()).unwrap();
+        let resolved = recorded_one(&runner, &link, deadline()).unwrap();
         assert_eq!(resolved, stored_name(first.path()));
 
         // Re-point the root and scan: the stored name follows the scan.
         fs::remove_file(&link).unwrap();
         std::os::unix::fs::symlink(second.path(), &link).unwrap();
         let outcome = runner.scan_root(&cfg.roots[0]).unwrap();
-        assert_eq!(runner.recorded_root(&link, deadline()), Some(outcome.root));
+        assert_eq!(recorded_one(&runner, &link, deadline()), Some(outcome.root));
+    }
+
+    fn recorded_one(runner: &Runner, path: &Path, deadline: Instant) -> Option<String> {
+        runner.recorded_roots(&[path], deadline).pop().flatten()
+    }
+
+    /// Stand in for a resolver stuck on a dead share: a slot that says
+    /// "resolving" with no thread behind it, so nothing will ever finish it.
+    fn wedge(runner: &Runner, path: &Path) {
+        let mut map = runner.recorded.lock().unwrap();
+        map.insert(path.to_path_buf(), Arc::new(Recorded::resolving()));
+    }
+
+    fn state_of(runner: &Runner, path: &Path) -> Resolution {
+        runner.recorded.lock().unwrap()[path].lock().clone()
+    }
+
+    /// The boot-order case: a root symlinked to a filesystem that is mounted
+    /// after the agent starts. A failed resolution must not be kept, or the
+    /// root reads as never scanned until its next scan.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_resolution_is_retried_rather_than_kept() {
+        let home = tempfile::tempdir().unwrap();
+        let target = home.path().join("disk1-data");
+        let link = home.path().join("data");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let cfg = config_for(&link, &home.path().join("db.sqlite"));
+        let runner = Runner::new(&cfg);
+        let deadline = || Instant::now() + Duration::from_secs(5);
+
+        // Not mounted yet: answered with the path as configured, as the
+        // scanner would store it, and not remembered.
+        assert_eq!(
+            recorded_one(&runner, &link, deadline()).as_deref(),
+            Some(link.to_string_lossy().as_ref())
+        );
+        assert_eq!(state_of(&runner, &link), Resolution::Failed);
+
+        // Mounted: the very next ask resolves it.
+        fs::create_dir(&target).unwrap();
+        assert_eq!(
+            recorded_one(&runner, &link, deadline()),
+            Some(stored_name(&target))
+        );
+    }
+
+    /// Retrying must not turn one stuck root into a thread per scrape. While
+    /// a resolver is running nobody starts another, however often they ask.
+    #[test]
+    fn a_running_resolver_is_never_joined_by_a_second() {
+        let dir = fixture();
+        let home = tempfile::tempdir().unwrap();
+        let cfg = config_for(dir.path(), &home.path().join("db.sqlite"));
+        let runner = Runner::new(&cfg);
+        wedge(&runner, dir.path());
+
+        for _ in 0..3 {
+            let soon = Instant::now() + Duration::from_millis(20);
+            assert_eq!(recorded_one(&runner, dir.path(), soon), None);
+        }
+        // A second resolver would have answered within microseconds: the
+        // directory exists. Still resolving means none was started.
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(state_of(&runner, dir.path()), Resolution::Resolving);
+    }
+
+    /// One dead root must not starve the roots listed after it. Waiting per
+    /// root in order let the first spend the whole shared deadline, and a
+    /// healthy root whose resolver had only just been started then waited
+    /// nothing and showed no history on the first scrape after a start.
+    #[test]
+    fn a_stuck_root_does_not_starve_the_roots_after_it() {
+        let dead = fixture();
+        let healthy = fixture();
+        let home = tempfile::tempdir().unwrap();
+        let toml = format!(
+            "db = {:?}\n[[roots]]\npath = {:?}\n[[roots]]\npath = {:?}\n",
+            home.path().join("db.sqlite").to_string_lossy(),
+            dead.path().to_string_lossy(),
+            healthy.path().to_string_lossy()
+        );
+        let cfg: Config = toml::from_str(&toml).unwrap();
+        let runner = Runner::new(&cfg);
+        wedge(&runner, dead.path());
+
+        let started = Instant::now();
+        let readings = crate::metrics::collect(&runner).unwrap();
+        let took = started.elapsed();
+
+        assert!(readings[0].history.is_none(), "the stuck root is unknown");
+        let healthy = readings[1]
+            .history
+            .as_ref()
+            .expect("a healthy root after a stuck one must be resolved within the same scrape");
+        assert_eq!(healthy.snapshots, 0);
+        // The deadline is shared, not spent once per root.
+        assert!(took < Duration::from_secs(2), "the scrape took {took:?}");
     }
 }

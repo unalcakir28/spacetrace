@@ -320,7 +320,7 @@ async fn status(State(state): State<Arc<AppState>>) -> Result<Json<Status>, ApiF
 async fn metrics(State(state): State<Arc<AppState>>) -> Result<Response, ApiFailure> {
     let runner = Arc::clone(&state.runner);
     // A blocking thread, unlike `/status`: this may wait on a root's path
-    // (`Runner::recorded_root`), and that wait must not hold a runtime worker.
+    // (`Runner::recorded_roots`), and that wait must not hold a runtime worker.
     let roots = tokio::task::spawn_blocking(move || crate::metrics::collect(&runner))
         .await
         .map_err(|e| ApiFailure::internal(format!("metrics task failed: {e}")))??;

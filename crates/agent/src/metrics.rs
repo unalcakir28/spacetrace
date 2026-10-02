@@ -35,7 +35,7 @@ use crate::runner::Runner;
 pub const CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
 /// How long one scrape waits, in total, to learn the stored name of roots it
-/// has not resolved yet. See `Runner::recorded_root`.
+/// has not resolved yet. See `Runner::recorded_roots`.
 ///
 /// On a healthy disk the answer takes microseconds and this is never reached.
 /// It is reached by a root on a dead share, every scrape until the share
@@ -72,17 +72,28 @@ pub fn collect(runner: &Runner) -> Result<Vec<RootReading>> {
     let running = runner.in_flight_roots();
     let deadline = Instant::now() + RESOLVE_WAIT;
 
-    let mut readings: Vec<RootReading> = Vec::new();
+    // The config does not forbid listing a root twice, and the format does
+    // forbid the same series twice in one scrape: Prometheus rejects the
+    // duplicate. Compared as the label it becomes, because two paths that are
+    // not UTF-8 can become the same label. The first one wins.
+    let mut roots: Vec<(&std::path::Path, String)> = Vec::new();
     for root in runner.roots() {
-        // The config does not forbid listing a root twice, and the format does
-        // forbid the same series twice in one scrape: Prometheus rejects the
-        // duplicate. Compared as the label it becomes, because two paths that
-        // are not UTF-8 can become the same label. The first one wins.
-        let label = root.path.to_string_lossy();
-        if readings.iter().any(|seen| seen.root == label) {
+        let label = root.path.to_string_lossy().into_owned();
+        if roots.iter().any(|(_, seen)| *seen == label) {
             continue;
         }
-        let history = match runner.recorded_root(&root.path, deadline) {
+        roots.push((&root.path, label));
+    }
+
+    // One call for every root, so all resolvers run against the one deadline
+    // together: a root on a dead share then costs the scrape its wait once,
+    // and a healthy root listed after it still gets an answer.
+    let paths: Vec<&std::path::Path> = roots.iter().map(|(path, _)| *path).collect();
+    let stored = runner.recorded_roots(&paths, deadline);
+
+    let mut readings = Vec::with_capacity(roots.len());
+    for ((path, label), stored) in roots.into_iter().zip(stored) {
+        let history = match stored {
             Some(stored) => Some(History {
                 snapshots: store.count_for(&stored, runner.host())?,
                 latest: store.latest_for(&stored, Some(runner.host()))?,
@@ -90,8 +101,8 @@ pub fn collect(runner: &Runner) -> Result<Vec<RootReading>> {
             None => None,
         };
         readings.push(RootReading {
-            root: label.into_owned(),
-            scanning: running.contains(&root.path),
+            root: label,
+            scanning: running.iter().any(|r| r == path),
             history,
         });
     }

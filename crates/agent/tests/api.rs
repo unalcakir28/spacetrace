@@ -1261,7 +1261,7 @@ async fn a_root_path_with_reserved_characters_is_escaped() {
 
 /// The scanner stores the canonical path, the scrape reports the configured
 /// one. After a restart there is no scan in memory to connect the two, so
-/// this is the case `Runner::recorded_root` exists for: without it a root
+/// this is the case `Runner::recorded_roots` exists for: without it a root
 /// configured through a symlink reports no history until its next scan.
 #[cfg(unix)]
 #[tokio::test]

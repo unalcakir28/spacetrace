@@ -429,8 +429,11 @@ Four things to know before writing alerts:
 - **A root whose path does not answer** — a dead share configured as a root —
   keeps `scan_running` and loses everything else, including `snapshots`, until
   its path answers again. Finding which stored rows belong to a root means
-  resolving its path, which is done once, on a thread the scrape can abandon
-  after half a second.
+  resolving its path, on one thread per root that the scrape abandons after
+  half a second, shared by all roots. A path that answers but does not resolve
+  — a symlink whose target is not mounted yet — is reported under the path as
+  configured for that scrape and resolved again on the next, so a root mounted
+  after the agent starts gets its history back within one scrape interval.
 
 ```yaml
 - alert: SpacetraceScanStale
