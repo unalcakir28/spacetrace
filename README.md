@@ -179,6 +179,41 @@ Note what the report says: **`app/logs/`**, not `app/` or `/srv`. Intermediate
 folders that merely pass the change through are skipped; the first level where
 the change genuinely spreads out is the one reported.
 
+### An S3 bucket
+
+`scan` also takes an S3 bucket — AWS, or any S3-compatible service (MinIO,
+Cloudflare R2, Backblaze B2, Wasabi) through `--endpoint`:
+
+```bash
+spacetrace scan s3://my-bucket/backups --save                  # AWS
+spacetrace scan s3://media --endpoint http://127.0.0.1:9000 --save
+spacetrace scan s3://open-data --no-sign-request               # a public bucket
+
+spacetrace diff --path s3://my-bucket/backups                  # what grew
+```
+
+The saved snapshot is an ordinary one: `ls --scan`, `diff`, `age --scan` and
+`export` work on it unchanged. Credentials and region are found the way the
+`aws` CLI finds them — `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/
+`AWS_SESSION_TOKEN`, then `~/.aws/credentials` and `~/.aws/config` with
+`AWS_PROFILE` or `--profile`, region from `--region`, `AWS_REGION`, the profile,
+then `us-east-1` (a wrong guess is corrected once, from AWS' own answer). Only
+static keys are read; for SSO or an assumed role, export keys first with
+`aws configure export-credentials`.
+
+- Keys are split on `/` into folders, and a key ending in `/` (a "folder
+  marker") is drawn as its folder. The path after the bucket is a folder:
+  `s3://b/photos` lists `photos/…`, not `photos2024/…`.
+- An object has no blocks, so `size` and `alloc` are both its length. The
+  on-disk total is every byte listed — the figure `mc du` prints. Bytes the tree can only charge to a folder (a
+  marker holding data, an object `a` beside a folder `a/`) count there and stay
+  out of the logical total, and the summary says when that happened.
+- **Current versions only.** Old versions, delete markers and unfinished
+  multipart uploads are not in a listing and are not counted — but they are
+  billed, so the total is not the bill.
+- The snapshot's host is the service (`s3.amazonaws.com`, or the endpoint's
+  `host:port`), not this machine: two machines listing one bucket see one target.
+
 ### Common options
 
 | Option | What it does |
@@ -232,6 +267,8 @@ static binary built from `scan-core` + `store`.
   mount.
 - Hardlinks are counted once by default; disable with `--no-dedupe`. Symlinks are
   never followed and are counted at their own size.
+- An S3 object has no blocks: both sizes are its length (see
+  [An S3 bucket](#an-s3-bucket)).
 
 Verified: on `/usr` (141k files), `/usr/share` and `/etc`, both totals match `du`
 **exactly**. This is a test condition, not an aspiration.

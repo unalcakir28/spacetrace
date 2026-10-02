@@ -263,6 +263,46 @@ In practice:
 Children are matched by name via a **merge-join** (both sides are sorted),
 so a hash map of the entire tree is never kept in memory.
 
+## Sources other than a local disk
+
+Three ways a tree arrives without this machine walking it, and all three end
+in the same `Tree`, so everything after — store, `ls`, `diff`, `age`,
+`export` — has one implementation:
+
+| Source | How | Where |
+|--------|-----|-------|
+| An agent (`--remote`) | Downloads the snapshot as a standalone SQLite file (K4) and loads it through `store::load` | `crates/cli/src/remote.rs` |
+| An ncdu or gdu export (`import`) | Nested JSON → `Tree::from_nested` | `crates/store/src/ncdu_import.rs` |
+| An S3 bucket (`scan s3://…`) | ListObjectsV2 pages → keys drawn as folders → `Tree::from_nested` | `crates/cli/src/s3/` |
+
+**S3 lives in the CLI**, not in a crate of its own and not in `store`: the
+agent is built from `store` and has to stay a small static binary, and the HTTP
+client it needs is already in the CLI for `--remote`. SigV4, HMAC-SHA256 and the
+XML reader are written by hand (`sha2` was already in the workspace), and are
+tested against AWS' published signing vectors, responses captured from MinIO
+and AWS, and a live MinIO when `SPACETRACE_TEST_S3_ENDPOINT` points at one.
+
+What a bucket snapshot means:
+
+- **Identity.** `host` is the service — `s3.amazonaws.com` for AWS, whatever
+  the region, or the endpoint's `host:port` — and `root` is `s3://bucket` or
+  `s3://bucket/prefix` without a trailing slash. Two machines listing one
+  bucket produce one target, which is what `diff --path` and the hub's trends
+  group by. `fs_total`/`fs_available` stay empty: a bucket has no capacity to
+  fill, and an empty capacity keeps free-space alerts quiet.
+- **Sizes.** An object has no blocks, so `size` and `alloc` are both its
+  length and `alloc` totals every byte listed. A folder marker (a key ending
+  in `/`) is drawn as its folder; should it — or an object `a` beside a folder
+  `a/` — hold bytes, they are the folder's own cost in `alloc` only, the way a
+  directory's own blocks are on a disk (invariant 1). `mtime` is
+  `LastModified`; a folder takes its newest content's.
+- **Scope.** Current versions only. Old versions, delete markers and
+  unfinished multipart uploads are billed and are not in a listing; the CLI
+  says so under every total.
+- **Progress and cancelling** follow the walk: files, folders and bytes move
+  once per 1000-key page, and a cancel before the next page returns
+  `ErrorKind::Interrupted` and no tree.
+
 ## Platform-specific backends
 
 Right now there is a single portable backend (`read_dir` +

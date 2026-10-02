@@ -94,8 +94,9 @@ pub struct PullArgs {
 
 #[derive(Args, Debug)]
 pub struct ScanArgs {
-    /// Path to scan (with --ssh, a path on that machine; relative paths start
-    /// at the remote home directory)
+    /// Path to scan: a directory, s3://bucket/prefix for an S3 bucket, or with
+    /// --ssh a path on that machine (relative paths start at the remote home
+    /// directory)
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
@@ -131,6 +132,51 @@ pub struct ScanArgs {
     /// Also write the result as ncdu-compatible JSON to this file ("-" = stdout)
     #[arg(long, value_name = "FILE")]
     pub ncdu: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub s3: S3Args,
+}
+
+/// Only for an `s3://` path. Refused for a directory, and the walk options are
+/// refused for a bucket: a flag that silently does nothing leaves its user
+/// believing the result is limited when it is not.
+#[derive(Args, Debug, Default)]
+#[command(next_help_heading = "S3 (when PATH is s3://bucket/prefix)")]
+pub struct S3Args {
+    /// An S3-compatible service instead of AWS, addressed path-style
+    /// (e.g. http://127.0.0.1:9000 for MinIO). Default: AWS_ENDPOINT_URL_S3,
+    /// then AWS_ENDPOINT_URL, then AWS itself
+    #[arg(long, value_name = "URL")]
+    pub endpoint: Option<String>,
+
+    /// Region to sign for. Default: AWS_REGION, AWS_DEFAULT_REGION, the
+    /// profile's region in ~/.aws/config, then us-east-1
+    #[arg(long, value_name = "NAME")]
+    pub region: Option<String>,
+
+    /// Profile in ~/.aws/credentials and ~/.aws/config. Default: the
+    /// AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY environment, then AWS_PROFILE,
+    /// then "default"
+    #[arg(long, value_name = "NAME")]
+    pub profile: Option<String>,
+
+    /// Send unsigned requests, for a public bucket (like the aws CLI's flag)
+    #[arg(long, conflicts_with = "profile")]
+    pub no_sign_request: bool,
+}
+
+impl S3Args {
+    /// The first S3 flag given, for refusing it on a directory.
+    pub fn first_given(&self) -> Option<&'static str> {
+        [
+            (self.endpoint.is_some(), "--endpoint"),
+            (self.region.is_some(), "--region"),
+            (self.profile.is_some(), "--profile"),
+            (self.no_sign_request, "--no-sign-request"),
+        ]
+        .into_iter()
+        .find_map(|(given, name)| given.then_some(name))
+    }
 }
 
 #[derive(Args, Debug)]
@@ -381,6 +427,22 @@ impl WalkArgs {
             args.push(format!("--mount-timeout={secs}"));
         }
         args
+    }
+
+    /// The first walk flag given, for refusing it on a bucket, which has no
+    /// mounts, hardlinks, clones or threads to speak of.
+    pub fn first_given(&self) -> Option<&'static str> {
+        [
+            (!self.exclude.is_empty(), "--exclude"),
+            (self.one_file_system, "--one-file-system"),
+            (self.depth.is_some(), "--depth"),
+            (self.no_dedupe, "--no-dedupe"),
+            (self.no_clone_dedupe, "--no-clone-dedupe"),
+            (self.threads.is_some(), "--threads"),
+            (self.mount_timeout.is_some(), "--mount-timeout"),
+        ]
+        .into_iter()
+        .find_map(|(given, name)| given.then_some(name))
     }
 
     pub fn to_options(&self) -> spacetrace_scan_core::ScanOptions {

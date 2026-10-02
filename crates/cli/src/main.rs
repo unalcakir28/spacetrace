@@ -1,6 +1,7 @@
 mod args;
 mod fmt;
 mod remote;
+mod s3;
 #[cfg(unix)]
 mod ssh;
 mod update;
@@ -27,6 +28,7 @@ use crate::args::{
     LsArgs, PruneArgs, PullArgs, RmArgs, ScanArgs, VerifyArgs,
 };
 use crate::remote::Remote;
+use crate::s3::S3Url;
 
 fn main() {
     update::clean_up_after_windows_update();
@@ -121,7 +123,24 @@ fn staging() -> Result<tempfile::TempDir> {
 
 fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
     if let Some(destination) = &a.ssh {
+        // A bucket is listed from here, over HTTPS; there is nothing for the
+        // other machine to do, and its credentials are not the ones meant.
+        if S3Url::is_s3(&a.path) {
+            anyhow::bail!("--ssh scans a path on that machine; list an s3:// bucket without --ssh");
+        }
+        if let Some(flag) = a.s3.first_given() {
+            anyhow::bail!("{flag} applies to an s3:// path, not to a scan over --ssh");
+        }
         return cmd_scan_ssh(a, destination, db_path, json);
+    }
+    if S3Url::is_s3(&a.path) {
+        return cmd_scan_s3(a, db_path, json);
+    }
+    if let Some(flag) = a.s3.first_given() {
+        anyhow::bail!(
+            "{flag} applies to an s3:// path, and {} is a directory",
+            a.path.display()
+        );
     }
     let mut options = a.walk.to_options();
     options.expected_entries = entry_count_hint(db_path, &a.path);
@@ -317,6 +336,135 @@ fn cmd_scan_ssh(a: &ScanArgs, destination: &str, db_path: &Path, json: bool) -> 
     Ok(())
 }
 
+/// Said under every S3 total, in text and in JSON, because the number a
+/// listing can see is not the number on the bill and the two are easy to
+/// mistake for each other.
+const S3_SCOPE: &str = "Current versions only: old versions, delete markers and \
+unfinished multipart uploads are not listed, and are billed on top of this.";
+
+/// `scan s3://bucket/prefix`: list instead of walk, then everything a disk
+/// scan does — save, ncdu, the summary — on the tree that comes back.
+fn cmd_scan_s3(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
+    if let Some(flag) = a.walk.first_given() {
+        anyhow::bail!("{flag} is about walking a filesystem; it does not apply to an S3 bucket");
+    }
+    let url = S3Url::parse(&a.path.to_string_lossy())?;
+    let flags = s3::Flags {
+        endpoint: a.s3.endpoint.clone(),
+        region: a.s3.region.clone(),
+        profile: a.s3.profile.clone(),
+        no_sign_request: a.s3.no_sign_request,
+    };
+
+    let progress = Arc::new(ScanProgress::default());
+    let ticker = Ticker::start_for(Arc::clone(&progress), !json, Some(url.root()));
+    let listing = s3::scan(&url, &flags, Arc::clone(&progress))
+        .with_context(|| format!("cannot list {}", url.root()))?;
+    let tree = &listing.tree;
+
+    let root = tree.node(tree.root());
+    // No error count: a listing either finishes or fails as a whole, so there
+    // is no path that was skipped. No capacity either — a bucket has no size
+    // to fill, and `None` is what keeps the hub's free-space alerts quiet.
+    let stats = ScanStats {
+        files: u64::from(root.files),
+        dirs: u64::from(root.dirs),
+        errors: 0,
+        hardlinks_deduped: 0,
+        clones_deduped: 0,
+        error_samples: Vec::new(),
+        duration_ms: listing.duration_ms,
+        capacity: None,
+    };
+
+    let mut saved_id = None;
+    if a.save {
+        let mut store = open_store(db_path)?;
+        saved_id = Some(store.save_reporting(
+            tree,
+            &stats,
+            &listing.host,
+            a.label.as_deref(),
+            &progress,
+        )?);
+    }
+    drop(ticker);
+
+    if let Some(out) = &a.ncdu {
+        write_ncdu(tree, out)?;
+    }
+
+    let k = &listing.stats;
+    if json {
+        let payload = serde_json::json!({
+            "root": tree.root_path().to_string_lossy(),
+            "host": listing.host,
+            "region": listing.region,
+            "total_size": tree.total_size(),
+            "total_alloc": tree.total_alloc(),
+            "objects": k.objects,
+            "files": stats.files,
+            "dirs": stats.dirs,
+            "folder_markers": k.folder_markers,
+            "shadowed_by_folder": k.shadowed,
+            "merged": k.merged,
+            "odd_keys": k.samples,
+            "pages": listing.pages,
+            "duration_ms": stats.duration_ms,
+            "scan_id": saved_id,
+            "scope": S3_SCOPE,
+            "largest": largest_json(tree, a.top),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        return Ok(());
+    }
+
+    println!("{}  ({})", tree.root_path().display(), listing.host);
+    println!(
+        "  {} in {} objects · {} files · {} folders · {}",
+        fmt::size(tree.total_alloc()),
+        fmt::count(k.objects),
+        fmt::count(stats.files),
+        fmt::count(stats.dirs),
+        fmt::duration(stats.duration_ms),
+    );
+    if k.folder_markers > 0 {
+        println!(
+            "  folder markers (keys ending in /), drawn as their folders: {}",
+            fmt::count(k.folder_markers)
+        );
+    }
+    if k.shadowed > 0 || k.merged > 0 {
+        // The one place the tree cannot be a picture of the keys. The bytes
+        // are all there; where they are drawn is what needs saying.
+        println!(
+            "  {} objects share a name with a folder and are counted on it; \
+             {} meet another key once empty path segments are dropped. For example:",
+            fmt::count(k.shadowed),
+            fmt::count(k.merged)
+        );
+        for key in &k.samples {
+            println!("      {key:?}");
+        }
+    }
+    if tree.total_alloc() != tree.total_size() {
+        println!(
+            "  {} of it is in files; the rest belongs to folders — markers holding data, \
+             objects shadowed by a folder — and counts on disk, not logically",
+            fmt::size(tree.total_size())
+        );
+    }
+    println!("  {S3_SCOPE}");
+    println!();
+    print_children_table(tree, tree.root(), a.top);
+    if let Some(id) = saved_id {
+        println!("\nSnapshot #{id} saved → {}", db_path.display());
+    } else {
+        println!("\nAdd --save to store this snapshot (comparing requires it).");
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------- ls
 
 fn cmd_ls(a: &LsArgs, db_path: &Path, remote: Option<&Remote>, json: bool) -> Result<()> {
@@ -482,7 +630,7 @@ fn resolve_diff_inputs(
     let progress = !json;
 
     if let Some(path) = &a.since_last {
-        let root = canonical_string(path)?;
+        let root = root_key(path)?;
         let meta = store
             .latest_for(&root, None)?
             .with_context(|| format!("no stored snapshot for {root}"))?;
@@ -509,7 +657,7 @@ fn resolve_diff_inputs(
         .path
         .clone()
         .context("what should be compared? pass --path, --since-last or --from/--to")?;
-    let root = canonical_string(&path)?;
+    let root = root_key(&path)?;
     let pair = store.last_two_for(&root, None)?;
     anyhow::ensure!(
         pair.len() == 2,
@@ -904,6 +1052,15 @@ fn home() -> Result<PathBuf> {
         .context("cannot find home directory; pass a path with --db")
 }
 
+/// The `root` a snapshot of `path` is stored under: the bucket URL in its one
+/// normal spelling for `s3://`, the canonical directory otherwise.
+fn root_key(path: &Path) -> Result<String> {
+    if S3Url::is_s3(path) {
+        return Ok(S3Url::parse(&path.to_string_lossy())?.root());
+    }
+    canonical_string(path)
+}
+
 fn canonical_string(path: &Path) -> Result<String> {
     let p = path
         .canonicalize()
@@ -964,6 +1121,18 @@ fn scan_with_progress(
     opts: ScanOptions,
     show_progress: bool,
 ) -> Result<(Tree, ScanStats)> {
+    // Every command that scans on the spot comes through here — `ls`, `age`,
+    // `dupes`, and `diff --since-last` or `--from` alone — and none of them
+    // carries the S3 flags. Said once, here, instead of "path not found".
+    if S3Url::is_s3(path) {
+        anyhow::bail!(
+            "{} is an S3 bucket, which only `spacetrace scan {} --save` reads. Use the \
+             snapshot it saves: `ls --scan ID`, `age --scan ID`, `diff --path {}`",
+            path.display(),
+            path.display(),
+            path.display()
+        );
+    }
     let progress = Arc::new(ScanProgress::default());
     let ticker = Ticker::start(Arc::clone(&progress), show_progress);
     let result =
@@ -995,6 +1164,17 @@ impl Drop for Ticker {
 
 impl Ticker {
     fn start(progress: Arc<ScanProgress>, show_progress: bool) -> Ticker {
+        Ticker::start_for(progress, show_progress, None)
+    }
+
+    /// `bucket` names an S3 listing in progress, which reads the same
+    /// counters and stalls the same way but has no directory in flight to
+    /// name: what it waits on is the service.
+    fn start_for(
+        progress: Arc<ScanProgress>,
+        show_progress: bool,
+        bucket: Option<String>,
+    ) -> Ticker {
         let done = Arc::new(AtomicBool::new(false));
         let thread = if show_progress && std::io::stderr().is_terminal() {
             let progress = Arc::clone(&progress);
@@ -1026,12 +1206,21 @@ impl Ticker {
                         Some(waited) => format!(
                             "  no progress for {}s — waiting on {}",
                             waited.as_secs(),
-                            waiting_on(&progress.reading_now())
+                            match &bucket {
+                                Some(bucket) => bucket.clone(),
+                                None => waiting_on(&progress.reading_now()),
+                            }
                         ),
                         // The label follows the phase, because after the walk
                         // "scanning…" is simply not true any more and the file
                         // count has stopped for good.
                         None => match progress.phase() {
+                            Phase::Walking if bucket.is_some() => format!(
+                                "  listing… {} objects, {} folders, {}",
+                                fmt::count(counts.0),
+                                fmt::count(counts.1),
+                                fmt::size(counts.2),
+                            ),
                             Phase::Walking => format!(
                                 "  scanning… {} files, {} dirs, {}",
                                 fmt::count(counts.0),

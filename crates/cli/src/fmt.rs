@@ -56,7 +56,7 @@ pub fn timestamp(unix: i64) -> String {
 }
 
 /// Howard Hinnant's days-from-civil, inverted. Valid for any Gregorian date.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -67,6 +67,20 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Days since 1970-01-01 for a Gregorian date: Howard Hinnant's algorithm,
+/// the forward direction of [`civil_from_days`]. Needed to read the timestamps
+/// S3 writes, without a date crate for one conversion.
+pub(crate) fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let m = i64::from(m);
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 /// Truncate a path in the middle so long ones still fit a column.
@@ -112,6 +126,19 @@ mod tests {
         assert_eq!(timestamp(0), "1970-01-01 00:00");
         // 2026-09-06T17:00:00Z
         assert_eq!(timestamp(1_788_714_000), "2026-09-06 17:00");
+    }
+
+    /// The two directions must invert each other over a span that crosses
+    /// century and leap-century boundaries, or a parsed S3 timestamp would be
+    /// printed back as a different day.
+    #[test]
+    fn days_from_civil_inverts_civil_from_days() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2000, 2, 29), 11_016);
+        for days in (-800_000..800_000).step_by(997) {
+            let (y, m, d) = civil_from_days(days);
+            assert_eq!(days_from_civil(y, m, d), days, "{y}-{m}-{d}");
+        }
     }
 
     #[test]
