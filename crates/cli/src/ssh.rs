@@ -19,7 +19,15 @@
 //! there is, and it removes the files this run put there by name and then the
 //! directory with `rmdir`: it cannot delete anything it did not create, even
 //! if every other check here were wrong. The path never comes back from this
-//! side either; the lease holds its own copy of what `mktemp` printed.
+//! side either: the lease works from inside the directory `mktemp` made, by
+//! relative names, for its whole life.
+//!
+//! **Why every step re-proves its directory.** Each later step is a new
+//! session that finds the directory by path, and a path is only as good as
+//! the directories above it. So a base others can write to without the sticky
+//! bit is refused, and every step `cd -P`s in, checks that what it entered is
+//! owned by this user and is not a symlink, and from then on names files
+//! relative to it.
 //!
 //! **Why one connection.** Five sessions would be five password prompts. The
 //! first `ssh` becomes a ControlMaster (`-M -N -f`), authenticates once in the
@@ -32,13 +40,15 @@
 //! how long a master outlives a killed CLI; `-O exit` ends it otherwise.
 
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+
+use crate::remote::MAX_SNAPSHOT_BYTES;
 
 /// The ssh program to run, for a test or for a wrapper; `ssh` otherwise.
 pub const SSH_ENV: &str = "SPACETRACE_SSH";
@@ -208,16 +218,15 @@ fn transfer_and_scan(ssh: &Ssh, request: &Request, remote: &RemoteInfo) -> Resul
     }
     upload(ssh, &binary, &remote.dir)?;
 
-    let mut args = vec![remote.dir.clone()];
+    // Directory, path, then the flags; the script puts `--` before the path,
+    // so one that starts with `-` stays a path.
+    let mut args = vec![remote.dir.clone(), request.path.to_string()];
     args.extend(request.scan_args.iter().cloned());
-    // `--` so a path that starts with `-` is a path.
-    args.push("--".into());
-    args.push(request.path.to_string());
     // A terminal on the far side is what makes the remote draw its progress
     // line; it only pays when there is a terminal here to show it on.
     let tty = request.chatty;
     let status = run(ssh
-        .command(SCAN_SCRIPT, &args, tty)
+        .command(&step(SCAN_SCRIPT), &args, tty)
         .stdin(Stdio::null())
         .stdout(stderr_as_stdio()?));
     // A remote that dies mid-redraw never clears its progress line; end it
@@ -257,10 +266,24 @@ fn transfer_and_scan(ssh: &Ssh, request: &Request, remote: &RemoteInfo) -> Resul
     let file = staging.path().join("snapshot.sqlite");
     let out =
         std::fs::File::create(&file).with_context(|| format!("cannot write {}", file.display()))?;
-    let status = run(ssh
-        .command(DOWNLOAD_SCRIPT, std::slice::from_ref(&remote.dir), false)
+    // The same ceiling `pull` puts on an agent's answer: the other side
+    // decides how much it sends, and that is no reason to fill this disk.
+    let child = ssh
+        .command(
+            &step(DOWNLOAD_SCRIPT),
+            std::slice::from_ref(&remote.dir),
+            false,
+        )
         .stdin(Stdio::null())
-        .stdout(out))?;
+        .stdout(Stdio::piped())
+        .spawn()
+        .with_context(|| ssh.cannot_run())?;
+    let (status, _, received) = drain(child, out, MAX_SNAPSHOT_BYTES)?;
+    anyhow::ensure!(
+        received <= MAX_SNAPSHOT_BYTES,
+        "{} sent more than {MAX_SNAPSHOT_BYTES} bytes for one snapshot; refusing it",
+        ssh.destination
+    );
     anyhow::ensure!(
         status.success(),
         "fetching the snapshot from {} failed ({})",
@@ -276,16 +299,36 @@ fn transfer_and_scan(ssh: &Ssh, request: &Request, remote: &RemoteInfo) -> Resul
 fn upload(ssh: &Ssh, binary: &Path, dir: &str) -> Result<()> {
     let file =
         std::fs::File::open(binary).with_context(|| format!("cannot read {}", binary.display()))?;
-    let mut child = ssh
-        .command(UPLOAD_SCRIPT, &[dir.to_string()], false)
+    let size = file
+        .metadata()
+        .with_context(|| format!("cannot read {}", binary.display()))?
+        .len();
+    let child = ssh
+        .command(&step(UPLOAD_SCRIPT), &[dir.to_string()], false)
         .stdin(file)
         .stdout(Stdio::piped())
         .spawn()
         .with_context(|| ssh.cannot_run())?;
-    let status = wait(&mut child)?;
-    let mut said = String::new();
-    if let Some(mut stdout) = child.stdout.take() {
-        let _ = stdout.read_to_string(&mut said);
+    // Read while it runs, not after: a remote that printed more than a pipe
+    // holds would otherwise block on the write while this waited for it to
+    // exit. What it says is two short lines, so a small cap is plenty.
+    let (status, said, _) = drain(child, Vec::new(), 64 * 1024)?;
+    let said = String::from_utf8_lossy(&said);
+
+    // An answer to `-V` shows the file starts as a working binary, not that
+    // all of it arrived; the byte count is what says that. Checked before the
+    // exit status, because a short file usually also fails to run, and "it
+    // arrived incomplete" is the reason worth reporting.
+    let arrived = said
+        .lines()
+        .find_map(|line| line.strip_prefix("size "))
+        .and_then(|n| n.trim().parse::<u64>().ok());
+    if let Some(arrived) = arrived {
+        anyhow::ensure!(
+            arrived == size,
+            "the upload to {} arrived incomplete: sent {size} bytes, {arrived} arrived",
+            ssh.destination
+        );
     }
     anyhow::ensure!(
         status.success(),
@@ -293,6 +336,11 @@ fn upload(ssh: &Ssh, binary: &Path, dir: &str) -> Result<()> {
         binary.display(),
         ssh.destination,
         describe(status)
+    );
+    anyhow::ensure!(
+        arrived.is_some(),
+        "{} did not report how much of the upload arrived",
+        ssh.destination
     );
 
     // Run once before the scan, and the answer compared, because two
@@ -326,8 +374,19 @@ fn binary_for(target: &str, chatty: bool) -> Result<PathBuf> {
         .context("cannot find a cache directory; pass a build with --binary")?
         .join("remote-binaries");
     let cached = cache.join(format!("{tag}-{target}")).join("spacetrace");
-    if cached.is_file() {
+    // Its SHA-256 as it was when the checked archive was unpacked. The cache
+    // is a file on disk for as long as this version is in use, and a binary
+    // that rotted there would be uploaded and run on somebody's server.
+    let recorded = cached.with_file_name("spacetrace.sha256");
+    let was_cached = cached.exists();
+    if still_intact(&cached, &recorded) {
         return Ok(cached);
+    }
+    if was_cached {
+        eprintln!(
+            "note: the cached {tag} build for {target} does not match the checksum it \
+             was stored with; fetching it again"
+        );
     }
 
     if !spacetrace_buildinfo::is_release() {
@@ -378,9 +437,37 @@ fn binary_for(target: &str, chatty: bool) -> Result<PathBuf> {
     let parent = cached.parent().expect("joined above");
     std::fs::create_dir_all(parent)
         .with_context(|| format!("cannot create {}", parent.display()))?;
+    // Digest first, binary second: an interruption between the two leaves a
+    // binary with no record, which the next run fetches again rather than
+    // trusts.
+    std::fs::write(&recorded, digest_of(&fresh)?)
+        .with_context(|| format!("cannot write {}", recorded.display()))?;
     std::fs::rename(&fresh, &cached)
         .with_context(|| format!("cannot move the download to {}", cached.display()))?;
     Ok(cached)
+}
+
+/// Whether a cached binary still hashes to the digest recorded beside it.
+/// Anything else — changed, recorded by nobody, unreadable — removes both, so
+/// the caller fetches a verified copy again rather than trusting this one.
+fn still_intact(binary: &Path, recorded: &Path) -> bool {
+    if !binary.is_file() {
+        return false;
+    }
+    let expected = std::fs::read_to_string(recorded).ok();
+    if expected.is_some() && digest_of(binary).ok() == expected {
+        return true;
+    }
+    let _ = std::fs::remove_file(binary);
+    let _ = std::fs::remove_file(recorded);
+    false
+}
+
+/// Hex SHA-256 of a file.
+fn digest_of(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
 /// The release target that runs on a machine whose `uname -sm` said this.
@@ -621,78 +708,136 @@ fn check_remote_dir(dir: &str) -> Result<()> {
 
 // --------------------------------------------------------------- remote side
 
+/// The first line of every step after the lease: enter the directory by
+/// physical path and prove it is the one this run made before touching
+/// anything in it. From here on every name is relative, so a path component
+/// renamed or swapped later cannot point a step somewhere else.
+///
+/// The lease refuses a base directory others can write to without the sticky
+/// bit, which is what would let them rename this directory away and put one
+/// of theirs in its place; `test -O .` and the symlink test catch the swap if
+/// it happens anyway. The arguments are the directory, then the step's own.
+const ENTER: &str = r#"cd -P "$1" && test -O . && ! test -L "$1" || {
+  echo "spacetrace: $1 is not the directory this run created; stopping" >&2
+  exit 3
+}
+"#;
+
 /// The lease: create the directory, report, then hold it until stdin closes.
 ///
 /// Every signal that could cut the cleanup short is ignored: HUP and PIPE are
 /// what a vanished client delivers, and the cleanup is exactly what has to run
 /// then. Lines are tagged because a login shell may print its own.
+///
+/// It stays inside the directory for its whole life, so the cleanup removes
+/// relative names from the directory it created, whatever has been renamed
+/// around it since, and then `rmdir`s it from its parent.
 const LEASE_SCRIPT: &str = r##"trap "" HUP PIPE INT TERM
 echo "platform $(uname -sm)"
 dir=
 for base in "${TMPDIR:-/tmp}" "$HOME"; do
   base=${base%/}
   test -n "$base" && test -d "$base" && test -w "$base" || continue
+  case $(ls -ldL "$base" | cut -c1-10) in
+    ?????w???[!tT]|????????w[!tT])
+      echo "spacetrace: $base is writable by others and has no sticky bit; trying the next place" >&2
+      continue ;;
+  esac
   dir=$(mktemp -d "$base/spacetrace.XXXXXXXXXX" 2>/dev/null) || { dir=; continue; }
-  echo "#!/bin/sh" > "$dir/probe" && chmod 700 "$dir/probe" && "$dir/probe" 2>/dev/null && break
+  if ! { cd -P "$dir" && test -O . && ! test -L "$dir"; }; then
+    echo "spacetrace: $dir changed hands right after it was created; stopping" >&2
+    exit 3
+  fi
+  echo "#!/bin/sh" > probe && chmod 700 probe && ./probe 2>/dev/null && break
   echo "spacetrace: $base does not allow running programs; trying the next place" >&2
-  rm -f "$dir/probe"
-  rmdir "$dir"
+  rm -f probe
+  cd -P .. && rmdir "${dir##*/}"
   dir=
 done
 if test -z "$dir"; then
-  echo "spacetrace: found no writable directory that allows running programs (tried ${TMPDIR:-/tmp} and $HOME)" >&2
+  echo "spacetrace: found no safe, writable directory that allows running programs (tried ${TMPDIR:-/tmp} and $HOME)" >&2
   exit 3
 fi
-rm -f "$dir/probe"
+rm -f probe
 echo "dir $dir"
-echo "free $(df -Pk "$dir" 2>/dev/null | tail -n 1)"
+echo "free $(df -Pk . 2>/dev/null | tail -n 1)"
 echo ready
 cat >/dev/null
-pid=$(cat "$dir/scan.pid" 2>/dev/null)
-if test -n "$pid"; then
+# Whether a pid is still the scan this run started. A pid file outlives its
+# process when the wrapper is killed outright, and by then the number may
+# belong to something else of this user's.
+ours() {
+  if test -d /proc/self; then
+    # Quiet, because the process may be gone by the time it is read: that is
+    # what the loop below waits for.
+    { tr "\000" "\n" < "/proc/$1/cmdline"; } 2>/dev/null | grep -Fx -- "$PWD/spacetrace" >/dev/null
+    return
+  fi
+  case $(ps -ww -p "$1" -o args= 2>/dev/null) in
+    *"$PWD/spacetrace "* | *"$PWD/spacetrace") return 0 ;;
+  esac
+  return 1
+}
+pid=$(cat scan.pid 2>/dev/null)
+if test -n "$pid" && ours "$pid"; then
   kill "$pid" 2>/dev/null
   n=0
-  while kill -0 "$pid" 2>/dev/null && test "$n" -lt 20; do
+  while ours "$pid" && test "$n" -lt 20; do
     sleep 1
     n=$((n + 1))
   done
-  kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+  ours "$pid" && kill -9 "$pid" 2>/dev/null
 fi
-for name in FILES; do
-  rm -f "$dir/$name"
-done
-if rmdir "$dir" 2>/dev/null; then echo "removed $dir"; else echo "kept $dir"; fi
+rm -f FILES
+# The name it has now, which is not the one in $PWD if somebody renamed it.
+here=$(pwd -P)
+if cd -P .. && rmdir "${here##*/}" 2>/dev/null; then echo "removed $dir"; else echo "kept $dir"; fi
 "##;
 
 /// Upload: the binary arrives on stdin, so neither scp nor sftp has to be
-/// enabled on the server. Its `-V` answer is the proof it arrived whole.
-const UPLOAD_SCRIPT: &str =
-    r#"cat > "$1/spacetrace" && chmod 700 "$1/spacetrace" && "$1/spacetrace" -V"#;
+/// enabled on the server. The byte count it reports back is compared with
+/// what was sent, and `-V` with this version.
+const UPLOAD_SCRIPT: &str = r#"cat > spacetrace && chmod 700 spacetrace && echo "size $(wc -c < spacetrace)" && ./spacetrace -V
+"#;
 
 /// The scan, with its pid written down so the lease can stop it if this side
 /// goes away while it runs. The trap keeps that pid file honest when the
 /// session is hung up on.
-const SCAN_SCRIPT: &str = r#"dir=$1
-shift
-SPACETRACE_NO_UPDATE_CHECK=1 "$dir/spacetrace" --db "$dir/scan.sqlite" scan --save "$@" >/dev/null &
+///
+/// The binary runs by its absolute path, which is what the lease looks for
+/// before it signals anything. A relative path to scan means the remote home,
+/// as it would in an ssh session, so it is resolved before leaving it.
+const SCAN_SCRIPT: &str = r#"path=$2
+case $path in /*) ;; *) path=$PWD/$path ;; esac
+ENTER
+shift 2
+SPACETRACE_NO_UPDATE_CHECK=1 "$PWD/spacetrace" --db scan.sqlite scan --save "$@" -- "$path" >/dev/null &
 pid=$!
-echo "$pid" > "$dir/scan.pid"
-trap 'kill "$pid" 2>/dev/null; wait "$pid"; rm -f "$dir/scan.pid"; exit 129' HUP TERM
+echo "$pid" > scan.pid
+trap 'kill "$pid" 2>/dev/null; wait "$pid"; rm -f scan.pid; exit 129' HUP TERM
 wait "$pid"
 status=$?
-rm -f "$dir/scan.pid"
+rm -f scan.pid
 exit "$status"
 "#;
 
 /// The database, as raw bytes on stdout. A WAL file still holding pages means
 /// the database alone is not the whole snapshot, so it is refused rather than
 /// sent short.
-const DOWNLOAD_SCRIPT: &str = r#"if test -s "$1/scan.sqlite-wal"; then
+const DOWNLOAD_SCRIPT: &str = r#"if test -s scan.sqlite-wal; then
   echo "spacetrace: the snapshot database was not closed cleanly" >&2
   exit 3
 fi
-exec cat "$1/scan.sqlite"
+exec cat scan.sqlite
 "#;
+
+/// A step script with the directory check in front of it.
+fn step(body: &str) -> String {
+    if body.contains("ENTER") {
+        return body.replace("ENTER\n", ENTER);
+    }
+    format!("{ENTER}{body}")
+}
 
 // --------------------------------------------------------------- the lease
 
@@ -830,6 +975,60 @@ fn wait(child: &mut Child) -> Result<ExitStatus> {
         }
         std::thread::sleep(POLL);
     }
+}
+
+/// Wait for `child` while copying its stdout into `sink`, at most `cap` bytes.
+///
+/// Returns the exit status, the sink, and how many bytes arrived. More than
+/// `cap` means the child sent too much and has been killed: a reader that
+/// simply stopped would leave it blocked on its next write, and this wait
+/// with it.
+fn drain<W: Write + Send + 'static>(
+    mut child: Child,
+    sink: W,
+    cap: u64,
+) -> Result<(ExitStatus, W, u64)> {
+    let stdout = child.stdout.take().expect("stdout is piped by the caller");
+    let mut reader = Some(std::thread::spawn(move || -> std::io::Result<(W, u64)> {
+        let mut sink = sink;
+        let copied = std::io::copy(&mut stdout.take(cap + 1), &mut sink)?;
+        sink.flush()?;
+        Ok((sink, copied))
+    }));
+    let join = |handle: std::thread::JoinHandle<std::io::Result<(W, u64)>>| -> Result<(W, u64)> {
+        handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("the thread reading from ssh panicked"))?
+            .context("reading what ssh sent")
+    };
+
+    let mut copied = None;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if signals::interrupted() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Interrupted.into());
+        }
+        if reader.as_ref().is_some_and(|r| r.is_finished()) {
+            let (sink, n) = join(reader.take().expect("checked above"))?;
+            if n > cap {
+                let _ = child.kill();
+                let status = child.wait()?;
+                return Ok((status, sink, n));
+            }
+            copied = Some((sink, n));
+        }
+        std::thread::sleep(POLL);
+    };
+    let (sink, n) = match (copied, reader) {
+        (Some(done), _) => done,
+        (None, Some(handle)) => join(handle)?,
+        (None, None) => unreachable!("the reader is either joined or still held"),
+    };
+    Ok((status, sink, n))
 }
 
 fn describe(status: ExitStatus) -> String {
@@ -1074,6 +1273,75 @@ mod tests {
         for name in ["spacetrace", "scan.sqlite", "scan.sqlite-wal", "scan.pid"] {
             assert!(REMOTE_FILES.split_whitespace().any(|n| n == name), "{name}");
         }
+    }
+
+    fn piped(script: &str) -> Child {
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+
+    /// Far more than a pipe holds, read while the child runs: waiting for the
+    /// exit first would deadlock right here.
+    #[test]
+    fn a_child_that_prints_a_lot_is_read_while_it_runs() {
+        let started = std::time::Instant::now();
+        let (status, out, n) =
+            drain(piped("head -c 1000000 /dev/zero"), Vec::new(), 2_000_000).unwrap();
+        assert!(status.success());
+        assert_eq!(n, 1_000_000);
+        assert_eq!(out.len(), 1_000_000);
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+
+    /// A sender that never stops is cut off at the cap and stopped, rather
+    /// than filling the disk or blocking forever on a reader that went away.
+    #[test]
+    fn a_child_that_sends_past_the_cap_is_stopped() {
+        let (status, out, n) = drain(piped("yes"), Vec::new(), 10_000).unwrap();
+        assert!(n > 10_000, "the overrun is reported");
+        assert_eq!(out.len() as u64, n);
+        assert!(!status.success(), "and the sender was killed: {status:?}");
+    }
+
+    #[test]
+    fn a_cached_binary_is_used_only_while_it_matches_its_recorded_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("spacetrace");
+        let recorded = dir.path().join("spacetrace.sha256");
+
+        std::fs::write(&binary, b"the verified build").unwrap();
+        std::fs::write(&recorded, digest_of(&binary).unwrap()).unwrap();
+        assert!(still_intact(&binary, &recorded));
+
+        // One byte changed after it was cached.
+        std::fs::write(&binary, b"the verified buile").unwrap();
+        assert!(!still_intact(&binary, &recorded));
+        assert!(!binary.exists() && !recorded.exists(), "both are discarded");
+
+        // A binary nobody recorded a digest for is not trusted either.
+        std::fs::write(&binary, b"from an older cache").unwrap();
+        assert!(!still_intact(&binary, &recorded));
+        assert!(!binary.exists());
+    }
+
+    /// Every step after the lease starts by proving where it is.
+    #[test]
+    fn every_step_enters_and_checks_its_directory_first() {
+        for body in [UPLOAD_SCRIPT, SCAN_SCRIPT, DOWNLOAD_SCRIPT] {
+            let script = step(body);
+            assert!(script.contains(ENTER), "{script}");
+            assert!(!script.contains("ENTER\n"), "{script}");
+            assert!(
+                !script.contains("\"$1/"),
+                "a step names files by path: {script}"
+            );
+        }
+        assert!(step(UPLOAD_SCRIPT).starts_with(ENTER));
+        assert!(step(DOWNLOAD_SCRIPT).starts_with(ENTER));
     }
 
     #[test]

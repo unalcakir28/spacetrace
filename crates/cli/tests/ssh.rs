@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_spacetrace");
+mod common;
+use common::{forged_snapshot, BIN};
 
 /// Stands in for ssh: skip the options, take the destination, run the command
 /// line through `sh -c` — which is what the remote login shell does with it.
@@ -35,6 +36,15 @@ while [ $# -gt 0 ]; do
   shift
 done
 shift
+cd "$HOME" || exit 255
+# A connection that drops partway through the upload.
+if [ -n "$CUT_UPLOAD_AT" ]; then
+  case $1 in
+    *"cat > spacetrace"*)
+      head -c "$CUT_UPLOAD_AT" | TMPDIR=$FAKE_REMOTE_TMP sh -c "$1"
+      exit $? ;;
+  esac
+fi
 TMPDIR=$FAKE_REMOTE_TMP exec sh -c "$1"
 "#;
 
@@ -43,6 +53,9 @@ struct Rig {
     root: PathBuf,
     shim: PathBuf,
     remote_tmp: PathBuf,
+    /// The remote's `$HOME`, where an ssh session starts and where the lease
+    /// falls back to when the temporary directory will not do.
+    remote_home: PathBuf,
     log: PathBuf,
     db: PathBuf,
 }
@@ -54,12 +67,17 @@ impl Rig {
         let shim = root.join("ssh-shim");
         write_executable(&shim, SHIM);
         let remote_tmp = root.join("remote-tmp");
-        std::fs::create_dir(&remote_tmp).unwrap();
+        let remote_home = root.join("remote-home");
+        for made in [&remote_tmp, &remote_home] {
+            std::fs::create_dir(made).unwrap();
+            std::fs::set_permissions(made, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         Rig {
             log: root.join("shim.log"),
             db: root.join("local.sqlite"),
             shim,
             remote_tmp,
+            remote_home,
             root,
             _dir: dir,
         }
@@ -75,9 +93,19 @@ impl Rig {
             .env("FAKE_REMOTE_TMP", &self.remote_tmp)
             .env("SHIM_LOG", &self.log)
             .env("SPACETRACE_NO_UPDATE_CHECK", "1")
-            // Never the user's real cache or data directory.
+            // Never the user's real home, cache or data directory: the lease
+            // may fall back to `$HOME`, and this one is a test directory.
+            .env("HOME", &self.remote_home)
             .env("SPACETRACE_HOME", self.root.join("home"));
         cmd
+    }
+
+    /// What is left in the remote's home directory.
+    fn home_leftovers(&self) -> Vec<String> {
+        std::fs::read_dir(&self.remote_home)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
     }
 
     fn run(&self, args: &[&str]) -> Output {
@@ -136,15 +164,35 @@ fn fixture(at: &Path) -> PathBuf {
     tree
 }
 
-/// A stand-in remote binary: answers `-V` as the real one does, and turns
-/// every scan into a minute of waiting, so a run can be stopped in the middle.
-fn slow_binary(at: &Path) -> PathBuf {
-    let path = at.join("slow-spacetrace");
+/// A stand-in remote binary: answers `-V` as the real one does, and does
+/// `scan` with its own body. It stays the process the lease started — no
+/// `exec` — because the lease signals only a pid that still names the
+/// uploaded binary.
+fn stand_in(at: &Path, name: &str, scan: &str) -> PathBuf {
+    let path = at.join(name);
     write_executable(
         &path,
-        &format!("#!/bin/sh\ncase \"$1\" in -V) exec '{BIN}' -V ;; esac\nexec sleep 60\n"),
+        &format!("#!/bin/sh\ncase \"$1\" in -V) exec '{BIN}' -V ;; esac\n{scan}\n"),
     );
     path
+}
+
+/// Turns every scan into a minute of waiting, so a run can be stopped in the
+/// middle. The trap passes the lease's SIGTERM on to the sleep.
+fn slow_binary(at: &Path) -> PathBuf {
+    stand_in(
+        at,
+        "slow-spacetrace",
+        "trap 'kill $!; exit 143' TERM\nsleep 60 &\nwait",
+    )
+}
+
+/// A local database that already holds one snapshot, and its listing.
+fn with_a_snapshot(rig: &Rig) -> String {
+    let tree = fixture(&rig.root);
+    let out = rig.run(&["scan", "--save", tree.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    String::from_utf8(rig.run(&["--json", "scans"]).stdout).unwrap()
 }
 
 fn alive(pid: i32) -> bool {
@@ -448,5 +496,215 @@ fn a_binary_of_another_version_is_refused_and_cleaned_up() {
     let text = stderr(&out);
     assert!(text.contains("spacetrace 0.0.1"), "{text}");
     assert!(text.contains("same version"), "{text}");
+    assert!(rig.leftovers().is_empty());
+}
+
+/// A remote can send a correct digest over a broken tree. With `--save` the
+/// structural check has to run before the import commits, or the local
+/// database keeps a snapshot every later command trips over.
+#[test]
+fn a_forged_snapshot_from_the_remote_leaves_the_local_database_unchanged() {
+    let rig = Rig::new();
+    let before = with_a_snapshot(&rig);
+    let forged = forged_snapshot(&rig.root);
+    let sender = stand_in(
+        &rig.root,
+        "forging-spacetrace",
+        r#"cp "$FORGED_DB" scan.sqlite"#,
+    );
+
+    let out = rig
+        .command(&[
+            "scan",
+            "--save",
+            "--ssh",
+            "nas",
+            "--binary",
+            sender.to_str().unwrap(),
+            "/",
+        ])
+        .env("FORGED_DB", &forged)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("not a usable tree"),
+        "{}",
+        stderr(&out)
+    );
+    let after = String::from_utf8(rig.run(&["--json", "scans"]).stdout).unwrap();
+    assert_eq!(
+        after, before,
+        "the local database must be exactly as it was"
+    );
+    assert!(rig.leftovers().is_empty());
+}
+
+/// A base directory others can write to without the sticky bit lets them
+/// rename the work directory away and put theirs in its place, so it is not
+/// used; `$HOME` is. With the sticky bit — `/tmp` everywhere — it is fine.
+#[test]
+fn a_shared_base_without_the_sticky_bit_is_passed_over() {
+    for (mode, expect_home) in [(0o777, true), (0o770, true), (0o1777, false)] {
+        let rig = Rig::new();
+        let tree = fixture(&rig.root);
+        std::fs::set_permissions(&rig.remote_tmp, std::fs::Permissions::from_mode(mode)).unwrap();
+        let ran_in_file = rig.root.join("ran-in");
+        let recorder = stand_in(
+            &rig.root,
+            "recording-spacetrace",
+            &format!(r#"pwd -P > "$RAN_IN"; exec '{BIN}' "$@""#),
+        );
+
+        let out = rig
+            .command(&[
+                "scan",
+                "--ssh",
+                "nas",
+                "--binary",
+                recorder.to_str().unwrap(),
+            ])
+            .arg(&tree)
+            .env("RAN_IN", &ran_in_file)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "mode {mode:o}: {}", stderr(&out));
+        let ran_in = PathBuf::from(std::fs::read_to_string(&ran_in_file).unwrap().trim());
+        let home = rig.remote_home.canonicalize().unwrap();
+        assert_eq!(
+            ran_in.starts_with(&home),
+            expect_home,
+            "mode {mode:o} ran in {}",
+            ran_in.display()
+        );
+        assert_eq!(
+            stderr(&out).contains("no sticky bit"),
+            expect_home,
+            "mode {mode:o}: {}",
+            stderr(&out)
+        );
+        assert!(
+            rig.leftovers().is_empty(),
+            "{mode:o}: {:?}",
+            rig.leftovers()
+        );
+        assert!(
+            rig.home_leftovers().is_empty(),
+            "{mode:o}: {:?}",
+            rig.home_leftovers()
+        );
+    }
+}
+
+/// Somebody swaps the work directory for a symlink to a directory of their
+/// choosing between two steps. The next step must refuse to work there, and
+/// the lease must still remove the real directory under its new name.
+#[test]
+fn a_work_directory_swapped_between_steps_is_refused() {
+    let rig = Rig::new();
+    let decoy = rig.root.join("decoy");
+    std::fs::create_dir(&decoy).unwrap();
+    std::fs::write(decoy.join("canary"), b"untouched").unwrap();
+    // The swap happens while the upload step runs `-V`, after the bytes are in.
+    let swapper = rig.root.join("swapping-spacetrace");
+    write_executable(
+        &swapper,
+        &format!(
+            "#!/bin/sh\nd=$(pwd -P)\nmv \"$d\" \"$d.moved\" && ln -s \"$DECOY\" \"$d\"\n\
+             exec '{BIN}' -V\n"
+        ),
+    );
+
+    let out = rig
+        .command(&[
+            "scan",
+            "--save",
+            "--ssh",
+            "nas",
+            "--binary",
+            swapper.to_str().unwrap(),
+            "/",
+        ])
+        .env("DECOY", &decoy)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("is not the directory this run created"),
+        "{}",
+        stderr(&out)
+    );
+
+    let in_decoy: Vec<String> = std::fs::read_dir(&decoy)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        in_decoy,
+        ["canary"],
+        "nothing may be written into the decoy"
+    );
+    // What remains is the swapper's symlink, which is not ours to remove;
+    // the real directory, renamed, is gone.
+    let left = rig.leftovers();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!(rig.remote_tmp.join(&left[0]).is_symlink(), "{left:?}");
+    assert!(rig.scans().is_empty());
+}
+
+/// A pid file outlives its process when the wrapper is killed outright, and
+/// by then the number can belong to something else of the same user's. The
+/// lease must leave that process alone.
+#[test]
+fn a_stale_pid_file_never_gets_an_unrelated_process_killed() {
+    let rig = Rig::new();
+    let mut decoy = Command::new("sleep").arg("60").spawn().unwrap();
+    // Leave the decoy's pid behind, and kill the wrapper that would have
+    // removed the file.
+    let dying = stand_in(
+        &rig.root,
+        "dying-spacetrace",
+        "echo \"$DECOY_PID\" > scan.pid\nkill -9 $PPID\nexit 1",
+    );
+
+    let out = rig
+        .command(&[
+            "scan",
+            "--ssh",
+            "nas",
+            "--binary",
+            dying.to_str().unwrap(),
+            "/",
+        ])
+        .env("DECOY_PID", decoy.id().to_string())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(rig.leftovers().is_empty(), "{:?}", rig.leftovers());
+    assert!(
+        decoy.try_wait().unwrap().is_none(),
+        "the unrelated process must still be running"
+    );
+    decoy.kill().unwrap();
+    decoy.wait().unwrap();
+}
+
+/// `-V` answering proves the file starts as a binary, not that all of it
+/// arrived. A connection that drops partway must be reported as such.
+#[test]
+fn an_upload_that_arrives_short_is_refused() {
+    let rig = Rig::new();
+    let out = rig
+        .command(&["scan", "--ssh", "nas", "--binary", BIN, "/"])
+        .env("CUT_UPLOAD_AT", "1000")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let size = std::fs::metadata(BIN).unwrap().len();
+    assert!(
+        stderr(&out).contains(&format!("sent {size} bytes, 1000 arrived")),
+        "{}",
+        stderr(&out)
+    );
     assert!(rig.leftovers().is_empty());
 }

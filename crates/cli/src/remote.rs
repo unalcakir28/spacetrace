@@ -251,7 +251,7 @@ impl Remote {
 /// Refuse to buffer an unbounded body from a host we do not control. A snapshot
 /// costs roughly 50 bytes per filesystem entry, so this still allows a root of
 /// well over ten million files.
-const MAX_SNAPSHOT_BYTES: u64 = 1024 * 1024 * 1024;
+pub(crate) const MAX_SNAPSHOT_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Decompress with the same cap, so a small compressed body cannot expand into
 /// an arbitrarily large one. `--remote` points at a machine the user trusts, but

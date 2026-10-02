@@ -31,15 +31,18 @@ own view of the path.
    for a password at most once.
 2. The remote reports its platform (`uname -sm`) and creates a private
    directory with `mktemp -d` in `$TMPDIR` or `/tmp`. If that filesystem is
-   mounted `noexec`, it tries `$HOME` instead.
+   mounted `noexec`, or the directory is writable by others without the
+   sticky bit, it tries `$HOME` instead.
 3. A spacetrace binary of **the same version as yours** is streamed into that
    directory over the ssh connection's stdin — scp and sftp do not have to be
-   enabled — and run once with `-V` to prove it arrived whole.
+   enabled. The byte count that arrived is compared with what was sent, and
+   the binary has to answer `-V` with your exact version.
 4. It runs `scan --save` into a database beside itself. Its progress line is
    shown here when your terminal is a terminal.
-5. The database is streamed back over stdout and imported through the same
-   path as `spacetrace pull`: the snapshot's checksum is recomputed and a
-   mismatch imports nothing.
+5. The database is streamed back over stdout, up to 1 GiB (the same ceiling
+   `pull` puts on an agent), and imported through the same path as
+   `spacetrace pull`: the snapshot's checksum is recomputed and its tree
+   checked, and either failing imports nothing.
 6. The remote directory is removed, and the connection closed.
 
 **Which binary.** If the remote is the same platform as this machine and this
@@ -49,7 +52,13 @@ for the remote's platform — `spacetrace-vX.Y.Z-<target>.tar.gz` from this
 repository's releases — checks it against the release's `SHA256SUMS`, and
 keeps it in the cache directory (`~/Library/Caches/spacetrace` on macOS,
 `$XDG_CACHE_HOME/spacetrace` or `~/.cache/spacetrace` on Linux) for next
-time. Published builds exist for Linux x86_64 and aarch64 and for macOS.
+time, with its SHA-256 beside it; a cached binary that no longer matches is
+fetched again rather than uploaded. Published builds exist for Linux x86_64
+and aarch64 and for macOS.
+
+`SHA256SUMS` comes from the same release as the archive, so the check catches
+a damaged download, not someone able to write this repository's release
+assets.
 
 A development build has no release of its own version. If its version number
 happens to be a published one, the published binary is used and a note says
@@ -68,8 +77,20 @@ Ctrl-C — and also when the CLI is killed outright or the network goes away,
 which no cleanup on this side could cover.
 
 The lease removes the files it knows this run creates, by name, and then the
-directory with `rmdir`. It cannot remove anything it did not put there, and it
-uses its own copy of the path `mktemp` printed, never one sent back to it.
+directory with `rmdir`. It cannot remove anything it did not put there. It
+works from inside the directory it created for its whole life, so the names
+it removes are relative to that directory, whatever has been renamed around it
+since. Before stopping a scan it checks that the pid in the pid file still
+belongs to the uploaded binary (`/proc/<pid>/cmdline` on Linux, `ps` on macOS
+and the BSDs), so a stale pid file never gets another process signalled.
+
+**On a shared machine.** A base directory that others can write to without
+the sticky bit — a group scratch directory on an HPC cluster, say — would let
+them rename the work directory away and put one of theirs in its place
+between two steps. Such a base is passed over. Every later step also enters
+the directory by its physical path, checks that it is owned by you and not a
+symlink, and from then on uses relative names only, so it stops if a swap
+happened anyway. `/tmp`, with its sticky bit, is fine.
 
 Ctrl-C reaches only the local CLI (the ssh processes run in their own process
 groups), which closes the lease, waits for the remote to confirm, says
