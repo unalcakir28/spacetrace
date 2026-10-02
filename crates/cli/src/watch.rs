@@ -498,10 +498,13 @@ impl Session {
         self.model.aggregate();
         let before = self.model.totals();
         let seen = self.events_seen;
-        if let Some(why) = &reason {
-            self.output
-                .announce(&format!("rescanning everything: {why}…"))?;
-        }
+        // Said before it starts, the check included: on a large root this
+        // is seconds in which the frame does not move (invariant 8).
+        let notice = match &reason {
+            Some(why) => format!("rescanning everything: {why}…"),
+            None => "checking against a full rescan…".to_string(),
+        };
+        self.output.announce(&notice)?;
 
         let started = Instant::now();
         let root = self.model.root().to_path_buf();
