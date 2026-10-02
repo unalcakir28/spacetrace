@@ -454,6 +454,16 @@ impl Store {
     }
 
     fn copy_scans_from_attached(&mut self) -> Result<Vec<ScanId>> {
+        // Every check that reads the whole snapshot runs here, before the
+        // write lock: nothing else writes the attached file, so it cannot
+        // change between the check and the copy. Under the lock they held
+        // other writers off for the whole import, 1.16 s for a million entries
+        // and so seconds at the agent's 512 MiB upload limit, against the 30 s
+        // busy timeout a scheduled save or a second push waits before failing.
+        // Now the lock covers the copy alone: 0.40 s for the same million
+        // (`examples/importprobe.rs`, macOS, October 2026).
+        check_incoming_shape(&self.conn)?;
+
         let incoming: Vec<(ScanId, String, String, i64)> = {
             let mut stmt = self
                 .conn
@@ -464,9 +474,70 @@ impl Store {
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
 
+        let mut checked = Vec::with_capacity(incoming.len());
+        for (source_id, host, root, started_at) in incoming {
+            if self.already_holds(&host, &root, started_at)? {
+                continue;
+            }
+
+            let ahead = started_at - now_unix();
+            anyhow::ensure!(
+                ahead <= MAX_CLOCK_AHEAD_SECS,
+                "the snapshot of {root} from {host} starts {} hours in the future; its \
+                 clock is wrong, and a snapshot dated ahead would stay the newest of its \
+                 target for good. Nothing was imported",
+                ahead / 3600
+            );
+
+            // The one place a body that crossed a network is opened. A flipped
+            // bit leaves a perfectly valid tree — `TreeAssembler::finish` is
+            // about structure, not values — so without this the scan imports
+            // and reports a wrong number with full confidence.
+            //
+            // The whole import fails rather than this one scan being skipped:
+            // the transaction is all-or-nothing, and a push carries exactly
+            // one scan, so "skip the bad one" would only ever mean "import
+            // nothing" while sounding like partial success.
+            if let Integrity::Mismatch { stored, computed } =
+                integrity_of(&self.conn, "incoming", source_id)?
+            {
+                anyhow::bail!(
+                    "the snapshot of {root} from {host} does not match its digest \
+                     (stored {stored}, computed {computed}); nothing was imported"
+                );
+            }
+
+            // And the structure. A digest says the body is what the sender
+            // meant, not that the sender meant a tree: whoever wrote the body
+            // can recompute it over a broken arena. Checking only on `load`
+            // would commit that snapshot first, and every later read of the
+            // database would trip over it.
+            let hint: u64 = self.conn.query_row(
+                "SELECT files, dirs FROM incoming.scans WHERE id = ?1",
+                [source_id],
+                |row| {
+                    let (f, d): (i64, i64) = (row.get(0)?, row.get(1)?);
+                    Ok((f.max(0) as u64).saturating_add(d.max(0) as u64))
+                },
+            )?;
+            let entries = match assemble(&self.conn, "incoming", source_id, hint, &root) {
+                Ok(tree) => tree.len() as u64,
+                Err(e) => anyhow::bail!(
+                    "the snapshot of {root} from {host} is refused: {e}; nothing was imported"
+                ),
+            };
+            checked.push((source_id, host, root, started_at, entries));
+        }
+
+        // The copy, which is all the lock is held for. It reproduces exactly
+        // what was checked above: every value already has the type `main`
+        // stores it as, so nothing is converted, ids keep their order, and
+        // the counts below prove no row was lost or doubled on the way.
         let tx = self.write_transaction()?;
         let mut imported = Vec::new();
-        for (source_id, host, root, started_at) in incoming {
+        for (source_id, host, root, started_at, entries) in checked {
+            // Again, under the lock: the same snapshot may have been pushed
+            // twice at once, and the first push to commit wins.
             let already: Option<ScanId> = tx
                 .query_row(
                     "SELECT id FROM main.scans WHERE host = ?1 AND root = ?2 AND started_at = ?3",
@@ -478,50 +549,11 @@ impl Store {
                 continue;
             }
 
-            // The one place a body that crossed a network is opened. A flipped
-            // bit leaves a perfectly valid tree — `TreeAssembler::finish` is
-            // about structure, not values — so without this the scan imports
-            // and reports a wrong number with full confidence.
-            //
-            // The whole import fails rather than this one scan being skipped:
-            // the transaction is already all-or-nothing, and a push carries
-            // exactly one scan, so "skip the bad one" would only ever mean
-            // "import nothing" while sounding like partial success.
-            if let Integrity::Mismatch { stored, computed } =
-                integrity_of(&tx, "incoming", source_id)?
-            {
-                anyhow::bail!(
-                    "the snapshot of {root} from {host} does not match its digest \
-                     (stored {stored}, computed {computed}); nothing was imported"
-                );
-            }
-
-            // And the structure, before anything is written. A digest says
-            // the body is what the sender meant, not that the sender meant a
-            // tree: whoever wrote the body can recompute it over a broken
-            // arena. Checking only on `load` would commit that snapshot first,
-            // and every later read of the database would trip over it.
-            // Only a hint, so a column that does not read as a number is no
-            // reason to refuse; the rows themselves are what gets checked.
-            let entries: u64 = tx
-                .query_row(
-                    "SELECT files, dirs FROM incoming.scans WHERE id = ?1",
-                    [source_id],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-                )
-                .map(|(f, d)| (f.max(0) as u64).saturating_add(d.max(0) as u64))
-                .unwrap_or(0);
-            if let Err(e) = assemble(&tx, "incoming", source_id, entries, &root) {
-                anyhow::bail!(
-                    "the snapshot of {root} from {host} is refused: {e}; nothing was imported"
-                );
-            }
-
             // `content_hash` travels with the row it describes. Leaving it
             // out would drop the digest at exactly the moment it stops being
             // recomputable: the receiver would hold a snapshot it can never
             // check again, and would say "unknown" for the rest of its life.
-            tx.execute(
+            let scans = tx.execute(
                 "INSERT INTO main.scans (host, root, started_at, duration_ms, total_size,
                                          total_alloc, files, dirs, errors, hardlinks_deduped,
                                          scanner_version, label, fs_total, fs_available,
@@ -532,11 +564,16 @@ impl Store {
                  FROM incoming.scans WHERE id = ?1",
                 [source_id],
             )?;
+            anyhow::ensure!(
+                scans == 1,
+                "the snapshot of {root} from {host} copied as {scans} scans, not one; \
+                 nothing was imported"
+            );
             let new_id = tx.last_insert_rowid();
 
             // Only scan_id is rewritten: `id` is the node's index inside its own
             // arena and must keep matching children_start/children_len.
-            tx.execute(
+            let copied = tx.execute(
                 "INSERT INTO main.entries (scan_id, id, parent_id, name, kind, size, alloc,
                                            mtime, nlink, files, dirs, children_start, children_len)
                  SELECT ?1, id, parent_id, name, kind, size, alloc, mtime, nlink, files, dirs,
@@ -544,10 +581,29 @@ impl Store {
                  FROM incoming.entries WHERE scan_id = ?2",
                 params![new_id, source_id],
             )?;
+            anyhow::ensure!(
+                copied as u64 == entries,
+                "the snapshot of {root} from {host} copied {copied} entries where its tree \
+                 has {entries}; nothing was imported"
+            );
             imported.push(new_id);
         }
         tx.commit()?;
         Ok(imported)
+    }
+
+    /// Whether a scan of this target with this start time is already here.
+    /// Read without the write lock; the copy asks again under it.
+    fn already_holds(&self, host: &str, root: &str, started_at: i64) -> Result<bool> {
+        let id: Option<ScanId> = self
+            .conn
+            .query_row(
+                "SELECT id FROM main.scans WHERE host = ?1 AND root = ?2 AND started_at = ?3",
+                params![host, root, started_at],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(id.is_some())
     }
 
     fn copy_scan_into_attached(&self, scan_id: ScanId) -> Result<()> {
@@ -590,9 +646,112 @@ impl Store {
 /// A memory hint is all the stored entry count is, and it comes from the file
 /// being read — which may have crossed a network. Unclamped, a scan claiming
 /// 2^40 files asks `with_capacity` for 72 TiB and aborts the process before a
-/// single row is read. Sixteen million entries is past any root measured here;
-/// a larger real one costs reallocations, not correctness.
-const MAX_CAPACITY_HINT: u64 = 1 << 24;
+/// single row is read.
+const MAX_CAPACITY_HINT: u64 = spacetrace_scan_core::MAX_CAPACITY_HINT as u64;
+
+/// How far into the future an imported scan's start time may lie.
+///
+/// `latest_for`, `prune` and every "newest snapshot" question order by
+/// `started_at`, so a scan stamped years ahead would be the newest of its
+/// target forever: diffs would compare against it, retention would keep it
+/// and delete real ones, and the agent would size every scan of that root
+/// from its entry count. A day covers what a legitimate sender gets wrong —
+/// a box whose clock was set to local time and read as UTC is off by at most
+/// fourteen hours — and a clock further off than that is worth an error
+/// rather than a snapshot that quietly outranks everything after it.
+const MAX_CLOCK_AHEAD_SECS: i64 = 24 * 60 * 60;
+
+/// The value types every column of an incoming snapshot must hold.
+///
+/// The sender writes the file, its DDL included, so its columns may have no
+/// affinity at all. `main`'s do, and `INSERT … SELECT` converts on the way in:
+/// an entry id stored as the text `'-1'` sorts after every integer in the
+/// sender's file and before them in ours. What was checked there is then not
+/// what `load` reads here. Requiring the types `main` would store anyway makes
+/// the copy exact, so the two cannot differ.
+const ENTRY_TYPES: &[(&str, &str)] = &[
+    ("scan_id", "'integer'"),
+    ("id", "'integer'"),
+    ("parent_id", "'integer', 'null'"),
+    ("name", "'text'"),
+    ("kind", "'integer'"),
+    ("size", "'integer'"),
+    ("alloc", "'integer'"),
+    ("mtime", "'integer'"),
+    ("nlink", "'integer'"),
+    ("files", "'integer'"),
+    ("dirs", "'integer'"),
+    ("children_start", "'integer'"),
+    ("children_len", "'integer'"),
+];
+
+const SCAN_TYPES: &[(&str, &str)] = &[
+    ("id", "'integer'"),
+    ("host", "'text'"),
+    ("root", "'text'"),
+    ("started_at", "'integer'"),
+    ("duration_ms", "'integer'"),
+    ("total_size", "'integer'"),
+    ("total_alloc", "'integer'"),
+    ("files", "'integer'"),
+    ("dirs", "'integer'"),
+    ("errors", "'integer'"),
+    ("hardlinks_deduped", "'integer'"),
+    ("scanner_version", "'text'"),
+    ("label", "'text', 'null'"),
+    ("fs_total", "'integer', 'null'"),
+    ("fs_available", "'integer', 'null'"),
+    ("content_hash", "'text', 'null'"),
+];
+
+/// Refuse an attached snapshot whose rows `main` would store differently from
+/// how they read there, or whose scans cannot be told apart by id.
+///
+/// One pass per table for the common case, and a pass per column only to name
+/// the culprit once something is known to be wrong.
+fn check_incoming_shape(conn: &Connection) -> Result<()> {
+    for (table, columns) in [("scans", SCAN_TYPES), ("entries", ENTRY_TYPES)] {
+        let wrong = |(column, types): &(&str, &str)| format!("typeof({column}) NOT IN ({types})");
+        let any = columns.iter().map(wrong).collect::<Vec<_>>().join(" OR ");
+        let bad: i64 = conn.query_row(
+            &format!("SELECT count(*) FROM incoming.{table} WHERE {any}"),
+            [],
+            |row| row.get(0),
+        )?;
+        if bad == 0 {
+            continue;
+        }
+        for column in columns {
+            let n: i64 = conn.query_row(
+                &format!(
+                    "SELECT count(*) FROM incoming.{table} WHERE {}",
+                    wrong(column)
+                ),
+                [],
+                |row| row.get(0),
+            )?;
+            anyhow::ensure!(
+                n == 0,
+                "the snapshot is refused: {table}.{} holds a value of the wrong type in {n} \
+                 rows; nothing was imported",
+                column.0
+            );
+        }
+    }
+
+    // The sender's scans table need not have a key, and two rows sharing an
+    // id would each match the `WHERE id = ?` that copies one of them.
+    let duplicated: i64 = conn.query_row(
+        "SELECT count(*) - count(DISTINCT id) FROM incoming.scans",
+        [],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        duplicated == 0,
+        "the snapshot is refused: {duplicated} scans share an id with another; nothing was imported"
+    );
+    Ok(())
+}
 
 /// Read one scan's rows from `schema` (`main`, or the alias of an ATTACHed
 /// file) and assemble them into a checked tree.

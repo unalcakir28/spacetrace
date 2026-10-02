@@ -113,12 +113,25 @@ impl Default for ScanOptions {
 /// never becomes resident, being under costs one copy. Without a hint this is
 /// a small opening guess and the `Vec` doubles from there, exactly as it did
 /// before the arena was pre-sized.
+///
+/// Clamped, because the hint comes from the previous snapshot of the root and
+/// a snapshot can arrive over the network: one claiming 2^40 files would ask
+/// for 80 TB here and abort every scheduled scan of that root.
 fn arena_capacity(hint: Option<usize>) -> usize {
-    match hint {
-        Some(entries) => entries.saturating_add(entries / 8).saturating_add(1),
-        None => 4096,
-    }
+    let Some(entries) = hint else {
+        return 4096;
+    };
+    let entries = entries.min(MAX_CAPACITY_HINT);
+    entries + entries / 8 + 1
 }
+
+/// The most entries any capacity hint may reserve up front.
+///
+/// Every hint in this workspace — the walk's, the store's on load and on
+/// import — is a number read back from a snapshot, and a snapshot may have
+/// crossed a network. Sixteen million entries is past any root measured here;
+/// a larger real one costs reallocations, never correctness.
+pub const MAX_CAPACITY_HINT: usize = 1 << 24;
 
 /// The stages of a scan, in order.
 ///
@@ -1391,6 +1404,37 @@ fn clone_key(path: &Path) -> Option<u64> {
 #[cfg(not(target_os = "macos"))]
 fn clone_key(_path: &Path) -> Option<u64> {
     None
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    /// The hint is the previous snapshot's entry count, which a pushed
+    /// snapshot can set to anything. 2^40 must neither overflow nor reserve
+    /// beyond the clamp.
+    #[test]
+    fn an_absurd_hint_reserves_no_more_than_the_clamp() {
+        let most = MAX_CAPACITY_HINT + MAX_CAPACITY_HINT / 8 + 1;
+        assert_eq!(arena_capacity(Some(usize::MAX)), most);
+        assert_eq!(arena_capacity(Some(1 << 40)), most);
+        assert_eq!(arena_capacity(Some(800)), 901, "a real hint is unchanged");
+        assert_eq!(arena_capacity(None), 4096);
+    }
+
+    /// And a scan handed that hint still runs: before the clamp it asked for
+    /// 80 TB and aborted before reading a directory.
+    #[test]
+    fn a_scan_with_an_absurd_hint_still_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f"), b"12345").unwrap();
+        let opts = ScanOptions {
+            expected_entries: Some(1 << 40),
+            ..ScanOptions::default()
+        };
+        let (tree, _) = scan(dir.path(), opts, Arc::new(ScanProgress::default())).unwrap();
+        assert_eq!(tree.total_size(), 5);
+    }
 }
 
 #[cfg(test)]

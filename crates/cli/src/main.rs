@@ -999,7 +999,7 @@ fn entry_count_hint(db_path: &Path, root: &Path) -> Option<usize> {
     let previous = store
         .latest_for(&root.to_string_lossy(), Some(&Store::local_host()))
         .ok()??;
-    usize::try_from(previous.files + previous.dirs).ok()
+    usize::try_from(previous.files.saturating_add(previous.dirs)).ok()
 }
 
 fn open_store(path: &Path) -> Result<Store> {

@@ -338,7 +338,7 @@ impl Runner {
             .ok()?
             .latest_for(&stored_name(root), Some(&self.host))
             .ok()??;
-        usize::try_from(previous.files + previous.dirs).ok()
+        usize::try_from(previous.files.saturating_add(previous.dirs)).ok()
     }
 
     /// Scan one root, store it, and apply that root's retention policy.

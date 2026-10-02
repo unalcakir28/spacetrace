@@ -368,6 +368,199 @@ fn an_absurd_entry_count_is_only_a_hint() {
     assert_eq!(tree.total_size(), 1000 + 4096);
 }
 
+/// The sender writes the file and its DDL. A copy of `wire` in tables with no
+/// key and no column affinity, the way a forger is free to write it; no
+/// digest, so the snapshot passes as one from before digests existed and only
+/// the other checks stand between it and the database.
+fn untyped_copy(wire: &std::path::Path, at: &std::path::Path) {
+    let conn = Connection::open(at).unwrap();
+    conn.execute("ATTACH DATABASE ?1 AS src", [wire.to_string_lossy()])
+        .unwrap();
+    conn.execute_batch(
+        "CREATE TABLE scans (id, host, root, started_at, duration_ms, total_size,
+             total_alloc, files, dirs, errors, hardlinks_deduped, scanner_version,
+             label, fs_total, fs_available, content_hash);
+         INSERT INTO scans SELECT * FROM src.scans;
+         UPDATE scans SET content_hash = NULL;
+         CREATE TABLE entries (scan_id, id, parent_id, name, kind, size, alloc, mtime,
+             nlink, files, dirs, children_start, children_len);
+         INSERT INTO entries SELECT * FROM src.entries;
+         DETACH DATABASE src;",
+    )
+    .unwrap();
+}
+
+/// A receiver holding one scan of its own, and what it lists.
+fn receiver_with_a_scan(
+    dir: &tempfile::TempDir,
+    at: &std::path::Path,
+) -> (Store, Vec<spacetrace_store::ScanMeta>) {
+    let mut receiver = Store::open(at).unwrap();
+    let (tree, stats) = scan_fixture(dir);
+    receiver.save(&tree, &stats, "receiver", None).unwrap();
+    let listed = receiver.list().unwrap();
+    (receiver, listed)
+}
+
+fn same_listing(a: &[spacetrace_store::ScanMeta], b: &[spacetrace_store::ScanMeta]) {
+    let ids = |l: &[spacetrace_store::ScanMeta]| l.iter().map(|m| m.id).collect::<Vec<_>>();
+    assert_eq!(ids(a), ids(b), "the receiver must hold exactly what it did");
+}
+
+/// Two scan rows sharing an id. Each matched the `WHERE id = ?` that copied
+/// one of them, so both were inserted, the entries went to the second, and
+/// the first stayed behind with none — a snapshot `load` refuses forever.
+#[test]
+fn two_incoming_scans_with_one_id_import_nothing() {
+    let dir = fixture();
+    let work = tempfile::tempdir().unwrap();
+    let (sender, id) = stored(&dir, &work.path().join("sender.sqlite"));
+    let wire = work.path().join("wire.sqlite");
+    sender.export_snapshot(id, &wire).unwrap();
+    let forged = work.path().join("forged.sqlite");
+    untyped_copy(&wire, &forged);
+    corrupt(&forged, "INSERT INTO scans SELECT * FROM scans");
+
+    let (mut receiver, before) = receiver_with_a_scan(&dir, &work.path().join("r.sqlite"));
+    let refused = receiver.import_snapshot(&forged).unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("share an id"),
+        "{refused:#}"
+    );
+    same_listing(&receiver.list().unwrap(), &before);
+    for meta in receiver.list().unwrap() {
+        receiver
+            .load(meta.id)
+            .expect("everything stored still loads");
+    }
+}
+
+/// An entry id stored as text. In the sender's untyped column `'-1'` sorts
+/// after every integer, so the tree checked there is valid; `main` stores it
+/// as the integer -1, which sorts first, and `load` then finds no root. What
+/// was checked has to be what is stored.
+#[test]
+fn an_entry_id_stored_as_text_imports_nothing() {
+    let dir = fixture();
+    let work = tempfile::tempdir().unwrap();
+    let (sender, id) = stored(&dir, &work.path().join("sender.sqlite"));
+    let wire = work.path().join("wire.sqlite");
+    sender.export_snapshot(id, &wire).unwrap();
+    let forged = work.path().join("forged.sqlite");
+    untyped_copy(&wire, &forged);
+    corrupt(
+        &forged,
+        "UPDATE entries SET id = '-1' WHERE id = (SELECT max(id) FROM entries)",
+    );
+
+    let (mut receiver, before) = receiver_with_a_scan(&dir, &work.path().join("r.sqlite"));
+    let refused = receiver.import_snapshot(&forged).unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("entries.id holds a value of the wrong type"),
+        "{refused:#}"
+    );
+    same_listing(&receiver.list().unwrap(), &before);
+}
+
+/// Untyped and keyless is not wrong in itself: a file with honest values in
+/// such tables imports, and loads as the tree it was. The checks are about
+/// what the values are, not how the sender declared its columns.
+#[test]
+fn an_untyped_but_honest_snapshot_still_imports() {
+    let dir = fixture();
+    let work = tempfile::tempdir().unwrap();
+    let (sender, id) = stored(&dir, &work.path().join("sender.sqlite"));
+    let wire = work.path().join("wire.sqlite");
+    sender.export_snapshot(id, &wire).unwrap();
+    let plain = work.path().join("plain.sqlite");
+    untyped_copy(&wire, &plain);
+
+    let mut receiver = Store::open(work.path().join("r.sqlite")).unwrap();
+    let imported = receiver.import_snapshot(&plain).unwrap();
+    assert_eq!(imported.len(), 1);
+    let (tree, _) = receiver.load(imported[0]).unwrap();
+    assert_eq!(tree.total_size(), 1000 + 4096);
+}
+
+/// A scan dated years ahead would be the newest of its target for good:
+/// every diff, every retention pass and the agent's sizing of the next scan
+/// would go by it. A sender's clock wrong by less than a day is ordinary
+/// misconfiguration and still imports.
+#[test]
+fn a_snapshot_dated_far_ahead_is_refused_and_a_day_of_skew_is_not() {
+    let dir = fixture();
+    let work = tempfile::tempdir().unwrap();
+    let (sender, id) = stored(&dir, &work.path().join("sender.sqlite"));
+    drop(sender);
+
+    for (ahead_hours, accepted) in [(14, true), (24 * 365 * 10, false)] {
+        let wire = work.path().join(format!("wire-{ahead_hours}.sqlite"));
+        Store::open(work.path().join("sender.sqlite"))
+            .unwrap()
+            .export_snapshot(id, &wire)
+            .unwrap();
+        corrupt(
+            &wire,
+            &format!(
+                "UPDATE scans SET started_at = started_at + {}",
+                ahead_hours * 3600
+            ),
+        );
+        reseal(&wire, id);
+
+        let (mut receiver, before) =
+            receiver_with_a_scan(&dir, &work.path().join(format!("r-{ahead_hours}.sqlite")));
+        let result = receiver.import_snapshot(&wire);
+        if accepted {
+            assert_eq!(result.unwrap().len(), 1, "{ahead_hours} h ahead");
+            continue;
+        }
+        let refused = result.unwrap_err();
+        assert!(
+            format!("{refused:#}").contains("in the future"),
+            "{refused:#}"
+        );
+        same_listing(&receiver.list().unwrap(), &before);
+    }
+}
+
+/// The checks that read the whole snapshot run before the write lock, so a
+/// receiver busy writing is not made to wait for them, and a bad snapshot is
+/// refused at once rather than after the 30-second busy timeout. Before, this
+/// sat out the timeout and failed as "database is locked" — an error the
+/// agent returns to the sender as its own mistake.
+#[test]
+fn a_bad_snapshot_is_refused_without_waiting_for_the_write_lock() {
+    let dir = fixture();
+    let work = tempfile::tempdir().unwrap();
+    let (sender, id) = stored(&dir, &work.path().join("sender.sqlite"));
+    let wire = work.path().join("wire.sqlite");
+    sender.export_snapshot(id, &wire).unwrap();
+    corrupt(
+        &wire,
+        "UPDATE entries SET size = size + 1 WHERE name = 'a.txt'",
+    );
+
+    let receiver_path = work.path().join("r.sqlite");
+    let mut receiver = Store::open(&receiver_path).unwrap();
+    // Another writer, mid-transaction.
+    let writer = Connection::open(&receiver_path).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    let started = std::time::Instant::now();
+    let refused = receiver.import_snapshot(&wire).unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("does not match its digest"),
+        "{refused:#}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}: the check waited for the lock",
+        started.elapsed()
+    );
+    writer.execute_batch("ROLLBACK").unwrap();
+}
+
 /// Write the digest the current content hashes to, as a forger would.
 fn reseal(path: &std::path::Path, id: ScanId) {
     let store = Store::open(path).unwrap();

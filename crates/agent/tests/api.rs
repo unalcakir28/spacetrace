@@ -769,6 +769,93 @@ async fn a_body_claiming_to_be_zstd_but_is_not_is_rejected() {
     assert!(body["error"].as_str().unwrap().contains("zstd"));
 }
 
+/// A copy of the agent's own latest snapshot, moved `ahead_secs` into the
+/// future and claiming `files` files, with its digest recomputed to match —
+/// what anyone holding a push token can send. Host and root are the
+/// receiver's own, so the copy competes with its real history.
+fn forged_own_snapshot(agent: &Agent, ahead_secs: i64, files: i64) -> Vec<u8> {
+    let store = Store::open(agent._home.path().join("snapshots.sqlite")).unwrap();
+    let id = store.list().unwrap()[0].id;
+    let wire = agent
+        ._home
+        .path()
+        .join(format!("forged-{ahead_secs}.sqlite"));
+    store.export_snapshot(id, &wire).unwrap();
+    drop(store);
+
+    let conn = rusqlite::Connection::open(&wire).unwrap();
+    conn.execute(
+        "UPDATE scans SET started_at = started_at + ?1, files = ?2",
+        rusqlite::params![ahead_secs, files],
+    )
+    .unwrap();
+    drop(conn);
+    let forged = Store::open(&wire).unwrap();
+    let forged_id = forged.list().unwrap()[0].id;
+    if let spacetrace_store::Integrity::Mismatch { computed, .. } =
+        forged.verify(forged_id).unwrap()
+    {
+        drop(forged);
+        rusqlite::Connection::open(&wire)
+            .unwrap()
+            .execute("UPDATE scans SET content_hash = ?1", [computed])
+            .unwrap();
+    }
+    std::fs::read(&wire).unwrap()
+}
+
+async fn push_raw(agent: &Agent, body: Vec<u8>) -> reqwest::Response {
+    client()
+        .post(agent.url("/snapshots"))
+        .bearer_auth(TOKEN)
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// The newest snapshot of a root sizes the arena of its next scan. One pushed
+/// with an absurd entry count used to make that scan ask for tens of
+/// terabytes and abort — the agent process, not just the scan — and every
+/// scheduled scan of the root after it, for as long as it stayed newest.
+#[tokio::test]
+async fn a_pushed_snapshot_claiming_trillions_of_files_does_not_stop_the_next_scan() {
+    let agent = start_agent(false).await;
+    let root = agent.runner.roots()[0].clone();
+    agent.runner.scan_root(&root).unwrap();
+
+    // An hour ahead: within the clock skew that is accepted, so it imports
+    // and is the newest snapshot of this root when the next scan starts.
+    let response = push_raw(&agent, forged_own_snapshot(&agent, 3600, 1 << 40)).await;
+    assert_eq!(response.status(), 200, "{}", response.text().await.unwrap());
+
+    let runner = Arc::clone(&agent.runner);
+    tokio::task::spawn_blocking(move || runner.scan_root(&root))
+        .await
+        .unwrap()
+        .expect("the scan runs to the end");
+    assert_eq!(agent.runner.list_scans().unwrap().len(), 3);
+}
+
+/// A snapshot dated years ahead would stay the newest of its root for good:
+/// the one the next scan is sized by, the one retention keeps, the one the
+/// metrics report. It is refused, and nothing of it is kept.
+#[tokio::test]
+async fn a_pushed_snapshot_dated_years_ahead_is_refused() {
+    let agent = start_agent(false).await;
+    agent.runner.scan_root(&agent.runner.roots()[0]).unwrap();
+
+    let ten_years = 10 * 365 * 24 * 3600;
+    let response = push_raw(&agent, forged_own_snapshot(&agent, ten_years, 3)).await;
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("in the future"),
+        "{body}"
+    );
+    assert_eq!(agent.runner.list_scans().unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn pushing_requires_a_token_on_the_receiver() {
     let agent = start_agent(false).await;
