@@ -390,8 +390,8 @@ fn clones_are_charged_once_and_du_is_the_one_that_overcounts() {
         "the gap to du should be exactly the two clones nobody has to store"
     );
 
-    // The lowest node id keeps the bytes, so the answer does not depend on
-    // which thread probed first.
+    // Which one is decided in `(depth, path)` order; that it is the same one
+    // in every scan is the test below.
     let charged: Vec<&str> = ["original.bin", "clone1.bin", "clone2.bin"]
         .into_iter()
         .filter(|n| tree.node(tree.find(n).unwrap()).alloc > 0)
@@ -425,6 +425,99 @@ fn without_clone_dedupe_we_match_du_again() {
 
     assert_eq!(stats.clones_deduped, 0);
     assert_eq!(tree.total_alloc(), du_total);
+}
+
+/// Which member of a clone family carries its blocks is the same in every
+/// scan, whatever order the threads met the members in — the property a diff
+/// of two snapshots rests on. Charged by whichever thread came first, the
+/// bytes moved between the members from one scan to the next: 40 scans of a
+/// fixed tree gave five different answers before this was settled after the
+/// walk.
+///
+/// The rule is `(depth, path)`, so the shallowest member carries the family.
+/// The fixture rotates which top-level directory holds the shallowest member,
+/// family by family, so that whatever order the directories are listed and
+/// walked in, charging the first member met is wrong for two families in
+/// three. A `du` comparison alone would pass either way: the total is the
+/// same whoever carries it.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_same_member_carries_a_clone_family_whatever_the_thread_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let tops = ["a", "b", "c"];
+    for top in tops {
+        fs::create_dir_all(root.join(top).join("m/n")).unwrap();
+    }
+    let families = 30usize;
+    let mut shallowest = HashSet::new();
+    for i in 0..families {
+        let name = format!("f{i:02}.bin");
+        let shallow = root.join(tops[i % 3]).join(&name);
+        let bytes: Vec<u8> = (0..65_536u32)
+            .map(|b| (b.wrapping_add(i as u32 * 7919).wrapping_mul(2654435761) >> 24) as u8)
+            .collect();
+        // Written deepest first, so neither creation nor inode order picks
+        // the shallow one.
+        let deep = root.join(tops[(i + 2) % 3]).join("m/n").join(&name);
+        fs::write(&deep, &bytes).unwrap();
+        let middle = root.join(tops[(i + 1) % 3]).join("m").join(&name);
+        if !clone_file(&deep, &middle) || !clone_file(&deep, &shallow) {
+            eprintln!("SKIPPED: this filesystem does not support clones");
+            return;
+        }
+        shallowest.insert(format!("{}/{name}", tops[i % 3]));
+    }
+    let du_total = du_bytes(root).expect("du is available on macOS");
+
+    let scan_with = |threads: usize| {
+        let opts = ScanOptions {
+            threads: Some(threads),
+            ..ScanOptions::default()
+        };
+        let (tree, stats) = scan(root, opts, Arc::new(ScanProgress::default())).unwrap();
+        assert_eq!(stats.clones_deduped, 2 * families as u64);
+        assert_eq!(
+            du_total - tree.total_alloc(),
+            stats.shared_bytes_deduped,
+            "the gap to du is exactly what the clones share"
+        );
+        tree.iter()
+            .map(|id| {
+                let node = tree.node(id);
+                (tree.rel_path(id), (node.size, node.alloc))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let first = scan_with(1);
+    for threads in [2, 8, 1, 8, 3] {
+        assert_eq!(
+            scan_with(threads),
+            first,
+            "{threads} threads charged the clone families to different names"
+        );
+    }
+
+    let mut carried = 0;
+    for (path, (size, alloc)) in &first {
+        if !path.ends_with(".bin") {
+            continue;
+        }
+        if shallowest.contains(path) {
+            assert!(
+                *size == 65_536 && *alloc > 0,
+                "{path} is its family's shallowest member and carries it"
+            );
+            carried += 1;
+        } else {
+            assert_eq!(
+                (*size, *alloc),
+                (0, 0),
+                "{path} is deeper than a member of its family"
+            );
+        }
+    }
+    assert_eq!(carried, families);
 }
 
 // ------------------------------------------------ btrfs and XFS reflinks

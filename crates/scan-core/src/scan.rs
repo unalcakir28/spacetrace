@@ -7,6 +7,7 @@ use std::time::Duration;
 use rayon::prelude::*;
 
 use crate::capacity::Capacity;
+use crate::clones::Families;
 use crate::extents::{Claims, Deferred, FsKind, Mapped, Volume, Volumes};
 use crate::meta::{display_name, EntryKind, FileIdentity, NamedMeta, RawMeta};
 use crate::mounts::Mounts;
@@ -149,10 +150,10 @@ pub const MAX_CAPACITY_HINT: usize = 1 << 24;
 pub enum Phase {
     /// Reading directories.
     Walking,
-    /// Walk done; charging the blocks files share (btrfs, XFS) in a fixed
-    /// order, then building the tree. The first part counts its files in
-    /// `rows_done` of `rows_total`, because on a tree with its snapshots
-    /// inside it that is every file.
+    /// Walk done; charging the blocks files share (btrfs and XFS extents,
+    /// APFS clone families) in a fixed order, then building the tree. The
+    /// first part counts its files in `rows_done` of `rows_total`, because on
+    /// a tree with its snapshots inside it that is every file.
     Finishing,
     /// Writing the tree into a snapshot database, one row per entry.
     Saving,
@@ -498,6 +499,9 @@ struct Ctx {
     /// Families of copy-on-write clones whose blocks some name has already
     /// been charged for, keyed `(device, clone id)`.
     shared_blocks: Mutex<HashSet<(u64, u64)>>,
+    /// Every member of those families, so that after the walk the charge can
+    /// move to the one first in `(depth, path)` order (`clones.rs`).
+    families: Mutex<Families>,
     clones_deduped: AtomicU64,
     shared_bytes_deduped: AtomicU64,
     /// The filesystems met so far, and which of them can share blocks.
@@ -598,9 +602,13 @@ impl Ctx {
     /// point — the same reason the arena is written a directory at a time
     /// rather than an entry at a time.
     ///
-    /// Which name keeps the bytes is undefined in both cases (invariant #3):
-    /// the first thread to claim wins. The guarantee is "once", not "this
-    /// path".
+    /// Which name keeps a hardlink's bytes is undefined (invariant #3): the
+    /// first thread to claim wins, and the guarantee is "once", not "this
+    /// path". A clone family is charged here to the first member too, which
+    /// keeps the running total right, and moved after the walk to the member
+    /// first in `(depth, path)` order (`Ctx::settle_clones`): a hardlink's
+    /// names are one file, but clones are files of their own, and a diff
+    /// would see the bytes moving between them.
     ///
     /// A third kind follows on Linux, by physical extent rather than by
     /// family (`extents.rs`), and the same order holds for it: a repeat
@@ -644,7 +652,7 @@ impl Ctx {
                 if seen.insert((p.meta.dev, key)) {
                     continue;
                 }
-                *slot = Charge::Nothing;
+                *slot = Charge::Cloned;
                 deduped += 1;
                 bytes += p.meta.alloc;
             }
@@ -666,7 +674,7 @@ impl Ctx {
         for (slot, p) in counted.iter_mut().zip(pending) {
             // A repeat hardlink is not charged at all, so it must not claim
             // what the name that *is* charged needs.
-            if *slot == Charge::Nothing {
+            if !slot.counts() {
                 continue;
             }
             let Some(mapped) = p.extents.as_deref() else {
@@ -769,6 +777,54 @@ impl Ctx {
         Ok(())
     }
 
+    /// Move each clone family's charge to its member first in `(depth,
+    /// path)` order. `Err` only for a cancelled scan.
+    ///
+    /// Counted in `rows_done` (invariant 8) and cancellable (invariant 5) like
+    /// `settle_shared`: on a tree of build artifacts most files are clones.
+    fn settle_clones(&self, builder: &mut TreeBuilder) -> std::io::Result<()> {
+        let families = std::mem::take(
+            &mut *self
+                .families
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        if families.is_empty() {
+            return Ok(());
+        }
+        let progress = &self.progress;
+        progress.begin_rows(Phase::Finishing, families.len() as u64);
+        let mut done = 0u64;
+        let moved = families.settle(builder, || {
+            progress.row_done();
+            done += 1;
+            // As in `settle_shared`: soon enough, and no shared atomic read
+            // per member.
+            done % 4096 != 0 || !progress.is_cancelled()
+        });
+        let Some(moved) = moved else {
+            return Err(cancelled());
+        };
+        // The total charged moves by the opposite amount, which the live
+        // counter should follow.
+        match moved.shared_bytes {
+            d if d > 0 => {
+                self.shared_bytes_deduped
+                    .fetch_add(d as u64, Ordering::Relaxed);
+                progress.bytes.fetch_sub(d as u64, Ordering::Relaxed);
+            }
+            d if d < 0 => {
+                self.shared_bytes_deduped
+                    .fetch_sub(d.unsigned_abs(), Ordering::Relaxed);
+                progress
+                    .bytes
+                    .fetch_add(d.unsigned_abs(), Ordering::Relaxed);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Which of a file's extents are shared or compressed, where the
     /// filesystem can say. `None` means "charge what `st_blocks` says".
     #[cfg(target_os = "linux")]
@@ -812,12 +868,22 @@ impl Ctx {
 enum Charge {
     /// What the platform reported.
     Full,
-    /// Nothing: a repeat hardlink, or a clone whose family is already charged.
+    /// Nothing: a repeat hardlink.
     Nothing,
+    /// Nothing for now: a clone whose family is already charged. Which member
+    /// keeps the charge is settled after the walk.
+    Cloned,
     /// This much for what it holds alone — compressed extents at their
     /// on-disk size, shared extents left out. What it shares is added after
     /// the walk.
     Alloc(u64),
+}
+
+impl Charge {
+    /// Whether the entry is charged anything during the walk.
+    fn counts(self) -> bool {
+        !matches!(self, Charge::Nothing | Charge::Cloned)
+    }
 }
 
 /// One listed entry, with everything needed to account for it.
@@ -989,6 +1055,7 @@ fn scan_with(
         seen_inodes: Mutex::new(HashSet::new()),
         hardlinks_deduped: AtomicU64::new(0),
         shared_blocks: Mutex::new(HashSet::new()),
+        families: Mutex::new(Families::default()),
         clones_deduped: AtomicU64::new(0),
         shared_bytes_deduped: AtomicU64::new(0),
         volumes: Volumes::default(),
@@ -1028,6 +1095,7 @@ fn scan_with(
     // Before `finish`, whose aggregation then carries what it adds up the
     // tree like any other leaf value.
     ctx.settle_shared(&mut builder)?;
+    ctx.settle_clones(&mut builder)?;
     let tree = builder.finish(root_path);
 
     let stats = ScanStats {
@@ -1254,6 +1322,8 @@ fn place(
     // of a running scan shows the shared part only once `Finishing` adds it —
     // low rather than counted twice.
     let mut deferred: Vec<(NodeId, u64, Box<Mapped>)> = Vec::new();
+    // Clone-family members, charged or not, by index in this block as above.
+    let mut members = Families::default();
 
     for (index, entry) in pending.into_iter().enumerate() {
         let Pending {
@@ -1261,7 +1331,7 @@ fn place(
             name_off,
             name_len,
             meta,
-            share: _,
+            share,
             extents,
         } = entry;
         let is_dir = meta.kind == EntryKind::Dir;
@@ -1288,17 +1358,24 @@ fn place(
             .as_ref()
             .map_or(Charge::Full, |charges| charges[index]);
         let (size, alloc) = match (charge, is_dir) {
-            (Charge::Nothing, _) => (0, 0),
+            (Charge::Nothing | Charge::Cloned, _) => (0, 0),
             (_, true) => (0, meta.alloc),
             (Charge::Full, false) => (meta.size, meta.alloc),
             (Charge::Alloc(alloc), false) => (meta.size, alloc),
         };
-        if charge != Charge::Nothing && !is_dir {
+        if charge.counts() && !is_dir {
             bytes += alloc;
         }
         if let Some(mapped) = extents {
-            if charge != Charge::Nothing && mapped.claims_anything() {
+            if charge.counts() && mapped.claims_anything() {
                 deferred.push((index as NodeId, meta.ino, mapped));
+            }
+        }
+        // A repeat hardlink is not a member: the name of it that is charged
+        // already is, and two would make one file two members.
+        if let Some(clone_id) = share {
+            if ctx.opts.dedupe_clones && matches!(charge, Charge::Full | Charge::Cloned) {
+                members.push(&meta, clone_id, index as NodeId, charge == Charge::Full);
             }
         }
 
@@ -1365,6 +1442,13 @@ fn place(
         for (index, ino, mapped) in &deferred {
             store.push(start + index, *ino, mapped);
         }
+    }
+    if !members.is_empty() {
+        let mut families = ctx
+            .families
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        families.append_block(members, start);
     }
 
     if subdirs.is_empty() {

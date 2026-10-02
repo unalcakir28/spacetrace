@@ -269,19 +269,9 @@ impl Deferred {
         self.files.is_empty()
     }
 
-    /// Charge every deferred file's shared extents, shallowest path first,
-    /// adding what each one is charged to its node in `builder`.
-    ///
-    /// **`(depth, path)` order, and why depth first.** Path order alone would
-    /// put `/.snapshots` before `/usr` and charge every shared block to the
-    /// snapshot; depth first charges the live tree, which is the name a person
-    /// is asking about and the one that stays put while snapshots come and go.
-    ///
-    /// Done without building a path per file. Directories are ranked
-    /// breadth-first, each directory's subdirectories sorted by name and taken
-    /// in their parent's rank order, so a directory's rank *is* its position
-    /// in `(depth, path)` order. A file then sorts by its parent's rank and its
-    /// own name.
+    /// Charge every deferred file's shared extents, shallowest path first
+    /// ([`PathOrder`](crate::tree::PathOrder)), adding what each one is
+    /// charged to its node in `builder`.
     ///
     /// `step` is called once per file, and returning `false` from it stops the
     /// pass — that is how a cancelled scan gets out (invariant 5) and how the
@@ -292,15 +282,10 @@ impl Deferred {
         claims: &mut Claims,
         mut step: impl FnMut(u64) -> bool,
     ) -> Option<Settled> {
-        let rank = directory_ranks(builder);
-        let nodes = &builder.nodes;
-        self.files.sort_unstable_by(|a, b| {
-            let (pa, pb) = (nodes[a.node as usize].parent, nodes[b.node as usize].parent);
-            rank[pa as usize]
-                .cmp(&rank[pb as usize])
-                .then_with(|| builder.name(a.node).cmp(builder.name(b.node)))
-                .then_with(|| a.ino.cmp(&b.ino))
-        });
+        let order = builder.path_order();
+        self.files
+            .sort_unstable_by(|a, b| order.cmp((a.node, a.ino), (b.node, b.ino)));
+        drop(order);
 
         let mut settled = Settled::default();
         for file in &self.files {
@@ -322,39 +307,6 @@ impl Deferred {
         }
         Some(settled)
     }
-}
-
-/// Every directory's position in `(depth, path)` order; files get `u32::MAX`.
-///
-/// Names compare as the tree stores them, after lossy decoding, so two
-/// sibling directories whose names differ only in invalid UTF-8 tie and keep
-/// arena order. Files have their inode as a tie-break; directories do not
-/// carry one here, and a pair like that holding copies of each other's files
-/// is the only case left in which a name can change between two scans.
-fn directory_ranks(builder: &TreeBuilder) -> Vec<u32> {
-    let nodes = &builder.nodes;
-    let mut rank = vec![u32::MAX; nodes.len()];
-    if nodes.is_empty() {
-        return rank;
-    }
-    let mut next_rank = 0u32;
-    let mut level: Vec<NodeId> = vec![0];
-    while !level.is_empty() {
-        let mut below = Vec::new();
-        for &dir in &level {
-            rank[dir as usize] = next_rank;
-            next_rank += 1;
-            let node = &nodes[dir as usize];
-            let first = below.len();
-            below.extend(
-                (node.children_start..node.children_start + node.children_len)
-                    .filter(|&child| nodes[child as usize].is_dir()),
-            );
-            below[first..].sort_unstable_by(|&a, &b| builder.name(a).cmp(builder.name(b)));
-        }
-        level = below;
-    }
-    rank
 }
 
 /// What a filesystem lets this scanner see about shared blocks.

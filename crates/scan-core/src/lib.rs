@@ -15,6 +15,7 @@ mod age;
 #[cfg(target_os = "macos")]
 mod bulk;
 mod capacity;
+mod clones;
 mod extents;
 mod meta;
 mod mounts;

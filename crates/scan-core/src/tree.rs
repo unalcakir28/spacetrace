@@ -595,6 +595,15 @@ impl TreeBuilder {
             .unwrap_or_default()
     }
 
+    /// Entries ordered by `(depth, path)`, for choosing which of several names
+    /// carries blocks they share. See [`PathOrder`].
+    pub(crate) fn path_order(&self) -> PathOrder<'_> {
+        PathOrder {
+            builder: self,
+            rank: directory_ranks(self),
+        }
+    }
+
     /// The arena as it stands, copied.
     ///
     /// Deliberately not aggregated: this runs under the lock the walk pushes
@@ -647,6 +656,83 @@ impl TreeBuilder {
         );
         Tree::new(self.nodes, self.names, root_path)
     }
+}
+
+/// Entries of one arena in `(depth, path)` order, without a path per entry.
+///
+/// Blocks shared by several names — an APFS clone family, a btrfs snapshot's
+/// extents — are charged to one of them, and which one has to come out the
+/// same in every scan. Arena order cannot decide it: that is the order
+/// directories finished in, which changes with the thread count (invariant
+/// 2). This order does not.
+///
+/// **Depth first, and why.** Path order alone would put `/.snapshots` before
+/// `/usr` and charge every shared block to the snapshot; depth first charges
+/// the live tree, which is the name a person is asking about and the one that
+/// stays put while snapshots come and go.
+///
+/// Directories are ranked breadth-first, each directory's subdirectories
+/// sorted by name and taken in their parent's rank order, so a directory's
+/// rank *is* its position in `(depth, path)` order. An entry then sorts by its
+/// parent's rank and its own name, and its inode breaks a tie between two
+/// names that read the same after lossy decoding.
+pub(crate) struct PathOrder<'a> {
+    builder: &'a TreeBuilder,
+    rank: Vec<u32>,
+}
+
+impl PathOrder<'_> {
+    /// Compare entry `a` (inode `a_ino`) with entry `b` (inode `b_ino`).
+    pub(crate) fn cmp(
+        &self,
+        (a, a_ino): (NodeId, u64),
+        (b, b_ino): (NodeId, u64),
+    ) -> std::cmp::Ordering {
+        let nodes = &self.builder.nodes;
+        let (pa, pb) = (nodes[a as usize].parent, nodes[b as usize].parent);
+        self.rank_of(pa)
+            .cmp(&self.rank_of(pb))
+            .then_with(|| self.builder.name(a).cmp(self.builder.name(b)))
+            .then_with(|| a_ino.cmp(&b_ino))
+    }
+
+    /// The root has no parent; it is the only entry at its depth.
+    fn rank_of(&self, dir: NodeId) -> u32 {
+        self.rank.get(dir as usize).copied().unwrap_or(0)
+    }
+}
+
+/// Every directory's position in `(depth, path)` order; files get `u32::MAX`.
+///
+/// Names compare as the tree stores them, after lossy decoding, so two
+/// sibling directories whose names differ only in invalid UTF-8 tie and keep
+/// arena order. Files have their inode as a tie-break; directories do not
+/// carry one here, and a pair like that holding copies of each other's files
+/// is the only case left in which a name can change between two scans.
+fn directory_ranks(builder: &TreeBuilder) -> Vec<u32> {
+    let nodes = &builder.nodes;
+    let mut rank = vec![u32::MAX; nodes.len()];
+    if nodes.is_empty() {
+        return rank;
+    }
+    let mut next_rank = 0u32;
+    let mut level: Vec<NodeId> = vec![ROOT];
+    while !level.is_empty() {
+        let mut below = Vec::new();
+        for &dir in &level {
+            rank[dir as usize] = next_rank;
+            next_rank += 1;
+            let node = &nodes[dir as usize];
+            let first = below.len();
+            below.extend(
+                (node.children_start..node.children_start + node.children_len)
+                    .filter(|&child| nodes[child as usize].is_dir()),
+            );
+            below[first..].sort_unstable_by(|&a, &b| builder.name(a).cmp(builder.name(b)));
+        }
+        level = below;
+    }
+    rank
 }
 
 /// One entry as an importer describes it, before any arena exists.
