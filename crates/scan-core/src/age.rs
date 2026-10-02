@@ -116,8 +116,12 @@ pub fn age_profile_at(tree: &Tree, root: NodeId, now: i64, edges: &[u32]) -> Age
             Some(band) => &mut profile.buckets[band],
         };
         bucket.files += 1;
-        bucket.size += node.own_size;
-        bucket.alloc += node.own_alloc;
+        // The subtree totals, which for a file are its own — and which are
+        // what a snapshot stores. `own_*` is not persisted and comes back from
+        // `store::load` as zero, so reading it here made every `age --scan`
+        // report nothing but zeros.
+        bucket.size += node.size;
+        bucket.alloc += node.alloc;
     }
 
     profile
@@ -184,7 +188,9 @@ pub fn median_bands(tree: &Tree, now: i64, edges: &[u32]) -> Vec<Option<u8>> {
         let node = tree.node(id as NodeId);
         if node.kind != EntryKind::Dir {
             if let Some(band) = band_of(node.mtime, now, &sorted) {
-                hist[id * width + band] += node.own_alloc;
+                // `alloc`, not `own_alloc`: the same reason as in
+                // `age_profile_at` — a loaded snapshot has no own sizes.
+                hist[id * width + band] += node.alloc;
             }
         }
         let parent = node.parent;
@@ -276,6 +282,65 @@ mod tests {
 
     fn profile_of(children: Vec<ImportedNode>) -> AgeProfile {
         age_profile(&tree_of(children), NOW, DEFAULT_EDGES)
+    }
+
+    /// The tree as `store::load` hands it back: every row through
+    /// `TreeAssembler` with `own_size` and `own_alloc` at zero, because a
+    /// snapshot stores subtree totals only.
+    fn as_loaded(tree: &Tree) -> Tree {
+        let mut assembler = crate::TreeAssembler::with_capacity(tree.len());
+        for id in tree.iter() {
+            let n = tree.node(id);
+            assembler.push(crate::StoredNode {
+                parent: n.parent,
+                name: tree.name(id),
+                kind: n.kind,
+                size: n.size,
+                alloc: n.alloc,
+                own_size: 0,
+                own_alloc: 0,
+                mtime: n.mtime,
+                nlink: n.nlink,
+                files: n.files,
+                dirs: n.dirs,
+                children_start: n.children_start,
+                children_len: n.children_len,
+            });
+        }
+        assembler.finish(tree.root_path().to_path_buf()).unwrap()
+    }
+
+    /// `age --scan ID` reported 0 B in every band, on every stored snapshot:
+    /// the profile summed `own_size`, which loading does not restore. A live
+    /// tree and the same tree loaded back must give one answer.
+    #[test]
+    fn a_loaded_snapshot_ages_like_the_tree_it_was_saved_from() {
+        let live = tree_of(vec![
+            file_aged("today", 0, 10),
+            file_aged("ancient", 3_000, 80),
+        ]);
+        let loaded = as_loaded(&live);
+        let (a, b) = (
+            age_profile(&live, NOW, DEFAULT_EDGES),
+            age_profile(&loaded, NOW, DEFAULT_EDGES),
+        );
+        assert_eq!(a.alloc_older_than(730), 80);
+        assert_eq!(
+            b.alloc_older_than(730),
+            80,
+            "the loaded tree lost its bytes"
+        );
+        let sizes = |p: &AgeProfile| {
+            p.buckets
+                .iter()
+                .map(|b| (b.files, b.size, b.alloc))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(sizes(&a), sizes(&b));
+        assert_eq!(
+            median_bands(&live, NOW, DEFAULT_EDGES),
+            median_bands(&loaded, NOW, DEFAULT_EDGES)
+        );
     }
 
     #[test]
