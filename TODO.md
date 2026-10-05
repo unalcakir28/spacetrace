@@ -318,10 +318,17 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       file passes on XFS with `reflink=0`. 4 mutations each caught.
       **Cost** (100k files, warm, 6 threads): btrfs 16 → 101 ms, XFS 18 →
       59 ms; cold btrfs 143 → 238 ms. Memory +0.8 MiB for 200k shared files.
-      **Still open:** XFS FIEMAP serialises in the kernel when extents are
-      shared (271 ms at 1 thread, 728 ms at 6, unstable; a cap of 2
-      concurrent gave 1102 → 303 ms) — re-measure on real hardware, then cap
-      or use `GETFSMAP` as root. btrfs inline files (≤2 KiB, in metadata)
+      **XFS FIEMAP capped** *(5 October 2026)*: the kernel serialises FIEMAP
+      on shared XFS extents, so more threads made it slower. A gate per
+      XFS volume (`fiemap_cap`: XFS 1, btrfs none) arms on the first shared
+      extent seen and then lets one thread map files at a time, 64 per
+      permit; before it is armed FIEMAP stays inline, so unshared XFS pays
+      nothing. A waiter abandons the gate only if no file finished during
+      its whole wait (a stuck holder, not a slow one). Docker, 100k files,
+      6 threads: hot 855 → 200 ms warm, 971 → 248 ms cold; pairs 261 → 198;
+      half 457 → 171; unshared and 1 thread unchanged. A permit per file
+      was ~3× slower, cap 2 convoys. **Still open:** re-measure on real
+      hardware; `GETFSMAP` as root. btrfs inline files (≤2 KiB, in metadata)
       still count once per name under a snapshot (166 MB of 1.3 GB, 100k
       files). Bookend extents and RAID copies are not visible. bcachefs/OCFS2
       not covered. The new CI job has not run on GitHub Actions yet.
@@ -536,9 +543,24 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       **Left open:** not measured above 412k. The synthetic 1.2M attempt
       was discarded because its shape came out malformed; a real large
       corpus is needed.
-- [ ] **B3 HDD / network drive mode** — on spinning disks and NFS, a
-      parallel walk can be worse than single-thread (seek thrash); we
-      have nothing for this case.
+- [x] **B3 HDD / network drive mode** — done for spinning disks *(5
+      October 2026)*. `--disk auto|ssd|hdd` (agent: `disk` per root).
+      `hdd` walks with one thread and, on Linux, stats each directory's
+      entries in inode order (`dents.rs`, a per-thread (inode, offset)
+      scratch). `auto` reads `/sys/.../queue/rotational` for the root's
+      device — through `/sys/fs/btrfs/<uuid>/devices` on btrfs, any
+      spinning member counts — on an abandonable thread with a deadline
+      (≤ 2 s, invariant 7); undetected means flash. `ScanStats.pace` and
+      `--json` say how it was decided (`asked`/`detected`/`undetected`).
+      Simulated spinning disk (Docker, cold): 1 thread in listing order
+      11.5 s, in inode order 0.9 s; 2 and 6 threads 12.6–13.6 s either way;
+      every setting issued the same reads. No SSD regression. Network
+      filesystems are **not** paced like HDDs: virtiofs went 2.9 s at 1
+      thread → 1.5 s at 6.
+      - [ ] Pace and inode order per volume: an HDD mounted below an SSD
+            root walks at the root's pace, and an SSD below an HDD root in
+            inode order with one thread.
+      - [ ] Verify on a real HDD and on btrfs over a spinning disk.
       *Competitor:* gdu `--sequential`; QDirStat sorts entries by inode
       before stat'ing them.
 - [~] **B4 Windows MFT fast path** — written *(5 October 2026)*, **awaiting
@@ -762,7 +784,21 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       one doesn't), and every entry looked wrong. My comparison function
       also passed silently, because `zip` of 9 against 0 iterates zero
       times — the count-equality assertion was added afterward.
-- [ ] **B6 Linux `getdents64` + `statx` fast path.**
+- [x] **B6 Linux `getdents64` fast path** — done *(5 October 2026)*.
+      `dents.rs`: one per-thread `getdents64` buffer, `fstatat` relative to
+      the dirfd, `openat` for FIEMAP, no allocation per entry; `read_dir` +
+      `lstat` stays the path for a directory holding a mount point; an open
+      failure is reported once, in the ordinary path's words. `statx` was built, measured and
+      dropped: equal to `fstatat` on glibc and musl (177 vs 168 ms, 651 vs
+      654 ms at 1M entries). Malformed records are an EIO on the
+      directory, `d_ino == 0` skipped, EINTR retried. Docker linux/aarch64,
+      interleaved medians: glibc 6–14% (1M entries 188 → 161 ms at 6
+      threads); the static musl agent build 1.3–3.4× (1M 2061 → 682 ms,
+      real tree 307 → 122 ms, cold 420 → 323 ms). Exports identical to main
+      at 1 and 6 threads; `assert_same_answer_as_lstat` in `dents.rs`
+      holds it field by field.
+      - [ ] The musl build is still ~3× slower than glibc at 6 threads —
+            most likely musl's allocator under threads.
       *Competitor:* `dut`, in warm cache, 6.87× over `du`, 2.8–3.75× over
       dust/dua/gdu.
 - [~] **B7 Incremental rescan** — macOS done *(5 October 2026)*; USN Journal (Windows) and Linux open. For an agent
@@ -1486,9 +1522,9 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
 | ~~2~~ ✅ | ~~A4, A1, A2, A4w~~ | Our accuracy claim wasn't being met on Windows. A4 (Unix) was done first because there were no tests at all. **Done (9 September 2026), Windows CI green** |
 | ~~3~~ ✅ | ~~B1~~ | A competitor solved this 10 days ago and wrote up how; the wall in front of the 10M-file target. **Four of them done (9 September 2026), B1-K on 14 September** |
 | ~~4~~ ✅ | ~~A3, A5~~ | We were wrong on macOS (DaisyDisk was right) — A3 is done; corruption over the network is no longer silent. **Done (10 September 2026)** |
-| 5 | ~~B2~~ ✅, **B3 ← next up** | Cheap and measured — B2 is done (10 September 2026); B3 needs a real HDD or a network drive |
+| ~~5~~ ✅ | ~~B2, B3~~ | Cheap and measured — B2 is done (10 September 2026), B3 on 5 October (simulated disk; a real HDD still to confirm) |
 | ~~6~~ | ~~C3, D1~~ | Both done |
-| 7 | B4, ~~B5~~ ✅, B6, ~~B8~~ ✅ | Platform-specific fast paths — B5 is done (11 September 2026) and B8 on 22 September, which is where the lead over dua-cli came from; B4 needs a Windows machine, B6 a Linux machine |
+| 7 | B4, ~~B5~~ ✅, ~~B6~~ ✅, ~~B8~~ ✅ | Platform-specific fast paths — B5 is done (11 September 2026), B8 on 22 September, which is where the lead over dua-cli came from, and B6 on 5 October; B4 is written and waits for Windows CI |
 | 8 | B7 | The biggest strategic win. Listed after B4 for the machine, not for a dependency — and since 21 September 2026 it reads as the cheaper of the two, because it needs no MFT parser |
 | 9 | ~~C1–C9~~ ✅ | Feature parity completed *(11 September 2026)* |
 | 10 | E3, **E4 ← half done**, ~~D2~~ ✅, ~~D3~~ ✅ | Release prep (E5 left out of scope). D3 done 14 September 2026, D2 on 21 September; E3 needs money. E4's manifests and CI job landed 22 September — what is left is creating four repositories and accounts, which is the widest remaining competitive gap and needs no engineering |

@@ -142,6 +142,36 @@
             "it": "Salvare uno snapshot richiede circa il 17% di tempo in meno: l'hash del contenuto viene calcolato mentre le righe vengono scritte, non in un secondo passaggio. Il `/status` dell'agente non riporta più la fase `checksumming`.",
             "tr": "Snapshot kaydetmek yaklaşık %17 daha kısa sürüyor: içerik özeti ikinci bir geçişte değil, satırlar yazılırken hesaplanıyor. Ajanın `/status` yanıtı artık `checksumming` aşamasını bildirmiyor."
           }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Scans unter Linux sind schneller: Ordner werden in großen Blöcken gelesen und jeder Eintrag relativ zu seinem Ordner abgefragt, ohne Speicheranforderung pro Eintrag. Am meisten gewinnt der statische Build, mit dem der Agent ausgeliefert wird — auf den gemessenen Bäumen 1,3- bis 3,4-mal so schnell —, glibc-Builds 6 bis 14 %.",
+            "en": "Scans on Linux are faster: directories are read in large batches and each entry is asked relative to its directory, without per-entry allocations. The static build the agent ships as gains the most — 1.3 to 3.4 times faster on the trees measured — and glibc builds 6 to 14%.",
+            "fr": "Les analyses sous Linux sont plus rapides : les dossiers sont lus par grands lots et chaque entrée est interrogée relativement à son dossier, sans allocation par entrée. C'est la version statique livrée avec l'agent qui y gagne le plus — de 1,3 à 3,4 fois plus rapide sur les arborescences mesurées — et les versions glibc de 6 à 14 %.",
+            "it": "Le scansioni su Linux sono più veloci: le cartelle vengono lette in grandi blocchi e ogni voce viene interrogata rispetto alla propria cartella, senza allocazioni per voce. Ne beneficia di più la build statica con cui viene distribuito l'agente — da 1,3 a 3,4 volte più veloce sugli alberi misurati — e le build glibc dal 6 al 14%.",
+            "tr": "Linux'ta taramalar daha hızlı: klasörler büyük gruplar halinde okunuyor ve her girdi, girdi başına bellek ayırmadan kendi klasörüne göre sorgulanıyor. En çok kazanan, ajanın dağıtıldığı statik derleme — ölçülen ağaçlarda 1,3 ile 3,4 kat arası daha hızlı — glibc derlemeleri ise %6 ile %14 arası."
+          }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Auf XFS-Dateisystemen mit per Reflink geteilten Dateien sind Scans mit mehreren Threads nicht mehr langsamer als mit einem: Das Dateisystem wird jeweils von nur einem Thread und in Serien nach geteilten Blöcken gefragt. Ein Baum aus 100.000 per Reflink geteilten Dateien brauchte warm 200 ms statt 855 ms und kalt 248 ms statt 971 ms. XFS ohne Reflink-Dateien, btrfs und ext4 bleiben unverändert.",
+            "en": "On XFS filesystems holding reflinked files, scans with several threads are no longer slower than with one: the filesystem is asked about shared blocks one thread at a time, in runs. A tree of 100,000 reflinked files took 200 ms instead of 855 ms warm, and 248 ms instead of 971 ms cold. XFS without reflinked files, btrfs and ext4 are unchanged.",
+            "fr": "Sur les systèmes de fichiers XFS contenant des fichiers reflinkés, les analyses à plusieurs threads ne sont plus plus lentes qu'avec un seul : le système de fichiers est interrogé sur les blocs partagés un thread à la fois, par séries. Une arborescence de 100 000 fichiers reflinkés a pris 200 ms au lieu de 855 ms à chaud, et 248 ms au lieu de 971 ms à froid. XFS sans fichiers reflinkés, btrfs et ext4 sont inchangés.",
+            "it": "Sui filesystem XFS che contengono file reflink, le scansioni con più thread non sono più lente di quelle con uno solo: il filesystem viene interrogato sui blocchi condivisi da un thread alla volta, a gruppi. Un albero di 100.000 file reflink ha richiesto 200 ms invece di 855 ms a cache calda e 248 ms invece di 971 ms a cache fredda. XFS senza file reflink, btrfs ed ext4 restano invariati.",
+            "tr": "Reflink'li dosyalar barındıran XFS dosya sistemlerinde birden çok iş parçacığıyla yapılan taramalar artık tek iş parçacığından yavaş değil: dosya sistemine paylaşılan bloklar bir seferde tek iş parçacığıyla, toplu halde soruluyor. 100.000 reflink'li dosyalık bir ağaç sıcak önbellekle 855 ms yerine 200 ms, soğuk önbellekle 971 ms yerine 248 ms sürdü. Reflink'li dosya barındırmayan XFS, btrfs ve ext4 değişmedi."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "`spacetrace scan --disk auto|ssd|hdd` passt das Tempo des Scans an die darunterliegende Platte an. `hdd` scannt mit einem Thread und fragt unter Linux die Einträge jedes Ordners in der Reihenfolge ab, in der sie auf der Platte liegen; `auto`, die Voreinstellung, erkennt drehende Platten unter Linux und scannt alles andere wie bisher. Auf einer simulierten drehenden Platte dauerte ein kalter Scan 0,9 s statt 11,5 s. `--json` meldet das Tempo (`disk`, `threads`, `disk_decided`). Der Agent nimmt dieselbe Einstellung pro Wurzel als `disk`.",
+            "en": "`spacetrace scan --disk auto|ssd|hdd` paces the walk for the disk underneath. `hdd` walks with one thread and, on Linux, asks for each folder's entries in the order they lie on the disk; `auto`, the default, detects spinning disks on Linux and walks everything else as before. On a simulated spinning disk a cold scan took 0.9 s instead of 11.5 s. `--json` reports the pace (`disk`, `threads`, `disk_decided`). The agent takes the same setting per root as `disk`.",
+            "fr": "`spacetrace scan --disk auto|ssd|hdd` adapte le rythme de l'analyse au disque sous-jacent. `hdd` analyse avec un seul thread et, sous Linux, demande les entrées de chaque dossier dans l'ordre où elles se trouvent sur le disque ; `auto`, la valeur par défaut, détecte les disques rotatifs sous Linux et analyse tout le reste comme avant. Sur un disque rotatif simulé, une analyse à froid a pris 0,9 s au lieu de 11,5 s. `--json` indique le rythme (`disk`, `threads`, `disk_decided`). L'agent accepte le même réglage par racine sous le nom `disk`.",
+            "it": "`spacetrace scan --disk auto|ssd|hdd` regola il ritmo della scansione sul disco sottostante. `hdd` usa un solo thread e, su Linux, chiede le voci di ogni cartella nell'ordine in cui si trovano sul disco; `auto`, il valore predefinito, riconosce i dischi rotanti su Linux e scansiona tutto il resto come prima. Su un disco rotante simulato una scansione a freddo ha richiesto 0,9 s invece di 11,5 s. `--json` riporta il ritmo (`disk`, `threads`, `disk_decided`). L'agente accetta la stessa impostazione per radice come `disk`.",
+            "tr": "`spacetrace scan --disk auto|ssd|hdd` taramanın hızını alttaki diske göre ayarlıyor. `hdd` tek iş parçacığıyla tarıyor ve Linux'ta her klasörün girdilerini diskteki sıralarıyla istiyor; varsayılan `auto`, Linux'ta dönen diskleri algılıyor ve geri kalan her şeyi eskisi gibi tarıyor. Simüle edilmiş bir dönen diskte soğuk bir tarama 11,5 s yerine 0,9 s sürdü. `--json` hızı bildiriyor (`disk`, `threads`, `disk_decided`). Ajan aynı ayarı kök başına `disk` olarak alıyor."
+          }
         }
       ],
       "releases": [
@@ -771,6 +801,26 @@
             "fr": "L'enregistrement d'une analyse dans l'historique prend environ 17 % de temps en moins : sa somme de contrôle est calculée pendant l'écriture des lignes, et non lors d'une seconde passe.",
             "it": "Salvare una scansione nella cronologia richiede circa il 17% di tempo in meno: il suo checksum viene calcolato mentre le righe vengono scritte, non in un secondo passaggio.",
             "tr": "Bir taramayı geçmişe kaydetmek yaklaşık %17 daha kısa sürüyor: sağlama özeti ikinci bir geçişte değil, satırlar yazılırken hesaplanıyor."
+          }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Scans unter Linux sind 6 bis 14 % schneller: Ordner werden in großen Blöcken gelesen und jeder Eintrag relativ zu seinem Ordner abgefragt. Auf XFS mit per Reflink geteilten Dateien machen mehr Threads einen Scan nicht mehr langsamer: 100.000 solcher Dateien brauchten 200 ms statt 855 ms.",
+            "en": "Scans on Linux are 6 to 14% faster: folders are read in large batches and each entry is asked relative to its folder. On XFS with reflinked files, more threads no longer make a scan slower: 100,000 such files took 200 ms instead of 855 ms.",
+            "fr": "Les analyses sous Linux sont de 6 à 14 % plus rapides : les dossiers sont lus par grands lots et chaque entrée est interrogée relativement à son dossier. Sur XFS avec des fichiers reflinkés, plus de threads ne ralentissent plus l'analyse : 100 000 de ces fichiers ont pris 200 ms au lieu de 855 ms.",
+            "it": "Le scansioni su Linux sono dal 6 al 14% più veloci: le cartelle vengono lette in grandi blocchi e ogni voce viene interrogata rispetto alla propria cartella. Su XFS con file reflink, più thread non rallentano più la scansione: 100.000 file di questo tipo hanno richiesto 200 ms invece di 855 ms.",
+            "tr": "Linux'ta taramalar %6 ile %14 arası daha hızlı: klasörler büyük gruplar halinde okunuyor ve her girdi kendi klasörüne göre sorgulanıyor. Reflink'li dosyalar barındıran XFS'te daha fazla iş parçacığı artık taramayı yavaşlatmıyor: bu türden 100.000 dosya 855 ms yerine 200 ms sürdü."
+          }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Unter Linux werden drehende Platten erkannt und mit einem Thread gescannt, die Einträge jedes Ordners in der Reihenfolge, in der sie auf der Platte liegen: Ein kalter Scan einer simulierten drehenden Platte dauerte 0,9 s statt 11,5 s.",
+            "en": "On Linux, spinning disks are detected and scanned with one thread, each folder's entries in the order they lie on the disk: a cold scan of a simulated spinning disk took 0.9 s instead of 11.5 s.",
+            "fr": "Sous Linux, les disques rotatifs sont détectés et analysés avec un seul thread, les entrées de chaque dossier dans l'ordre où elles se trouvent sur le disque : une analyse à froid d'un disque rotatif simulé a pris 0,9 s au lieu de 11,5 s.",
+            "it": "Su Linux i dischi rotanti vengono riconosciuti e scansionati con un solo thread, le voci di ogni cartella nell'ordine in cui si trovano sul disco: una scansione a freddo di un disco rotante simulato ha richiesto 0,9 s invece di 11,5 s.",
+            "tr": "Linux'ta dönen diskler algılanıyor ve tek iş parçacığıyla, her klasörün girdileri diskteki sıralarıyla taranıyor: simüle edilmiş bir dönen diskin soğuk taraması 11,5 s yerine 0,9 s sürdü."
           }
         }
       ],

@@ -324,7 +324,7 @@ structure afterwards. `dust`, which does, peaks at 773 MiB.
 | **FreeSize** | **.NET + Photino.Blazor** `[binary]` | **`DirectoryInfo.GetFiles`/`GetDirectories`** `[binary]` | **No trace of it** `[binary]` |
 | Diskaroo | Swift (mac) + WPF/.NET 8 (Win); Linux `[not found]` `[vendor]` | **Itself admits it does not read the MFT** `[vendor]` | `[not found]` |
 | DiskRaptor | Rust + Tauri 2 `[binary]` | jwalk (mac) / walkdir (Win, Linux) + `getattrlistbulk`, `FindFirstFileW` `[binary]` | rayon, jwalk |
-| **spacetrace** | **Rust** | `read_dir` + `symlink_metadata` | **rayon, measured 5.2×** `[measured]` |
+| **spacetrace** | **Rust** | `getattrlistbulk` (macOS), `getdents64` + `fstatat` (Linux), `read_dir` + `symlink_metadata` elsewhere | **rayon, measured 5.2×** `[measured]` |
 
 ### 2.1 Feature matrix
 
@@ -441,7 +441,7 @@ boundary.
 |---|---|---|
 | Shell | Photino.NET + OS webview | Tauri v2 + OS webview |
 | Core language | C# / .NET (embedded CoreCLR) | Rust |
-| Enumeration | `GetFiles` (eager array) | `read_dir` + `symlink_metadata` |
+| Enumeration | `GetFiles` (eager array) | `getattrlistbulk` (macOS), `getdents64` + `fstatat` (Linux) |
 | Parallelism | no trace of it | rayon, **5.2×** `[measured]` |
 | Layout | in C# | in Rust (`crates/treemap`, 21 tests) |
 | Drawing | Blazor → **DOM** | **Canvas2D**, only the visible rectangles |
@@ -513,8 +513,8 @@ figure `[vendor]`.
 | ~~No APFS clone deduplication~~ → **closed on 9 September 2026** (`F_LOG2PHYS_EXT`, on by default) | **DaisyDisk 4.34** (counts a clone's first appearance and gives the rest 0 bytes) |
 | **Memory is 11–17× the target** | dua-cli (64 B), ncdu 2 (25 B) |
 | ~~No snapshot integrity check~~ → **closed on 10 September 2026** (schema v3, content SHA-256; import rejects it, `spacetrace verify` audits it) | dua-cli (SHA-256) |
-| **No incremental rescan** | SpaceObServer (USN Journal) |
-| **No mode for HDD/network** | gdu (`--sequential`), QDirStat (inode ordering) |
+| ~~No incremental rescan~~ → **closed on macOS on 5 October 2026** (FSEvents, B7); Windows (USN) and Linux open | SpaceObServer (USN Journal) |
+| ~~No mode for HDD~~ → **closed on 5 October 2026** (`--disk hdd`, auto-detected on Linux: one thread, inode order). Network drives are not paced | gdu (`--sequential`), QDirStat (inode ordering) |
 | **The thread count does not adapt** | erdtree (empirically 3), TreeSize (based on CPU load) |
 | **No code signing** | FreeSize, Diskaroo, TreeSize, WizTree — all signed |
 | **Zero users, zero distribution presence** | all of them |

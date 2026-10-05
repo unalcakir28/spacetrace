@@ -21,6 +21,7 @@ because anyone can install them.
 - The agent now serves Prometheus metrics at `/metrics`, behind the same bearer token as the rest of its API. Per configured root: when the newest snapshot started and how long it took, its logical and on-disk size, files, directories, unreadable paths, the free and total space it recorded, whether a scan is running, and how many snapshots are stored; plus the build and the start time. A root never scanned still appears, with zero snapshots, so "never scanned" can be alerted on. A scrape reads only what is already stored - it starts no scan and does not touch the scanned disks - and took 2.2 ms against a store of 20,005 snapshots. docs/AGENT.md has the scrape configuration.
 - On macOS, `spacetrace scan --save` and the agent's scheduled scans start from the last snapshot and reread only the folders FSEvents says changed: /Applications in 241 ms instead of 459 ms. The result is the same as a full scan or it is a full scan: any doubt (no cursor, another volume, a slow or lost journal, too many changes, a base older than two days, other options, a damaged or imported base) means a full scan, and the snapshot records why. `--full` and per-root `incremental = false` force a full scan.
 - `scan --json` reports `rescan` (`full`, `incremental` or `fallback:<reason>`) and an `incremental` object (replay and base-load time, folders reread, entries reused).
+- `spacetrace scan --disk auto|ssd|hdd` paces the walk for the disk underneath. `hdd` walks with one thread and, on Linux, asks for each folder's entries in the order they lie on the disk; `auto`, the default, detects spinning disks on Linux and walks everything else as before. On a simulated spinning disk a cold scan took 0.9 s instead of 11.5 s. `--json` reports the pace (`disk`, `threads`, `disk_decided`). The agent takes the same setting per root as `disk`.
 
 ### Changed
 
@@ -29,6 +30,8 @@ because anyone can install them.
 ### Performance
 
 - Saving a snapshot takes about 17% less time: the content hash is computed while the rows are written, not in a second pass. The agent's `/status` no longer reports a `checksumming` phase.
+- Scans on Linux are faster: directories are read in large batches and each entry is asked relative to its directory, without per-entry allocations. The static build the agent ships as gains the most — 1.3 to 3.4 times faster on the trees measured — and glibc builds 6 to 14%.
+- On XFS filesystems holding reflinked files, scans with several threads are no longer slower than with one: the filesystem is asked about shared blocks one thread at a time, in runs. A tree of 100,000 reflinked files took 200 ms instead of 855 ms warm, and 248 ms instead of 971 ms cold. XFS without reflinked files, btrfs and ext4 are unchanged.
 
 ### Fixed
 
