@@ -7,7 +7,7 @@ Read for thing code no show: [docs/WHY.md](docs/WHY.md) why product, [docs/ARCHI
 ## Commands
 
 ```bash
-cargo test --workspace --no-fail-fast   # 715 pass on macOS (5 October 2026); all must pass
+cargo test --workspace --no-fail-fast   # 724 pass on macOS (5 October 2026); all must pass
 cargo clippy --workspace --all-targets   # must be warning-free
 cargo fmt --all
 cargo build --release                    # binary: target/release/spacetrace

@@ -1716,8 +1716,8 @@ No decision made yet, will be discussed when its turn comes.
       itself. **Events only say where to look**: a dirty folder is relisted
       with `scan(dir, max_depth = 1)`, a new one scanned whole, so scan-core
       does all size accounting. **Hardlinks** cannot be settled by one listing
-      (`Node` keeps no inode): a listing that meets `nlink > 1` is refused and
-      a full rescan runs, capped at a tenth of the time. **Clones** are counted
+      (`Node` keeps no inode), so a `(dev, ino)` ledger beside the model
+      settles them (see below). **Clones** are counted
       at full size, same reason. **Loss**: inotify overflow → full rescan,
       FSEvents MustScanSubDirs → subtree rescan, plus an unprompted full
       rescan every max(60 s, 30× scan) that corrects and reports drift —
@@ -1725,8 +1725,8 @@ No decision made yet, will be discussed when its turn comes.
       anyone. inotify gets one watch per descended folder, added before the
       first scan (8 vs 29 watches with/without `--exclude node_modules`,
       measured); exhausting `max_user_watches` stops the command with the
-      sysctl (shown in Docker). New crate: notify =8.2.0, CLI only, +5/+6/+8
-      crates macOS/Linux/Windows.
+      sysctl (shown in Docker). New crate: notify =8.2.0, CLI only, since 5
+      October 2026 off Linux only.
       Measured on 1.26M entries / 83k folders: steady RSS ~250 MB (a scan's
       retained peak); with cargo builds inside the root, hardlink rescans cost
       ~9 s CPU each and peak at a 520 MB footprint.
@@ -1738,13 +1738,30 @@ No decision made yet, will be discussed when its turn comes.
       `probe_mount`; the periodic check and compaction never ran on a disk
       written to every tick; non-UTF-8 names were tracked by their lossy
       form. The event queue is bounded and a full one is a loss.
-      - [ ] **A `(dev, ino)` ledger** for hardlinked names in the watch, so a
-            build tree stops forcing full rescans. ~100 lines of hardlink
-            accounting outside scan-core — or the B7 per-node flag.
-      - [ ] **Use `inotify` directly** (already in the graph): notify's mask
-            includes IN_OPEN, so every directory read queues an event. No
-            overflow at default limits (40k folders, measured), but it is
-            noise the watch pays for.
+      **Hardlink ledger** *(5 October 2026)*: `watch/links.rs` keeps every
+      hardlinked file by `(dev, ino)` with the folders holding its names,
+      fed by scan-core's `scan_recording` hook from the same `stat` that
+      charged the name. A file is charged to one folder, the first by
+      (depth, path), once all `nlink` names are placed; a name that cannot
+      be placed is doubted for two ticks and only then costs one capped full
+      rescan. Files sit in a slab with the first two folders inline (116 B
+      per file, 36.7 → 22.2 MiB for 200k files with a link each); folders
+      keep running charged sums, so a refresh no longer walks the ledger.
+      Measured with 6 cargo builds inside a 1.2M-entry root on macOS: CPU
+      per build 9.33 s → 0.02 s, full rescans 6 → 0, peak 281 → 133 MiB;
+      totals equal a fresh `scan` byte for byte.
+      **inotify directly** *(5 October 2026)*: `watch/inotify.rs` asks for
+      changes only (no IN_OPEN), coalesces one change per kind per folder per
+      read, takes a moved folder's watches off with it, and a reader failure
+      reaches the user with its cause. On Linux (Docker, 500k files, 8
+      builds) CPU per build 2.60 s → 0.01 s, full rescans 15 → 0 (two of
+      notify's were a startup queue overflow), peak RSS 75 → 58 MiB.
+      - [ ] A link into an excluded, too-deep or out-of-root folder made
+            between full scans leaves the file's bytes out for about two
+            ticks, then costs one capped full rescan; a partial scan cannot
+            tell an outside name from one listed earlier. Linking a file
+            that sat unchanged for a while costs the same on Linux.
+      - [ ] Android stays on notify's inotify backend (not built here).
       - [ ] **Windows verified only by CI**, overflow behaviour untested.
 - [x] **Prometheus metrics endpoint** — done *(2 October 2026)*.
       `crates/agent/src/metrics.rs`, text format 0.0.4, hand-written, no new
