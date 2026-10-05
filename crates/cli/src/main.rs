@@ -1952,7 +1952,7 @@ fn pkgs_owner(path: &Path, sources: &pkgs::Sources, json: bool) -> Result<()> {
     ensure_package_databases(&own)?;
     let abs = target.to_string_lossy();
     let owners: Vec<&pkgs::Package> = own
-        .owners(&abs, kind)
+        .owners(&own.listed_spelling(&abs), kind)
         .into_iter()
         .map(|id| own.package(id))
         .collect();
@@ -1997,7 +1997,7 @@ fn ensure_package_databases(own: &pkgs::Ownership) -> Result<()> {
     anyhow::ensure!(
         !own.databases().is_empty(),
         "no package database found on this machine. Looked for {}",
-        pkgs::WHERE_LOOKED
+        pkgs::where_looked()
     );
     let unread: Vec<String> = own
         .databases()

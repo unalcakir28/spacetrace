@@ -14,8 +14,9 @@
 //! report, not the whole command.
 //!
 //! **One damaged entry costs that entry.** A list that cannot be read, a
-//! pacman directory with no `files`, is counted and sampled as a scan counts
-//! unreadable paths, and the rest of the database still counts.
+//! pacman directory with no `files`, a receipt whose BOM or plist is broken,
+//! is counted and sampled as a scan counts unreadable paths, and the rest of
+//! the database still counts.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -26,8 +27,10 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use super::receipt::{bom_paths, receipt_info, Visit};
 use super::{
-    below, parse, BrewPrefix, Claim, Database, Manager, Ownership, PackageId, Sources, State,
+    below, fold_case, join, parse, BrewPrefix, Claim, Database, Manager, Ownership, PackageId,
+    Sources, State,
 };
 
 /// Where Homebrew lives when nobody moved it: Apple silicon, Intel macOS, and
@@ -38,6 +41,20 @@ const BREW_PREFIXES: [&str; 3] = ["opt/homebrew", "usr/local", "home/linuxbrew/.
 /// The two places an rpm database sits: the current one, and the old one,
 /// which Fedora keeps as a symlink to it.
 const RPM_DATABASES: [&str; 2] = ["usr/lib/sysimage/rpm", "var/lib/rpm"];
+
+/// Where installer receipts are kept, relative to a volume, and whether
+/// `pkgutil` reads each on the boot volume and on any other — a home folder
+/// included. On the boot volume it reads `installer`'s own folder and the one
+/// Apple's system packages use (the command line tools, the data template):
+/// exactly those two folders' receipts, 87 and 60, make up the 147 that
+/// `pkgutil --pkgs` lists on the measuring machine. Elsewhere, `pkgutil
+/// --volume <dir>` reads `Library/Receipts` and ignores `var/db/receipts`
+/// (measured).
+const RECEIPT_FOLDERS: [(&str, bool, bool); 3] = [
+    ("var/db/receipts", true, false),
+    ("Library/Receipts", false, true),
+    ("Library/Apple/System/Library/Receipts", true, true),
+];
 
 /// How many symlinks one lookup may pass through, as the kernel's `ELOOP`.
 const MAX_HOPS: u32 = 40;
@@ -50,42 +67,94 @@ pub(super) fn load(sources: &Sources, scope: &Path) -> Ownership {
         .sysroot
         .canonicalize()
         .unwrap_or_else(|_| sources.sysroot.clone());
-    let scope = scope.to_string_lossy().into_owned();
+    let root = root.to_string_lossy().into_owned();
     // The mount points the scope sits on. The scan has already stood on all
     // of them, so stepping onto them again proves nothing new can hang.
-    let near: HashSet<PathBuf> = Path::new(&scope)
+    let near: HashSet<PathBuf> = scope
         .ancestors()
         .filter(|a| sources.mounts.contains(a))
         .map(Path::to_path_buf)
         .collect();
+    // Asked of the scope as scanned, the filesystem the tree describes. On
+    // macOS's data volume the scope is translated once, here, into the
+    // spelling the databases use; the report translates each path the same
+    // way. A scope holding several firmlinked folders, the volume itself,
+    // takes everything, and the translation picks out what matches.
+    let fold = ignores_case(scope);
+    let scanned = scope.to_string_lossy();
+    let firmlinks = firmlinks(&root, &scanned);
+    let listed_scope = match &firmlinks {
+        Some(links) => links.listed(&scanned).unwrap_or_else(|| root.clone()),
+        None => scanned.into_owned(),
+    };
+    let mut own = Ownership::empty();
+    own.fold = fold;
     let mut loader = Loader {
         sources,
-        root: root.to_string_lossy().into_owned(),
-        scope,
+        root,
+        scope: fold_case(&listed_scope, fold).into_owned(),
         near,
         verdicts: HashMap::new(),
         resolved: HashMap::new(),
         dirs: HashMap::new(),
         by_name: HashMap::new(),
-        own: Ownership::empty(),
+        own,
     };
     loader.dpkg();
     loader.rpm();
     loader.pacman();
     loader.apk();
+    loader.receipts();
     loader.homebrew();
     *sources
         .progress
         .waiting_on
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = None;
+    loader.own.firmlinks = firmlinks;
     loader.own
+}
+
+/// Whether the filesystem at `path` treats `A` and `a` as one name: APFS and
+/// HFS+ as macOS formats them, unless asked otherwise. Asked of the scope,
+/// which the scan has already stood on. Everywhere else, and when the answer
+/// is unclear, no: folding on a filesystem that keeps case would merge two
+/// files into one claim.
+pub(super) fn ignores_case(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: a NUL-terminated path that outlives the call.
+        let answer = unsafe { libc::pathconf(path.as_ptr(), libc::_PC_CASE_SENSITIVE) };
+        answer == 0
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// The system's firmlinks, when `scope` is on the data volume spelled through
+/// `/System/Volumes/Data` and lies in or holds a firmlinked folder; `None`
+/// everywhere else, including every system that has no such file. Read off
+/// the root volume, which is the one filesystem that is always there.
+fn firmlinks(root: &str, scope: &str) -> Option<super::Firmlinks> {
+    super::Firmlinks::new(root, Vec::new()).data_rest(scope)?;
+    let text = read_optional(&Path::new(root).join("usr/share/firmlinks")).ok()?;
+    let links = super::Firmlinks::new(root, parse::firmlinks(&text));
+    (links.listed(scope).is_some() || links.holds_links(scope)).then_some(links)
 }
 
 struct Loader<'a> {
     sources: &'a Sources,
     /// The canonical sysroot, `/` outside the tests.
     root: String,
+    /// The scope as the index keys it: case-folded when the filesystem
+    /// ignores case.
     scope: String,
     near: HashSet<PathBuf>,
     /// Mount point → whether it answered the probe. Asked once each.
@@ -94,8 +163,10 @@ struct Loader<'a> {
     /// on disk or leads nowhere near the scope. Every prefix of every directory
     /// looked up lands here, so each is resolved once.
     resolved: HashMap<String, Option<String>>,
-    /// Listed directory, as the database spells it → its resolution.
-    dirs: HashMap<String, Option<String>>,
+    /// Listed directory, as the database spells it → how it reaches the
+    /// scope, if at all. Every path's claim starts here, so it is decided
+    /// once per directory what its paths can contribute.
+    dirs: HashMap<String, Option<Reach>>,
     /// Per manager, so a lookup by `&str` allocates nothing: rpm repeats the
     /// package name on every one of its lines.
     by_name: HashMap<Manager, HashMap<String, PackageId>>,
@@ -163,6 +234,8 @@ impl Loader<'_> {
     /// `/usr` is related to a scope of `/usr/bin` (above it) and to one of `/`
     /// (inside it); `/var` is related to neither.
     fn related(&self, path: &str) -> bool {
+        let path = fold_case(path, self.own.fold);
+        let path = path.as_ref();
         path == self.scope
             || below(path, &self.scope).is_some()
             || below(&self.scope, path).is_some()
@@ -253,19 +326,29 @@ impl Loader<'_> {
         id
     }
 
-    /// The real directory a listed one stands for, if anything in it can be
-    /// inside the scope.
-    fn listed_dir(&mut self, listed: &str) -> Option<String> {
-        if let Some(known) = self.dirs.get(listed) {
-            return known.clone();
+    /// How the real directory a listed one stands for reaches the scope, or
+    /// `None` when nothing in it can.
+    fn listed_dir(&mut self, listed: &str) -> Option<&Reach> {
+        if !self.dirs.contains_key(listed) {
+            let reach = self
+                .resolve(&join(&self.root, listed), 0)
+                .map(|dir| self.reach(&dir));
+            self.dirs.insert(listed.to_string(), reach);
         }
-        let spelled = match listed.is_empty() {
-            true => self.root.clone(),
-            false => join(&self.root, listed),
-        };
-        let resolved = self.resolve(&spelled, 0);
-        self.dirs.insert(listed.to_string(), resolved.clone());
-        resolved
+        self.dirs.get(listed)?.as_ref()
+    }
+
+    /// Where a resolved directory, one [`resolve`](Loader::resolve) found
+    /// related to the scope, stands against it.
+    fn reach(&self, dir: &str) -> Reach {
+        let dir = fold_case(dir, self.own.fold);
+        if *dir == self.scope || below(&dir, &self.scope).is_some() {
+            return Reach::Inside(dir.into_owned());
+        }
+        match below(&self.scope, &dir) {
+            Some(last) if !last.contains('/') => Reach::Parent(last.to_string()),
+            _ => Reach::Above,
+        }
     }
 
     /// Record that `pkg` lists `listed`, an absolute path or one relative to
@@ -278,14 +361,16 @@ impl Loader<'_> {
         if name.is_empty() || name == "." || name == ".." {
             return;
         }
-        let Some(dir) = self.listed_dir(dir) else {
-            return;
+        // Decided by the directory before any key is built: inside the scope
+        // every name counts, folded alone; in the scope's own parent only the
+        // scope's name; anywhere above it, none.
+        let fold = self.own.fold;
+        let key = match self.listed_dir(dir) {
+            Some(Reach::Inside(dir)) => Some(join(dir, &fold_case(name, fold))),
+            Some(Reach::Parent(last)) if fold_case(name, fold) == last.as_str() => None,
+            _ => return,
         };
-        let key = join(&dir, name);
-        let in_scope = key == self.scope || below(&key, &self.scope).is_some();
-        if !in_scope {
-            return;
-        }
+        let key = key.unwrap_or_else(|| self.scope.clone());
 
         let entry = match self.own.paths.entry(key.into_boxed_str()) {
             Entry::Vacant(v) => {
@@ -564,6 +649,106 @@ impl Loader<'_> {
         self.found(Manager::Apk, installed, State::Read { packages });
     }
 
+    /// macOS installer receipts: one `<id>.bom` and `<id>.plist` per package
+    /// in each receipts folder of each volume `pkgutil` would read. Read on
+    /// macOS only, and compiled everywhere, so every platform's build checks
+    /// it and none but macOS looks for receipts.
+    fn receipts(&mut self) {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let home = self.sources.receipt_home.clone();
+        let volumes = std::iter::once(("", true)).chain(home.as_deref().map(|home| (home, false)));
+        for (volume, boot) in volumes {
+            for (folder, on_boot, elsewhere) in RECEIPT_FOLDERS {
+                if (boot && on_boot) || (!boot && elsewhere) {
+                    self.receipt_folder(volume, folder);
+                }
+            }
+        }
+    }
+
+    /// One receipts folder. `volume` is what the receipts' paths are relative
+    /// to, itself relative to the sysroot: empty for the boot volume.
+    fn receipt_folder(&mut self, volume: &str, folder: &str) {
+        let dir = self.at(&join(volume, folder));
+        if !self.reachable(&dir) {
+            return self.unanswered(Manager::Pkgutil, dir);
+        }
+        if !dir.is_dir() {
+            return;
+        }
+        let entries = match self.entries(&dir) {
+            Ok(entries) => entries,
+            Err(reason) => return self.found(Manager::Pkgutil, dir, State::Unreadable { reason }),
+        };
+        // A receipt is its BOM: `pkgutil` lists a BOM without a plist, and
+        // ignores a plist without a BOM — which is what `InstallHistory.plist`
+        // beside them is (both measured).
+        let boms: Vec<PathBuf> = entries
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|e| e == "bom"))
+            .collect();
+        let packages = boms.len();
+        for bom in boms {
+            self.receipt(volume, &bom);
+        }
+        self.found(Manager::Pkgutil, dir, State::Read { packages });
+    }
+
+    fn receipt(&mut self, volume: &str, bom: &Path) {
+        // Without the plist the install location is unknown — `pkgutil` itself
+        // says `location: (null)` — and a guess would credit the package with
+        // somebody else's files. So a missing or unreadable one, one with no
+        // `InstallPrefixPath`, or one that names no package costs the receipt,
+        // counted and named.
+        let plist = bom.with_extension("plist");
+        let info = std::fs::read(&plist)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| receipt_info(&bytes));
+        let info = match info {
+            Ok(info) => info,
+            Err(e) => return self.damaged(&plist, e),
+        };
+        let Some(prefix) = info.prefix else {
+            return self.damaged(&plist, "it does not say where the package was installed");
+        };
+        let Some(id) = info.id.filter(|id| !id.is_empty()) else {
+            return self.damaged(&plist, "it names no package");
+        };
+        let base = join(volume, prefix.trim_matches('/'));
+        // Installed somewhere that cannot reach the scope — `/usr/local` for a
+        // scan of `/Applications` — so nothing in it can be owned here, and
+        // the BOM is not read. The same resolution decides it as decides each
+        // listed folder, so a prefix through a symlink still counts.
+        if self.listed_dir(&base).is_none() {
+            return;
+        }
+        let bytes = match std::fs::read(bom) {
+            Ok(bytes) => bytes,
+            Err(e) => return self.damaged(bom, e),
+        };
+        let pkg = self.package(Manager::Pkgutil, &id);
+        let mut visit = ReceiptVisit {
+            loader: self,
+            base: &base,
+            pkg,
+        };
+        match bom_paths(&bytes, &mut visit) {
+            // Paths below a folder that cannot reach the scope were never
+            // spelled out, and still count as listed.
+            Ok(listing) => {
+                let skipped = listing.skipped;
+                self.own.listed += skipped;
+                self.sources
+                    .progress
+                    .listed
+                    .fetch_add(skipped, Ordering::Relaxed);
+            }
+            Err(e) => self.damaged(bom, e),
+        }
+    }
+
     fn homebrew(&mut self) {
         for prefix in BREW_PREFIXES {
             let spelled = join(&self.root, prefix);
@@ -571,13 +756,14 @@ impl Loader<'_> {
             // scope — `/home/linuxbrew` for a scan of `/usr` — is never
             // looked at, and an unanswering `/home` is asked once, with a
             // deadline, only when the scope includes it.
-            let Some(root) = self.resolve(&spelled, 0) else {
+            let Some(on_disk) = self.resolve(&spelled, 0) else {
                 continue;
             };
+            let root = fold_case(&on_disk, self.own.fold).into_owned();
             if self.own.brew.iter().any(|known| known.root == root) {
                 continue;
             }
-            let prefix = PathBuf::from(&root);
+            let prefix = PathBuf::from(&on_disk);
             let cellar = prefix.join("Cellar");
             if !self.reachable(&cellar) || !cellar.is_dir() {
                 continue;
@@ -594,7 +780,8 @@ impl Loader<'_> {
         }
     }
 
-    /// One package per directory in `Cellar` or `Caskroom`.
+    /// One package per directory in `Cellar` or `Caskroom`, keyed by its name
+    /// folded as the index is.
     fn brew_names(&mut self, area: &Path, manager: Manager) -> HashMap<String, PackageId> {
         // No casks installed, no Caskroom.
         if !area.exists() {
@@ -613,17 +800,44 @@ impl Loader<'_> {
             .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .map(|name| {
                 let id = self.package(manager, &name);
-                (name, id)
+                (fold_case(&name, self.own.fold).into_owned(), id)
             })
             .collect()
     }
 }
 
-/// `dir/name`, without doubling the slash after `/`.
-fn join(dir: &str, name: &str) -> String {
-    match dir.ends_with('/') {
-        true => format!("{dir}{name}"),
-        false => format!("{dir}/{name}"),
+/// How a listed directory reaches the scope, all as the index keys it.
+enum Reach {
+    /// At or inside the scope: every name in it counts.
+    Inside(String),
+    /// The scope's own parent: only the scope's name counts — the case when
+    /// the scope is one file, as `spacetrace pkgs <file>` asks.
+    Parent(String),
+    /// Further up: nothing in it counts, but the scope lies below it.
+    Above,
+}
+
+/// The loader as a receipt's BOM sees it: folders are entered when they can
+/// reach the scope, by the same resolution every claim makes, and each path
+/// is claimed relative to the receipt's install location.
+struct ReceiptVisit<'l, 'a> {
+    loader: &'l mut Loader<'a>,
+    base: &'l str,
+    pkg: PackageId,
+}
+
+impl Visit for ReceiptVisit<'_, '_> {
+    fn descend(&mut self, folder: &str) -> bool {
+        self.loader.listed_dir(&join(self.base, folder)).is_some()
+    }
+
+    // Folders are claimed like every other path, and skipped where the tree
+    // finds a folder — the tree decides, as it does for dpkg's lists. Deciding
+    // by the BOM's type instead is wrong after an update: 25 of Highlights'
+    // paths were bundles when installed and are plain files now, still at the
+    // paths the receipt names.
+    fn path(&mut self, path: &str) {
+        self.loader.claim(self.pkg, &join(self.base, path));
     }
 }
 

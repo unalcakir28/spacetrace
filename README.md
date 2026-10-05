@@ -140,8 +140,12 @@ spacetrace pkgs /usr/bin/python3     # one file: which package owns it
 (`/lib/apk/db/installed`) and Homebrew, which owns by position (`Cellar/<formula>`,
 `Caskroom/<cask>`, and the links in `bin/` and `opt/` that point there). rpm's
 database is binary, so `rpm` itself is asked; where it is missing the report
-says the database was not read instead of calling its files unowned. Several
-can be present at once, Homebrew next to dpkg for instance.
+says the database was not read instead of calling its files unowned. On macOS
+it also reads the installer receipts `pkgutil` reads (`/var/db/receipts`,
+`/Library/Apple/System/Library/Receipts`, `~/Library/Receipts`): everything a
+`.pkg` installed — Apple's own, the Command Line Tools, Office, Node.js — with
+the same file list `pkgutil --files` gives. Several can be present at once,
+Homebrew next to dpkg or next to the receipts for instance.
 
 - **Merged /usr is handled.** A list that says `/bin/ls` is matched against
   `/usr/bin/ls`, where the file actually is. Matching the strings as written
@@ -150,6 +154,10 @@ can be present at once, Homebrew next to dpkg for instance.
   by hand (`/usr/local`, `pip install`, a tarball in `/opt`), but files a
   package's install script generates show up too: Python bytecode, font and
   icon caches, `locale-archive`, busybox's applet links.
+- **macOS spells some folders twice.** `/System/Volumes/Data/Applications` is
+  `/Applications` through a firmlink, and both give the same answer. On a
+  volume that ignores case, as macOS formats them, a name an updater
+  re-capitalised still matches its receipt.
 - A file two packages both list is counted once, for the first by name, and
   the report says how much was shared. The single-file form lists every
   package that claims it.

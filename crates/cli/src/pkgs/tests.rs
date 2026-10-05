@@ -78,6 +78,7 @@ impl System {
             // this machine's packages.
             rpm: OsString::from("spacetrace-test-no-such-rpm"),
             rpm_timeout: Duration::from_secs(5),
+            receipt_home: None,
             // No mounts inside a temporary directory unless a test says so.
             mounts: Mounts::none(),
             mount_timeout: Some(Duration::from_secs(5)),
@@ -452,6 +453,26 @@ fn homebrew_owns_by_position_and_its_links_by_target() {
     assert_eq!(parts, ["var", "bin/mine"]);
 }
 
+/// On a filesystem that ignores case, a link an updater wrote as
+/// `../cellar/wget/…` reaches the formula `Wget` as the kernel does, and is
+/// the formula's. Where case is kept the link points nowhere and stays
+/// unowned; the formula's own file is owned either way.
+#[test]
+fn homebrew_compares_folded_where_the_filesystem_ignores_case() {
+    let sys = System::new();
+    let brew = "opt/homebrew";
+    sys.file(&format!("{brew}/Cellar/Wget/1.25.0/bin/wget"), 600);
+    let target = "../cellar/wget/1.25.0/bin/wget";
+    sys.link(&format!("{brew}/bin/wget"), target);
+    let fold = super::load::ignores_case(sys.root());
+
+    let (report, _, _) = sys.report(brew);
+
+    let link = target.len() as u64;
+    let expected = if fold { 600 + link } else { 600 };
+    assert_eq!(size_of(&report, "Wget"), Some(expected), "folding: {fold}");
+}
+
 /// A scan of one subdirectory keeps only that subdirectory's paths: the
 /// memory follows the question.
 #[test]
@@ -469,6 +490,24 @@ fn only_paths_under_the_root_are_kept() {
     assert_eq!(own.sizes(), (3, 1), "three listed, one under usr/bin");
     assert_eq!(size_of(&report, "coreutils"), Some(1));
     assert_eq!(size_of(&report, "base-files"), None);
+}
+
+/// `spacetrace pkgs <file>` loads with the file itself as the scope: of its
+/// folder's paths only its own name counts, and is the one kept.
+#[test]
+fn a_scope_that_is_one_file_keeps_that_file() {
+    let sys = System::new();
+    sys.file("usr/bin/ls", 1);
+    sys.file("usr/bin/cat", 1);
+    sys.dpkg("coreutils", &["/usr/bin/ls", "/usr/bin/cat"]);
+
+    let own = sys.load(&sys.sources(), "usr/bin/ls");
+
+    assert_eq!(own.sizes(), (2, 1), "two listed, the scope kept");
+    let ls = sys.canonical("usr/bin/ls");
+    let owners = own.owners(&ls.to_string_lossy(), EntryKind::File);
+    assert_eq!(owners.len(), 1);
+    assert_eq!(own.package(owners[0]).name, "coreutils");
 }
 
 /// Invariant 3: a hardlinked file is counted once whichever name carries it,
@@ -747,4 +786,432 @@ fn a_damaged_entry_is_counted_and_the_rest_still_reads() {
         .databases()
         .iter()
         .all(|d| matches!(d.state, State::Read { .. })));
+}
+
+// ------------------------------------------------------- macOS spellings
+
+/// Lays down the two views of a macOS data volume: the folder as the system
+/// shows it and the same folder under `System/Volumes/Data`. A firmlink
+/// cannot be made in a test, so the second view is a copy — which is what a
+/// firmlink looks like to everything that reads the disk.
+fn both_views(sys: &System, rel: &str, bytes: usize) {
+    sys.file(rel, bytes);
+    sys.file(&format!("System/Volumes/Data/{rel}"), bytes);
+}
+
+/// The system's own list, as macOS 27 ships it, shortened.
+fn firmlinks_file(sys: &System) {
+    sys.file_text(
+        "usr/share/firmlinks",
+        "/Applications\tApplications\n/Library\tLibrary\n/opt\topt\n\
+         /System/Library/Caches\tSystem/Library/Caches\n/usr/local\tusr/local\n",
+    );
+}
+
+/// A scan of `/System/Volumes/Data/Applications` finds the files the
+/// databases name under `/Applications`. `realpath` does not turn one into
+/// the other, so without the firmlink table everything there was unowned.
+#[test]
+fn a_scan_through_the_data_volume_matches_the_firmlinked_names() {
+    let sys = System::new();
+    firmlinks_file(&sys);
+    both_views(&sys, "Applications/Tiny.app/Contents/MacOS/Tiny", 700);
+    both_views(&sys, "Applications/Mine.app/Contents/MacOS/Mine", 30);
+    both_views(&sys, "usr/local/bin/tool", 90);
+    sys.dpkg(
+        "tiny",
+        &[
+            "/Applications/Tiny.app",
+            "/Applications/Tiny.app/Contents/MacOS/Tiny",
+        ],
+    );
+    sys.dpkg("tool", &["/usr/local/bin/tool"]);
+
+    for i in 0..10 {
+        both_views(
+            &sys,
+            &format!("Applications/Mine.app/Contents/Resources/r{i}"),
+            1,
+        );
+    }
+    let (report, own, _) = sys.report("System/Volumes/Data/Applications");
+    assert_eq!(size_of(&report, "tiny"), Some(700));
+    assert_eq!(report.unowned.size, 40);
+    assert_eq!(own.sizes().1, 2, "the scope is translated, so it keeps 2");
+    // Inside one firmlinked folder, the root is translated and each file's
+    // path follows from it: the table is not searched per file.
+    let translated = own.firmlinks.as_ref().unwrap().translated.get();
+    assert!(translated < 12, "{translated} translations for 12 files");
+
+    // The volume itself holds several firmlinked folders, and each matches.
+    let (report, _, _) = sys.report("System/Volumes/Data");
+    assert_eq!(size_of(&report, "tiny"), Some(700));
+    assert_eq!(size_of(&report, "tool"), Some(90));
+
+    // One file, asked through the data volume.
+    let file = sys.canonical("System/Volumes/Data/usr/local/bin/tool");
+    let own = sys.load(&sys.sources(), "System/Volumes/Data/usr/local/bin/tool");
+    let owners = own.owners(
+        &own.listed_spelling(&file.to_string_lossy()),
+        EntryKind::File,
+    );
+    assert_eq!(owners.len(), 1);
+}
+
+/// A scan of `/` walks both views. The firmlinked one is credited, once; the
+/// second is where the scan counted the bytes again, and stays unowned rather
+/// than becoming a second claim on the same package.
+#[test]
+fn a_scan_of_the_root_credits_each_file_once() {
+    let sys = System::new();
+    firmlinks_file(&sys);
+    both_views(&sys, "Applications/Tiny.app/Contents/MacOS/Tiny", 700);
+    sys.dpkg("tiny", &["/Applications/Tiny.app/Contents/MacOS/Tiny"]);
+
+    let (report, _, _) = sys.report("");
+    let tiny = report.packages.iter().find(|p| p.name == "tiny").unwrap();
+    assert_eq!((tiny.size, tiny.files), (700, 1));
+}
+
+/// Folding is decided by the filesystem: on one that ignores case — APFS as
+/// macOS formats it — a list naming `dropdownarrow.png` owns the file an
+/// updater renamed to `DropDownArrow.png`, as `stat` and `pkgutil` both say.
+/// On one that keeps case they are two names, and the file is unowned.
+#[test]
+fn a_name_that_differs_only_in_case_matches_where_the_filesystem_ignores_case() {
+    let sys = System::new();
+    sys.file("opt/app/Resources/DropDownArrow.png", 64);
+    sys.dpkg("app", &["/opt/app/resources/dropdownarrow.png"]);
+    let fold = super::load::ignores_case(sys.root());
+
+    let (report, _, _) = sys.report("opt");
+
+    let expected = fold.then_some(64);
+    assert_eq!(size_of(&report, "app"), expected, "folding: {fold}");
+    #[cfg(target_os = "macos")]
+    eprintln!("this temporary directory ignores case: {fold}");
+}
+
+// ---------------------------------------------------- installer receipts
+
+/// Receipts are read on macOS only, and these tests make them with the
+/// system's own `mkbom` and `plutil`, so a real BOM and a real binary plist
+/// are what the loader reads.
+#[cfg(target_os = "macos")]
+mod receipts {
+    use super::*;
+    use std::process::Command;
+
+    enum Item<'a> {
+        File(usize),
+        Link(&'a str),
+        Dir,
+    }
+
+    impl System {
+        /// Install a package the way `installer` leaves it: its files under
+        /// `<volume>/<prefix>`, and a receipt — a BOM of exactly those
+        /// files, made by `mkbom` from a staging copy, and a binary plist —
+        /// in `<volume>/<receipts>`. `volume` is relative to the sysroot,
+        /// empty for the boot volume.
+        fn install(
+            &self,
+            volume: &str,
+            receipts: &str,
+            id: &str,
+            prefix: &str,
+            items: &[(&str, Item)],
+        ) {
+            let stage = self.root().join(".stage").join(id);
+            // `/` is a real prefix, and joined as written it would replace the
+            // sysroot and install onto the machine running the test.
+            let location = self
+                .root()
+                .join(volume.trim_start_matches('/'))
+                .join(prefix.trim_start_matches('/'));
+            assert!(location.starts_with(self.root()), "{}", location.display());
+            for (rel, item) in items {
+                let installed = location.join(rel);
+                assert!(installed.starts_with(self.root()));
+                for at in [stage.join(rel), installed] {
+                    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                    match item {
+                        Item::File(bytes) => std::fs::write(&at, vec![b'x'; *bytes]).unwrap(),
+                        Item::Link(target) => symlink(target, &at).unwrap(),
+                        Item::Dir => std::fs::create_dir_all(&at).unwrap(),
+                    }
+                }
+            }
+            let dir = self.root().join(volume).join(receipts);
+            std::fs::create_dir_all(&dir).unwrap();
+            let made = Command::new("mkbom")
+                .arg(&stage)
+                .arg(dir.join(format!("{id}.bom")))
+                .status()
+                .unwrap();
+            assert!(made.success());
+            self.plist(&dir.join(format!("{id}.plist")), id, Some(prefix));
+            std::fs::remove_dir_all(self.root().join(".stage")).unwrap();
+        }
+
+        /// [`install`](System::install) on the boot volume, the receipt in
+        /// `installer`'s own folder.
+        fn receipt(&self, id: &str, prefix: &str, items: &[(&str, Item)]) {
+            self.install("", RECEIPTS, id, prefix, items);
+        }
+
+        fn plist(&self, at: &Path, id: &str, prefix: Option<&str>) {
+            let prefix = prefix.map_or(String::new(), |p| {
+                format!("<key>InstallPrefixPath</key><string>{p}</string>")
+            });
+            std::fs::write(
+                at,
+                format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\
+                     <dict>{prefix}<key>PackageIdentifier</key><string>{id}</string>\
+                     <key>PackageVersion</key><string>1.0</string></dict></plist>\n"
+                ),
+            )
+            .unwrap();
+            let converted = Command::new("plutil")
+                .args(["-convert", "binary1"])
+                .arg(at)
+                .status()
+                .unwrap();
+            assert!(converted.success());
+        }
+    }
+
+    const RECEIPTS: &str = "var/db/receipts";
+
+    /// `pkgutil --volume <sysroot>` reads `Library/Receipts` there, not
+    /// `var/db/receipts` (measured), so the oracle gets a copy.
+    fn pkgutil_files(sys: &System, id: &str) -> Vec<String> {
+        let mirror = sys.root().join("Library/Receipts");
+        std::fs::create_dir_all(&mirror).unwrap();
+        for ext in ["bom", "plist"] {
+            let name = format!("{id}.{ext}");
+            std::fs::copy(sys.root().join(RECEIPTS).join(&name), mirror.join(&name)).unwrap();
+        }
+        let out = Command::new("pkgutil")
+            .arg("--volume")
+            .arg(sys.root())
+            .args(["--files", id])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .split_terminator('\n')
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The three places a package lands — the volume root, `Applications`,
+    /// and nowhere in particular (an empty prefix) — each credited with
+    /// exactly what `pkgutil` lists for it, measured with `stat`. Folders the
+    /// BOM lists carry nothing; the symlink carries its own size.
+    #[test]
+    fn each_receipt_owns_what_pkgutil_lists_relative_to_its_location() {
+        let sys = System::new();
+        sys.receipt(
+            "org.example.tool",
+            "/",
+            &[
+                ("usr", Item::Dir),
+                ("usr/local", Item::Dir),
+                ("usr/local/bin", Item::Dir),
+                ("usr/local/lib/tool/core", Item::File(1000)),
+                ("usr/local/bin/tool", Item::Link("../lib/tool/core")),
+            ],
+        );
+        sys.receipt(
+            "com.example.tiny",
+            "Applications",
+            &[
+                ("Tiny App.app/Contents/MacOS/Tiny App", Item::File(700)),
+                ("Tiny App.app/Contents/Info.plist", Item::File(70)),
+            ],
+        );
+        sys.receipt(
+            "com.example.nowhere",
+            "",
+            &[("Library/Example/data", Item::File(5))],
+        );
+        sys.file("Applications/Mine.app/Contents/MacOS/Mine", 3);
+
+        let (report, own, tree) = sys.report("");
+
+        for id in [
+            "org.example.tool",
+            "com.example.tiny",
+            "com.example.nowhere",
+        ] {
+            let location = match id {
+                "com.example.tiny" => "Applications",
+                _ => "",
+            };
+            let (mut size, mut files) = (0, 0);
+            for rel in pkgutil_files(&sys, id) {
+                let meta = std::fs::symlink_metadata(sys.root().join(location).join(&rel)).unwrap();
+                if !meta.is_dir() {
+                    size += meta.len();
+                    files += 1;
+                }
+            }
+            let package = report.packages.iter().find(|p| p.name == id).unwrap();
+            assert_eq!(package.manager, Manager::Pkgutil);
+            assert_eq!((package.size, package.files), (size, files), "{id}");
+        }
+        assert_eq!(size_of(&report, "com.example.tiny"), Some(770));
+        let link = "../lib/tool/core".len() as u64;
+        assert_eq!(size_of(&report, "org.example.tool"), Some(1000 + link));
+        assert!(report
+            .unowned_parts
+            .iter()
+            .any(|p| p.path == "Applications/Mine.app" && p.size == 3));
+        assert_eq!(report.owned.size + report.unowned.size, tree.total_size());
+        let receipts: Vec<_> = own
+            .databases()
+            .iter()
+            .filter(|d| d.manager == Manager::Pkgutil)
+            .collect();
+        assert_eq!(receipts.len(), 1);
+        assert!(matches!(receipts[0].state, State::Read { packages: 3 }));
+    }
+
+    /// A scan of `/usr/local` has no use for a package installed into
+    /// `Applications`: its BOM is not even read — this one is garbage, and
+    /// is not reported as damaged. Nor for the part of one installed at `/`
+    /// that lies in `opt`, whose paths are never built and still count as
+    /// listed: eight paths, `usr` to `opt/x/b`.
+    #[test]
+    fn a_receipt_installed_elsewhere_is_not_read() {
+        let sys = System::new();
+        sys.receipt(
+            "org.example.tool",
+            "/",
+            &[
+                ("usr/local/bin/tool", Item::File(10)),
+                ("opt/x/a", Item::File(1)),
+                ("opt/x/b", Item::File(1)),
+            ],
+        );
+        sys.dir("Applications");
+        let dir = sys.root().join(RECEIPTS);
+        std::fs::write(dir.join("com.example.app.bom"), b"garbage").unwrap();
+        sys.plist(
+            &dir.join("com.example.app.plist"),
+            "com.example.app",
+            Some("Applications"),
+        );
+
+        let (report, own, _) = sys.report("usr/local");
+        assert_eq!(size_of(&report, "org.example.tool"), Some(10));
+        assert_eq!(own.damaged().0, 0, "{:?}", own.damaged().1);
+        assert_eq!(own.sizes().0, 8, "every path the receipt holds is listed");
+
+        // The same garbage, inside the scope, is damage.
+        let (_, own, _) = sys.report("");
+        assert_eq!(own.damaged().0, 1, "{:?}", own.damaged().1);
+    }
+
+    /// One damaged receipt costs that receipt. A cut-off BOM, a BOM whose
+    /// plist is missing (`pkgutil` says `location: (null)`), a plist that is
+    /// not one, a plist with no install location and one naming no package
+    /// are each counted and named; a plist with no BOM —
+    /// `InstallHistory.plist` — is not a receipt at all; and the good receipt
+    /// beside them still counts.
+    #[test]
+    fn a_damaged_receipt_is_counted_and_the_rest_still_reads() {
+        let sys = System::new();
+        sys.receipt(
+            "org.example.good",
+            "/",
+            &[("usr/local/bin/good", Item::File(10))],
+        );
+        sys.receipt(
+            "org.example.cut",
+            "/",
+            &[("usr/local/bin/cut", Item::File(20))],
+        );
+        let dir = sys.root().join(RECEIPTS);
+        let bom = std::fs::read(dir.join("org.example.cut.bom")).unwrap();
+        std::fs::write(dir.join("org.example.cut.bom"), &bom[..bom.len() / 2]).unwrap();
+        std::fs::write(dir.join("org.example.orphan.bom"), &bom).unwrap();
+        std::fs::write(dir.join("org.example.mangled.bom"), &bom).unwrap();
+        std::fs::write(dir.join("org.example.mangled.plist"), b"bplist00 nonsense").unwrap();
+        std::fs::write(dir.join("org.example.nowhere.bom"), &bom).unwrap();
+        sys.plist(
+            &dir.join("org.example.nowhere.plist"),
+            "org.example.nowhere",
+            None,
+        );
+        std::fs::write(dir.join("org.example.anonymous.bom"), &bom).unwrap();
+        sys.plist(&dir.join("org.example.anonymous.plist"), "", Some("/"));
+        sys.plist(&dir.join("InstallHistory.plist"), "history", Some("/"));
+
+        let (report, own, _) = sys.report("usr");
+
+        assert_eq!(size_of(&report, "org.example.good"), Some(10));
+        assert_eq!(size_of(&report, "org.example.cut"), None);
+        let (count, samples) = own.damaged();
+        assert_eq!(count, 5, "{samples:?}");
+        let named: Vec<String> = samples
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        for name in [
+            "org.example.cut.bom",
+            "org.example.orphan.plist",
+            "org.example.mangled.plist",
+            "org.example.nowhere.plist",
+            "org.example.anonymous.plist",
+        ] {
+            assert!(named.contains(&name.to_string()), "{name} in {named:?}");
+        }
+        let receipts = own
+            .databases()
+            .iter()
+            .find(|d| d.manager == Manager::Pkgutil)
+            .unwrap();
+        assert!(matches!(receipts.state, State::Read { packages: 6 }));
+    }
+
+    /// A package installed for one user records itself in that home, its
+    /// paths relative to the home — what `pkgutil --volume ~` reads.
+    #[test]
+    fn a_receipt_in_a_home_folder_is_relative_to_that_home() {
+        let sys = System::new();
+        sys.install(
+            "Users/me",
+            "Library/Receipts",
+            "com.example.mine",
+            "Applications",
+            &[("Mine.app/Contents/MacOS/Mine", Item::File(40))],
+        );
+        let mut sources = sys.sources();
+        sources.receipt_home = Some("Users/me".to_string());
+        let (tree, _) = scan(
+            sys.root().join("Users"),
+            ScanOptions::default(),
+            Arc::new(ScanProgress::default()),
+        )
+        .unwrap();
+
+        let own = Ownership::load(&sources, tree.root_path());
+        let report = report(&tree, &own, SizeBasis::Logical, 50);
+        assert_eq!(size_of(&report, "com.example.mine"), Some(40));
+        assert!(own
+            .databases()
+            .iter()
+            .any(|d| d.location.ends_with("Users/me/Library/Receipts")));
+
+        // Without the home in the list, the receipt is not looked for.
+        let own = Ownership::load(&sys.sources(), tree.root_path());
+        assert!(own
+            .databases()
+            .iter()
+            .all(|d| d.manager != Manager::Pkgutil));
+    }
 }

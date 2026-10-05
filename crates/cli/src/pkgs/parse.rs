@@ -135,6 +135,21 @@ pub fn rpm_lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
     })
 }
 
+/// macOS's `/usr/share/firmlinks`: one per line, the folder as the system
+/// shows it (absolute), a tab, and where it is on the data volume (relative to
+/// `/System/Volumes/Data`). Both are returned relative, without slashes at
+/// either end.
+pub fn firmlinks(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| {
+            let (shown, at) = line.split_once('\t')?;
+            let shown = shown.trim_matches('/');
+            let at = at.trim_matches('/');
+            (!shown.is_empty() && !at.is_empty()).then(|| (shown.to_string(), at.to_string()))
+        })
+        .collect()
+}
+
 /// Where a symlink points, resolved against the directory it sits in, without
 /// touching the disk.
 ///
@@ -267,6 +282,24 @@ mod tests {
                 ("libgcc", "/usr/lib/.build-id"),
                 ("bash", "/usr/bin/bash"),
             ]
+        );
+    }
+
+    /// Copied from macOS 27.0.1 (26A434), shortened.
+    #[test]
+    fn firmlinks_are_pairs_of_relative_paths() {
+        let text = "/AppleInternal\tAppleInternal\n/Applications\tApplications\n\
+                    /System/Library/Caches\tSystem/Library/Caches\n/usr/local\tusr/local\n\
+                    \n/broken\n";
+        assert_eq!(
+            firmlinks(text),
+            [
+                ("AppleInternal", "AppleInternal"),
+                ("Applications", "Applications"),
+                ("System/Library/Caches", "System/Library/Caches"),
+                ("usr/local", "usr/local"),
+            ]
+            .map(|(a, b)| (a.to_string(), b.to_string()))
         );
     }
 
