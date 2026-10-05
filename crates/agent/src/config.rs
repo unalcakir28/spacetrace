@@ -190,6 +190,14 @@ pub struct RootConfig {
     #[serde(default)]
     pub mount_timeout: Option<u64>,
 
+    /// How to pace the walk for the disk under this root: `"auto"` (detect
+    /// spinning disks, the default), `"ssd"` or `"hdd"`. Per root for the
+    /// reason `threads` is: a NAS volume of spinning disks and an NVMe system
+    /// disk on the same box want different walks. An explicit `threads`
+    /// still wins over the count `"hdd"` picks.
+    #[serde(default)]
+    pub disk: spacetrace_scan_core::DiskMode,
+
     /// Snapshots of this root to keep. `None` keeps everything.
     #[serde(default)]
     pub keep: Option<usize>,
@@ -270,6 +278,7 @@ impl RootConfig {
             dedupe_clones: default_dedupe(),
             threads: None,
             mount_timeout: None,
+            disk: spacetrace_scan_core::DiskMode::Auto,
             keep: None,
             incremental: default_incremental(),
         }
@@ -295,6 +304,7 @@ impl RootConfig {
             // the walk's answer, and the agent, which runs as an
             // administrator on Windows, is where it saves the most.
             read_mft: true,
+            disk: self.disk,
         }
     }
 }
@@ -461,6 +471,7 @@ keep = 8
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spacetrace_scan_core::DiskMode;
 
     #[test]
     fn defaults_match_the_config_file() {
@@ -477,7 +488,25 @@ mod tests {
         assert_eq!(built.dedupe_hardlinks, from_file.dedupe_hardlinks);
         assert_eq!(built.keep, from_file.keep);
         assert_eq!(built.incremental, from_file.incremental);
+        assert_eq!(built.disk, from_file.disk);
         assert!(built.schedule.is_none() && from_file.schedule.is_none());
+    }
+
+    /// The config file names the disk kind in the words `--disk` uses, and a
+    /// word it does not know is refused at load rather than walked as `auto`:
+    /// an operator who wrote `disk = "spinning"` meant something by it.
+    #[test]
+    fn the_disk_kind_is_read_from_the_config_file() {
+        let root = |line: &str| {
+            toml::from_str::<Config>(&format!(
+                "db = \"/tmp/x\"\n[[roots]]\npath = \"/srv\"\n{line}\n"
+            ))
+            .map(|c| c.roots[0].scan_options().disk)
+        };
+        assert_eq!(root("disk = \"hdd\"").unwrap(), DiskMode::Hdd);
+        assert_eq!(root("disk = \"ssd\"").unwrap(), DiskMode::Ssd);
+        assert_eq!(root("").unwrap(), DiskMode::Auto);
+        assert!(root("disk = \"spinning\"").is_err());
     }
 
     /// Half a TLS configuration is worse than none: the agent would bind and

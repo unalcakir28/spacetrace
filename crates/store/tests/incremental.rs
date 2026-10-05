@@ -36,8 +36,8 @@ use disk_image::DiskImage;
 
 use rusqlite::Connection;
 use spacetrace_scan_core::{
-    rescan, scan, Fallback, ImportedNode, Rescan, RescanKind, ScanOptions, ScanProgress, ScanStats,
-    Tree,
+    rescan, scan, DiskMode, Fallback, ImportedNode, Rescan, RescanKind, ScanOptions, ScanProgress,
+    ScanStats, Tree,
 };
 use spacetrace_store::{Integrity, ScanId, Store};
 
@@ -627,6 +627,26 @@ fn a_chain_of_rescans_stays_exact() {
         fs::create_dir_all(bench.root.join(format!("beta/new{round}"))).unwrap();
         bench.rescan_matches_full();
     }
+}
+
+/// The disk's pace changes how fast a scan runs, never what it finds: a base
+/// walked at the flash pace is built on by a rescan walked as a spinning disk,
+/// and the result is the snapshot a full scan at the flash pace gives.
+#[test]
+fn a_rescan_at_the_spinning_disk_pace_is_the_same_snapshot() {
+    let bench = Bench::new(forest);
+    fs::write(bench.root.join("gamma/m1/leaf/new.bin"), vec![1u8; 33_000]).unwrap();
+    let (tree, stats, _) = bench.rescan_with(ScanOptions {
+        disk: DiskMode::Hdd,
+        ..ScanOptions::default()
+    });
+    assert!(stats.rescan.is_incremental(), "{:?}", stats.rescan);
+    assert_eq!(
+        stats.pace.map(|p| (p.disk, p.threads)),
+        Some((DiskMode::Hdd, 1))
+    );
+    let (full_tree, full_stats) = bench.full();
+    assert_same(&tree, &stats, &full_tree, &full_stats);
 }
 
 /// Changes made while a rescan is walking may or may not be in what it

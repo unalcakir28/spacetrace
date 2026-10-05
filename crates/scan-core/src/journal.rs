@@ -552,12 +552,13 @@ mod tests {
         let same = ScanOptions {
             threads: Some(3),
             expected_entries: Some(10),
+            disk: crate::DiskMode::Hdd,
             ..ScanOptions::default()
         };
         assert_eq!(
             fingerprint(&base),
             fingerprint(&same),
-            "threads and the size hint do not change what a tree holds"
+            "threads, the disk's pace and the size hint do not change what a tree holds"
         );
 
         let changed = [

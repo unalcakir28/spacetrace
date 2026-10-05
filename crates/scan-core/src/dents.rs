@@ -83,6 +83,8 @@ const STAT_FLAGS: libc::c_int = libc::AT_SYMLINK_NOFOLLOW | libc::AT_NO_AUTOMOUN
 
 thread_local! {
     static BUFFER: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// `(inode, record offset)` per entry, for a listing asked in inode order.
+    static ORDER: std::cell::RefCell<Vec<(u64, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A directory opened for listing.
@@ -104,7 +106,15 @@ impl Dir {
     }
 
     /// Every entry's record, read into this thread's buffer, and `f` run over
-    /// them.
+    /// them — in the order the kernel listed them, or with `by_inode` in
+    /// inode order.
+    ///
+    /// Inode order is for a spinning disk (`DiskMode::Hdd`): on ext4, XFS
+    /// and btrfs the inode number is where the inode lies (its group's table,
+    /// its allocation group, its place in the inode b-tree), so asking in
+    /// that order turns a directory's scattered reads into one sweep. ext4
+    /// lists by a hash of the names — scattered on purpose. QDirStat does the
+    /// same.
     ///
     /// An error after some records were read hands over what was read *and*
     /// the error, exactly as `read_dir` does: its iterator yields the entries
@@ -113,6 +123,7 @@ impl Dir {
     /// too; see `checked`.
     pub(crate) fn with_entries<R>(
         &self,
+        by_inode: bool,
         f: impl FnOnce(Entries<'_>, Option<std::io::Error>) -> R,
     ) -> R {
         BUFFER.with(|cell| {
@@ -120,11 +131,26 @@ impl Dir {
             buf.clear();
             let failure = self.read_all(&mut buf).err();
             let (entries, failure) = checked(&buf, failure);
-            let out = f(entries, failure);
-            if buf.capacity() > KEEP_BYTES {
-                buf.clear();
-                buf.shrink_to(KEEP_BYTES);
-            }
+            let out = ORDER.with(|order| {
+                let mut order = order.borrow_mut();
+                order.clear();
+                if by_inode {
+                    let mut at = 0;
+                    while let Some((entry, len)) = record(&entries.buf[at..]) {
+                        order.extend(entry.map(|e| (e.ino, at)));
+                        at += len;
+                    }
+                    order.sort_unstable();
+                }
+                let entries = Entries {
+                    buf: entries.buf,
+                    order: by_inode.then(|| order.iter()),
+                };
+                let out = f(entries, failure);
+                shrink(&mut order);
+                out
+            });
+            shrink(&mut buf);
             out
         })
     }
@@ -219,20 +245,31 @@ impl Dir {
     }
 }
 
-/// The records one directory produced, in the order the kernel gave them.
+/// A thread's scratch back to [`KEEP_BYTES`] after a directory that grew it
+/// past that.
+fn shrink<T>(scratch: &mut Vec<T>) {
+    if scratch.capacity() * std::mem::size_of::<T>() > KEEP_BYTES {
+        scratch.clear();
+        scratch.shrink_to(KEEP_BYTES / std::mem::size_of::<T>());
+    }
+}
+
+/// The records one directory produced, in the order the kernel gave them or
+/// in the order of `order`'s offsets into `buf`.
 pub(crate) struct Entries<'a> {
     buf: &'a [u8],
+    order: Option<std::slice::Iter<'a, (u64, usize)>>,
 }
 
 /// The size of a record's fixed part: `d_ino` (8), `d_off` (8), `d_reclen`
 /// (2), `d_type` (1).
 const HEADER: usize = 19;
 
-/// One record at the start of `buf`: its name, or `None` for a record that
+/// One record at the start of `buf`: the entry, or `None` for a record that
 /// names no entry, and its length. `None` when no well-formed record starts
 /// there — the buffer is over, or the kernel wrote something this does not
 /// read the way it expects.
-fn record(buf: &[u8]) -> Option<(Option<&CStr>, usize)> {
+fn record(buf: &[u8]) -> Option<(Option<Dirent<'_>>, usize)> {
     let header = buf.get(..HEADER)?;
     let reclen = usize::from(u16::from_ne_bytes([header[16], header[17]]));
     let record = buf.get(..reclen).filter(|_| reclen > HEADER)?;
@@ -241,7 +278,7 @@ fn record(buf: &[u8]) -> Option<(Option<&CStr>, usize)> {
     // `d_ino == 0` is a slot that names nothing; glibc's `readdir` skips it,
     // and so does this. `.` and `..` are not children.
     let named = ino != 0 && !matches!(name.to_bytes(), b"." | b"..");
-    Some((named.then_some(name), reclen))
+    Some((named.then_some(Dirent { name, ino }), reclen))
 }
 
 /// The records of `buf` that parse, and the failure to report.
@@ -261,13 +298,22 @@ fn checked(buf: &[u8], failure: Option<std::io::Error>) -> (Entries<'_>, Option<
         None if at < buf.len() => Some(std::io::Error::from_raw_os_error(libc::EIO)),
         failure => failure,
     };
-    (Entries { buf: &buf[..at] }, failure)
+    let entries = Entries {
+        buf: &buf[..at],
+        order: None,
+    };
+    (entries, failure)
 }
 
-/// One record: the entry's name.
+/// One record: the entry's name and the inode number the directory holds for
+/// it.
 #[derive(Clone, Copy)]
 pub(crate) struct Dirent<'a> {
     pub name: &'a CStr,
+    /// `d_ino`, read from the directory itself and so known before the entry
+    /// is asked anything — which is what lets a spinning disk be asked in
+    /// inode order (`DiskMode::Hdd`).
+    pub ino: u64,
 }
 
 impl<'a> Dirent<'a> {
@@ -292,11 +338,15 @@ impl<'a> Iterator for Entries<'a> {
     /// So `d_type` could save nothing here and would add a second opinion
     /// about the kind.
     fn next(&mut self) -> Option<Dirent<'a>> {
+        if let Some(order) = &mut self.order {
+            let &(_, at) = order.next()?;
+            return record(self.buf.get(at..)?)?.0;
+        }
         loop {
-            let (name, len) = record(self.buf)?;
+            let (entry, len) = record(self.buf)?;
             self.buf = &self.buf[len..];
-            if let Some(name) = name {
-                return Some(Dirent { name });
+            if entry.is_some() {
+                return entry;
             }
         }
     }
@@ -313,7 +363,7 @@ mod tests {
 
     fn fast(dir: &Path) -> BTreeMap<OsString, Answer> {
         let listing = Dir::open(dir).expect("the directory opens");
-        listing.with_entries(|entries, failure| {
+        listing.with_entries(false, |entries, failure| {
             assert!(failure.is_none(), "{failure:?}");
             entries
                 .map(|e| {
@@ -372,6 +422,66 @@ mod tests {
             .is_hardlinked());
     }
 
+    /// The inode number a record carries is the entry's own, the one `lstat`
+    /// reports — symlinks included, which are not followed. Inode order on a
+    /// spinning disk sorts by it, so a field read from the wrong offset would
+    /// leave every answer right and only the order scrambled: invisible to
+    /// every test that compares answers.
+    #[test]
+    fn each_record_carries_the_entrys_inode_number() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let made = zoo(dir.path());
+        let listing = Dir::open(dir.path()).unwrap();
+        let seen = listing.with_entries(false, |entries, failure| {
+            assert!(failure.is_none());
+            entries
+                .map(|e| {
+                    let expected = std::fs::symlink_metadata(dir.path().join(e.os_name()))
+                        .unwrap()
+                        .ino();
+                    assert_eq!(e.ino, expected, "{:?}", e.os_name());
+                })
+                .count()
+        });
+        assert_eq!(seen, made, "every entry of the zoo was listed");
+    }
+
+    /// Asked in inode order, a directory yields the same entries — none lost,
+    /// none twice, `.` and `..` still left out — sorted by inode number.
+    /// Large enough to span several `getdents64` calls, so the offsets that
+    /// order them point across batches.
+    #[test]
+    fn inode_order_yields_every_entry_once_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..1_500 {
+            let name = format!("{:05}-{}", (i * 7919) % 1_500, "n".repeat(120));
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        // A directory is read once per descriptor, as the walk reads it.
+        let listed = |by_inode| {
+            let listing = Dir::open(dir.path()).unwrap();
+            listing.with_entries(by_inode, |entries, _| {
+                entries
+                    .map(|e| (e.ino, e.os_name().to_os_string()))
+                    .collect::<Vec<_>>()
+            })
+        };
+        let kernel = listed(false);
+        let ordered = listed(true);
+        assert_eq!(ordered.len(), 1_500);
+        assert!(ordered.windows(2).all(|w| w[0].0 <= w[1].0), "sorted");
+        let mut both = kernel.clone();
+        both.sort();
+        let mut sorted = ordered.clone();
+        sorted.sort();
+        assert_eq!(sorted, both, "the same entries");
+        // Not asserted to differ from the kernel's order: btrfs lists by
+        // creation index, which is inode order already. ext4 lists by a hash
+        // of the names, and there `sorted` above is what fails if the order
+        // is not applied.
+    }
+
     /// More records than one `getdents64` call returns, so the loop that
     /// appends batches runs several times. A loop that only ever ran once
     /// would pass every other test here.
@@ -384,7 +494,7 @@ mod tests {
             std::fs::write(dir.path().join(name), b"x").unwrap();
         }
         let listing = Dir::open(dir.path()).unwrap();
-        let bytes = listing.with_entries(|entries, _| entries.buf.len());
+        let bytes = listing.with_entries(false, |entries, _| entries.buf.len());
         assert!(bytes > 4 * CHUNK, "only {bytes} bytes of records");
         assert_eq!(assert_same_answer_as_lstat(dir.path()), 1_500);
     }
@@ -429,7 +539,7 @@ mod tests {
     fn an_empty_directory_yields_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let listing = Dir::open(dir.path()).unwrap();
-        assert_eq!(listing.with_entries(|entries, _| entries.count()), 0);
+        assert_eq!(listing.with_entries(false, |entries, _| entries.count()), 0);
     }
 
     /// A file is not a directory, and the answer is the error `read_dir`

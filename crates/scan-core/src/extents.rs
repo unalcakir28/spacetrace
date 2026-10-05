@@ -980,7 +980,7 @@ pub(crate) mod linux {
     }
 
     /// The filesystem UUID, which every subvolume of one btrfs shares.
-    fn btrfs_fsid(dir: &CString) -> Option<[u8; 16]> {
+    pub(crate) fn btrfs_fsid(dir: &CString) -> Option<[u8; 16]> {
         let file = open_dir(dir)?;
         // `struct btrfs_ioctl_fs_info_args`: two u64s, then the 16-byte fsid.
         let mut args = [0u64; 128];

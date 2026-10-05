@@ -276,6 +276,10 @@ fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
             "compressed_files_inexact": stats.compressed_files_inexact,
             "files_unmapped": stats.files_unmapped,
             "unseen_sharing": stats.unseen_sharing,
+            // Null for statistics no walk produced, never a made-up pace.
+            "disk": stats.pace.map(|p| p.disk),
+            "threads": stats.pace.map(|p| p.threads),
+            "disk_decided": stats.pace.map(|p| p.decided),
             "duration_ms": stats.duration_ms,
             // The record the snapshot stores, the same word the agent
             // reports; what an incremental scan did beside it, for whoever
@@ -1484,6 +1488,24 @@ fn print_scan_summary(tree: &Tree, stats: &ScanStats) {
         fmt::duration(stats.duration_ms),
     );
     print_rescan(&stats.rescan);
+    // Said because it changes how long the scan took, and because the
+    // detection can be wrong in either direction: a USB bridge that reports
+    // an SSD as spinning, a disk behind a controller that hides it.
+    if let Some(pace) = stats
+        .pace
+        .filter(|p| p.disk == spacetrace_scan_core::DiskMode::Hdd)
+    {
+        let order = if cfg!(target_os = "linux") {
+            ", entries in inode order"
+        } else {
+            ""
+        };
+        println!(
+            "  walked as a spinning disk: {} thread{}{order} (--disk ssd for the default pace)",
+            pace.threads,
+            if pace.threads == 1 { "" } else { "s" },
+        );
+    }
     if stats.hardlinks_deduped > 0 {
         println!(
             "  {} hardlinks counted once",
@@ -1653,6 +1675,7 @@ fn cmd_import(a: &ImportArgs, db_path: &Path, json: bool) -> Result<()> {
         // the next scan; `save_import` stores neither field in any case.
         journal: None,
         rescan: Default::default(),
+        ..ScanStats::default()
     };
 
     let mut store = open_store(db_path)?;

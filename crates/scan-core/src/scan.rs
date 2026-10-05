@@ -105,6 +105,55 @@ pub struct ScanOptions {
     ///
     /// `false` always walks. Ignored on other platforms.
     pub read_mft: bool,
+    /// What kind of disk the root is on, as far as the walk's pace goes.
+    /// `Auto` asks the system where it can say reliably — on Linux — and
+    /// otherwise walks as for flash. See [`DiskMode`].
+    pub disk: DiskMode,
+}
+
+/// How to pace the walk for the storage underneath.
+///
+/// Only changes how fast the answer comes, never the answer:
+/// `the_disk_mode_does_not_change_the_answer` holds every mode to the same
+/// tree. Spelled `auto`, `ssd` and `hdd` everywhere a person writes it — the
+/// CLI's `--disk`, the agent's config — through `FromStr`, `Display` and
+/// serde alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiskMode {
+    /// Spinning disks where Linux can tell (`disk.rs`); flash everywhere
+    /// else, and on network filesystems, which want more parallelism rather
+    /// than less.
+    #[default]
+    Auto,
+    /// The measured default thread count, entries asked in listing order.
+    Ssd,
+    /// One thread, and on Linux each directory's entries asked in inode
+    /// order, which on ext4, XFS and btrfs is the order they lie on the disk.
+    Hdd,
+}
+
+impl std::str::FromStr for DiskMode {
+    type Err = String;
+
+    fn from_str(word: &str) -> Result<Self, Self::Err> {
+        match word {
+            "auto" => Ok(DiskMode::Auto),
+            "ssd" => Ok(DiskMode::Ssd),
+            "hdd" => Ok(DiskMode::Hdd),
+            other => Err(format!("{other:?} is not a disk kind: auto, ssd or hdd")),
+        }
+    }
+}
+
+impl std::fmt::Display for DiskMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            DiskMode::Auto => "auto",
+            DiskMode::Ssd => "ssd",
+            DiskMode::Hdd => "hdd",
+        })
+    }
 }
 
 /// How long a mount point gets by default.
@@ -122,6 +171,7 @@ impl Default for ScanOptions {
             mount_timeout: Some(MOUNT_TIMEOUT),
             expected_entries: None,
             read_mft: true,
+            disk: DiskMode::Auto,
         }
     }
 }
@@ -501,6 +551,10 @@ pub struct ScanStats {
     /// tables. Each name counts them in full there, so the total can exceed
     /// what the pool holds.
     pub unseen_sharing: bool,
+    /// How the walk was paced. `None` for statistics no walk produced — an
+    /// import, a listing of a bucket — which have no pace to report rather
+    /// than a default one.
+    pub pace: Option<Pace>,
     /// Up to `MAX_REPORTED_ERRORS` paths that could not be read.
     pub error_samples: Vec<(PathBuf, String)>,
     pub duration_ms: u64,
@@ -550,6 +604,10 @@ struct Ctx {
     /// call on macOS, `getdents64` and `fstatat` on Linux. Off only in the
     /// tests that hold it to the same answer as the ordinary walk.
     fast_listing: bool,
+    /// `Ssd` or `Hdd`, settled for the scan (`Pace::for_root`). On Linux a
+    /// spinning disk has each directory's entries asked in inode order.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    disk: DiskMode,
     root_dev: u64,
     seen_inodes: Mutex<HashSet<(u64, u64)>>,
     hardlinks_deduped: AtomicU64,
@@ -604,6 +662,8 @@ impl Ctx {
             mounts,
             probe,
             fast_listing,
+            // What a scan settles before the walk (`Pace::for_root`).
+            disk: DiskMode::Ssd,
             root_dev,
             seen_inodes: Mutex::new(HashSet::new()),
             hardlinks_deduped: AtomicU64::new(0),
@@ -1191,14 +1251,121 @@ fn default_threads() -> usize {
         .min(THREAD_CAP)
 }
 
+/// How many threads a spinning disk is walked with by default.
+///
+/// Chosen on a simulated disk, not a real one (5 October 2026): an NBD server
+/// with one head — seek 1 ms + 7 ms·√distance, rotation 0–8.33 ms, 150 MB/s,
+/// shortest-seek-first over a queue of 32 — holding ext4 with a 14,661-entry
+/// `/usr/share`, cold, median of 3:
+///
+/// ```text
+///   threads          1        2        6
+///   listing order  11497    13633    13410 ms
+///   inode order      946    13056    12639 ms
+/// ```
+///
+/// Every setting issued the same ~2300 reads (12.5 MiB); only their order
+/// differed. One thread asking in inode order sweeps the head across the
+/// inode table once; a second thread interleaves two sweeps and the head
+/// travels between them, which costs back almost all of it. The size of the
+/// win is the model's — it has no drive cache or readahead, which a real disk
+/// has and which would narrow it — but the direction is the mechanism's.
+///
+/// One per disk of an array was the obvious refinement and was left out: the
+/// model says a second thread on one head undoes the sweep, and no array was
+/// at hand to show that striping gives it back.
+const HDD_THREADS: usize = 1;
+
+/// How long the root's disk gets to say whether it spins.
+///
+/// Short next to [`MOUNT_TIMEOUT`] because the two mistakes are the other way
+/// round here: giving up early only walks a spinning disk at the flash pace,
+/// while waiting holds up the start of every scan. Answering takes sysfs reads
+/// and at most a `stat` per loop device, so this is only ever reached by a
+/// loop file on a mount that has stopped answering.
+const DETECT_PATIENCE: Duration = Duration::from_secs(2);
+
+/// How a walk was paced, settled once per scan from the options and the
+/// root's disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pace {
+    /// `Ssd` or `Hdd` — what `Auto` came to, or what was asked for.
+    pub disk: DiskMode,
+    pub threads: usize,
+    /// Where `disk` came from, so that an `auto` that could tell nothing is
+    /// not mistaken for one that found flash.
+    pub decided: Decided,
+}
+
+/// Where [`Pace::disk`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Decided {
+    /// `ssd` or `hdd`, asked for.
+    Asked,
+    /// `auto`, and the root's disks answered.
+    Detected,
+    /// `auto`, and nothing could be told — not on a block device (NFS, SMB,
+    /// FUSE, tmpfs, ZFS), not on Linux, or no answer within
+    /// [`DETECT_PATIENCE`] — so the flash pace.
+    Undetected,
+}
+
+impl Pace {
+    fn for_root(opts: &ScanOptions, dev: u64, root: &Path) -> Pace {
+        let root = root.to_path_buf();
+        Pace::settle(opts, move || crate::disk::spinning(dev, &root))
+    }
+
+    /// An explicit thread count always wins; it is the one setting the
+    /// caller made knowing their machine. Otherwise a spinning disk walks with
+    /// one thread ([`HDD_THREADS`]) and anything else with the measured
+    /// default.
+    ///
+    /// `detect` says whether the root's disk spins. It runs before the walk
+    /// has a progress line or a cancel to answer to, and can block on a dead
+    /// mount (`disk::spinning`), so it is given [`DETECT_PATIENCE`] on a
+    /// thread that can be abandoned, as any mount is (invariant 7) — unless
+    /// the caller switched that protection off.
+    fn settle(opts: &ScanOptions, detect: impl FnOnce() -> Option<bool> + Send + 'static) -> Pace {
+        let (disk, decided) = match opts.disk {
+            DiskMode::Auto => {
+                let answer = match opts.mount_timeout {
+                    Some(limit) => {
+                        crate::timeout::with_deadline(limit.min(DETECT_PATIENCE), detect).flatten()
+                    }
+                    None => detect(),
+                };
+                match answer {
+                    Some(true) => (DiskMode::Hdd, Decided::Detected),
+                    Some(false) => (DiskMode::Ssd, Decided::Detected),
+                    None => (DiskMode::Ssd, Decided::Undetected),
+                }
+            }
+            asked => (asked, Decided::Asked),
+        };
+        let threads = opts
+            .threads
+            .filter(|n| *n > 0)
+            .unwrap_or_else(|| match disk {
+                DiskMode::Hdd => HDD_THREADS,
+                _ => default_threads(),
+            });
+        Pace {
+            disk,
+            threads,
+            decided,
+        }
+    }
+}
+
 /// The pool the walk runs on.
 ///
 /// A pool of its own rather than rayon's global one. The global pool is
 /// process-wide and can only be configured once, so a library that reached for
 /// it would be deciding on behalf of whatever application linked it — and the
 /// desktop app runs a scan next to its own work.
-fn walk_pool(threads: Option<usize>) -> std::io::Result<rayon::ThreadPool> {
-    let count = threads.filter(|n| *n > 0).unwrap_or_else(default_threads);
+fn walk_pool(count: usize) -> std::io::Result<rayon::ThreadPool> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(count)
         .stack_size(WALK_STACK_BYTES)
@@ -1395,8 +1562,6 @@ fn scan_recording(
     let root = root.as_ref();
     let root_path = stored_root(root);
 
-    // Built before `opts` moves into the context below.
-    let pool = walk_pool(opts.threads)?;
     let dedupes_hardlinks = opts.dedupe_hardlinks;
 
     let root_md = std::fs::symlink_metadata(&root_path)?;
@@ -1442,6 +1607,11 @@ fn scan_recording(
         } => (Some(*splice), Rescan::Incremental(report), Some(full_ms)),
     };
 
+    // Built before `opts` moves into the context below, and after the root's
+    // device is known, because a spinning disk changes the count.
+    let pace = Pace::for_root(&opts, root_meta.dev, &root_path);
+    let pool = walk_pool(pace.threads)?;
+
     // The arena exists before the walk does, because the walk writes into it.
     // Its capacity is a guess unless the caller has one: see
     // `ScanOptions::expected_entries`. A rescan has the best guess there is.
@@ -1475,6 +1645,7 @@ fn scan_recording(
     let ctx = Ctx {
         splice,
         links: (record && dedupes_hardlinks).then(|| Mutex::new(Vec::new())),
+        disk: pace.disk,
         ..Ctx::new(
             opts,
             mounts,
@@ -1571,6 +1742,7 @@ fn scan_recording(
             .encode()
         }),
         rescan,
+        pace: Some(pace),
     };
     let links = ctx
         .links
@@ -2194,7 +2366,7 @@ fn fast_list(
     };
     let probe = ctx.opts.dedupe_clones;
     let defer = probe && volume.defers_fiemap();
-    listing.with_entries(|entries, failure| {
+    listing.with_entries(ctx.disk == DiskMode::Hdd, |entries, failure| {
         // `read_dir` yields the entries it read before an error, then the
         // error; the entries are kept either way.
         if let Some(e) = failure {
@@ -2370,18 +2542,106 @@ mod capacity_tests {
 mod thread_tests {
     use super::*;
 
+    fn pace(threads: Option<usize>, disk: DiskMode) -> Pace {
+        let opts = ScanOptions {
+            threads,
+            disk,
+            ..ScanOptions::default()
+        };
+        // Nothing to detect, so the tests do not depend on the machine.
+        Pace::settle(&opts, || None)
+    }
+
     #[test]
     fn an_explicit_count_is_honoured() {
-        let pool = walk_pool(Some(3)).unwrap();
+        let pool = walk_pool(pace(Some(3), DiskMode::Auto).threads).unwrap();
         assert_eq!(pool.current_num_threads(), 3);
+        assert_eq!(pace(Some(3), DiskMode::Hdd).threads, 3, "in every mode");
     }
 
     /// `Some(0)` reaches rayon as "pick for me", which would quietly restore
     /// the one-per-core default this exists to avoid.
     #[test]
     fn zero_is_treated_as_no_answer() {
-        let pool = walk_pool(Some(0)).unwrap();
+        let pool = walk_pool(pace(Some(0), DiskMode::Auto).threads).unwrap();
         assert_eq!(pool.current_num_threads(), default_threads());
+    }
+
+    /// A spinning disk asked for by name walks with one thread and is
+    /// reported as such; nothing detectable walks as flash. The literal 1 for
+    /// the reason the cap test below spells out 6.
+    #[test]
+    fn the_disk_mode_sets_the_pace() {
+        let hdd = pace(None, DiskMode::Hdd);
+        assert_eq!((hdd.disk, hdd.threads), (DiskMode::Hdd, 1));
+        let ssd = pace(None, DiskMode::Ssd);
+        assert_eq!((ssd.disk, ssd.threads), (DiskMode::Ssd, default_threads()));
+        let auto = pace(None, DiskMode::Auto);
+        assert_eq!(auto.disk, DiskMode::Ssd, "no block device, nothing spins");
+    }
+
+    /// `auto` says where its answer came from: a disk that answered either
+    /// way, or nothing that could — which walks as flash but is not reported
+    /// as flash found. A mode asked for is reported as asked, and nothing is
+    /// detected for it.
+    #[test]
+    fn the_pace_says_how_the_disk_was_decided() {
+        let auto = ScanOptions::default();
+        let settled = |answer| Pace::settle(&auto, move || answer);
+        assert_eq!(
+            (settled(Some(true)).disk, settled(Some(true)).decided),
+            (DiskMode::Hdd, Decided::Detected)
+        );
+        assert_eq!(
+            (settled(Some(false)).disk, settled(Some(false)).decided),
+            (DiskMode::Ssd, Decided::Detected)
+        );
+        assert_eq!(
+            (settled(None).disk, settled(None).decided),
+            (DiskMode::Ssd, Decided::Undetected)
+        );
+        let asked = ScanOptions {
+            disk: DiskMode::Hdd,
+            ..ScanOptions::default()
+        };
+        let pace = Pace::settle(&asked, || panic!("asked for, so not detected"));
+        assert_eq!((pace.disk, pace.decided), (DiskMode::Hdd, Decided::Asked));
+    }
+
+    /// Detection that does not come back — a loop device whose backing file
+    /// is on a mount that has stopped answering — costs the scan its
+    /// patience, not the scan: it walks at the flash pace, and says the disk
+    /// was not detected.
+    #[test]
+    fn detection_that_hangs_is_abandoned() {
+        let opts = ScanOptions {
+            mount_timeout: Some(Duration::from_millis(100)),
+            ..ScanOptions::default()
+        };
+        let started = std::time::Instant::now();
+        let pace = Pace::settle(&opts, || {
+            std::thread::sleep(Duration::from_secs(5));
+            Some(true)
+        });
+        let waited = started.elapsed();
+        assert!(waited < Duration::from_secs(2), "it waited {waited:?}");
+        assert_eq!(
+            (pace.disk, pace.decided),
+            (DiskMode::Ssd, Decided::Undetected)
+        );
+    }
+
+    /// The words a person writes on the command line read back as the mode
+    /// they name and print as the same word, and anything else is refused
+    /// rather than taken as `auto`. The agent's config file reads the same
+    /// words through serde; its own test holds that side.
+    #[test]
+    fn a_disk_kind_reads_back_as_it_is_written() {
+        for mode in [DiskMode::Auto, DiskMode::Ssd, DiskMode::Hdd] {
+            assert_eq!(mode.to_string().parse::<DiskMode>(), Ok(mode));
+        }
+        assert!("spinning".parse::<DiskMode>().is_err());
+        assert!("HDD".parse::<DiskMode>().is_err());
     }
 
     /// The literal 6 is deliberate. Asserting against `THREAD_CAP` would

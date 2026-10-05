@@ -264,6 +264,12 @@ pub struct WalkArgs {
     /// administrator, where its master file table would otherwise be read
     #[arg(long)]
     pub no_mft: bool,
+
+    /// How to pace the walk for the disk underneath: hdd walks with one
+    /// thread and asks for entries in the order they lie on the disk; auto
+    /// (the default) detects spinning disks on Linux
+    #[arg(long, value_name = "auto|ssd|hdd")]
+    pub disk: Option<spacetrace_scan_core::DiskMode>,
 }
 
 #[derive(Args, Debug)]
@@ -480,6 +486,7 @@ impl WalkArgs {
             threads,
             mount_timeout,
             no_mft,
+            disk,
         } = self;
         let mut args: Vec<String> = exclude.iter().map(|n| format!("--exclude={n}")).collect();
         if *one_file_system {
@@ -503,6 +510,9 @@ impl WalkArgs {
         if *no_mft {
             args.push("--no-mft".into());
         }
+        if let Some(disk) = disk {
+            args.push(format!("--disk={disk}"));
+        }
         args
     }
 
@@ -518,6 +528,7 @@ impl WalkArgs {
             (self.threads.is_some(), "--threads"),
             (self.mount_timeout.is_some(), "--mount-timeout"),
             (self.no_mft, "--no-mft"),
+            (self.disk.is_some(), "--disk"),
         ]
         .into_iter()
         .find_map(|(given, name)| given.then_some(name))
@@ -545,6 +556,7 @@ impl WalkArgs {
             // — see `entry_count_hint` in main.rs.
             expected_entries: None,
             read_mft: !self.no_mft,
+            disk: self.disk.unwrap_or_default(),
         }
     }
 }
@@ -612,6 +624,8 @@ mod tests {
             "--mount-timeout",
             "0",
             "--no-mft",
+            "--disk",
+            "hdd",
         ])
         .walk;
 

@@ -18,6 +18,7 @@ mod capacity;
 mod clones;
 #[cfg(target_os = "linux")]
 mod dents;
+mod disk;
 mod extents;
 #[cfg(target_os = "macos")]
 mod fsevents;
@@ -43,8 +44,9 @@ pub use mounts::Mounts;
 pub use partial::PartialTree;
 pub use rescan::{Base, LoadBase};
 pub use scan::{
-    probe_mount, rescan, scan, scan_with_hardlinks, stored_root, LinkedName, Phase, ScanOptions,
-    ScanProgress, ScanStats, StallWatch, MAX_CAPACITY_HINT, MOUNT_TIMEOUT, STALL_GRACE,
+    probe_mount, rescan, scan, scan_with_hardlinks, stored_root, Decided, DiskMode, LinkedName,
+    Pace, Phase, ScanOptions, ScanProgress, ScanStats, StallWatch, MAX_CAPACITY_HINT,
+    MOUNT_TIMEOUT, STALL_GRACE,
 };
 pub use timeout::with_deadline;
 pub use tree::{

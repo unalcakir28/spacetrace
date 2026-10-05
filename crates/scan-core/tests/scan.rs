@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::Arc;
 
 use spacetrace_scan_core::{
-    scan, EntryKind, Phase, ScanOptions, ScanProgress, SizeBasis, StallWatch, STALL_GRACE,
+    scan, DiskMode, EntryKind, Phase, ScanOptions, ScanProgress, SizeBasis, StallWatch, STALL_GRACE,
 };
 
 fn fixture() -> tempfile::TempDir {
@@ -825,6 +825,60 @@ fn the_thread_count_does_not_change_the_answer() {
             "walking with {threads} threads gave a different tree than with 1"
         );
     }
+}
+
+/// The disk mode is a pace, not a semantic: walking as for a spinning disk —
+/// one thread, and on Linux each directory asked in inode order — must give
+/// every entry the same answer as walking as for flash.
+///
+/// The directories are wide enough that inode order and listing order differ
+/// (ext4 lists by name hash), so a walk that lost or doubled an entry while
+/// sorting would show here. A symlink and an empty directory ride along
+/// because they take their own branches in the listing.
+#[test]
+fn the_disk_mode_does_not_change_the_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for d in 0..12 {
+        let sub = root.join(format!("d{d}"));
+        fs::create_dir(&sub).unwrap();
+        for f in 0..40 {
+            fs::write(sub.join(format!("f{f}")), vec![b'x'; 100 + f * 13]).unwrap();
+        }
+        fs::create_dir(sub.join("empty")).unwrap();
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("d0/f0", root.join("link")).unwrap();
+
+    let shape = |disk: DiskMode| {
+        let opts = ScanOptions {
+            disk,
+            ..ScanOptions::default()
+        };
+        let (tree, stats) = run(root, opts);
+        let mut nodes: Vec<(String, u64, u64, u64)> = (0..tree.len() as u32)
+            .map(|id| {
+                let n = tree.node(id);
+                (tree.rel_path(id), n.size, n.alloc, n.files as u64)
+            })
+            .collect();
+        nodes.sort();
+        let answer = (tree.len(), stats.files, stats.dirs, stats.errors, nodes);
+        (answer, stats.pace.map(|p| (p.disk, p.threads)))
+    };
+
+    let (flash, reported) = shape(DiskMode::Ssd);
+    assert_eq!(reported.map(|(disk, _)| disk), Some(DiskMode::Ssd));
+    let (spinning, reported) = shape(DiskMode::Hdd);
+    assert_eq!(
+        reported,
+        Some((DiskMode::Hdd, 1)),
+        "the scan says how it walked"
+    );
+    assert_eq!(
+        spinning, flash,
+        "walking as for a spinning disk gave a different tree"
+    );
 }
 
 /// A hardlink is the one thing the width genuinely changes, and the guarantee

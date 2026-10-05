@@ -55,7 +55,12 @@ keep = 14                    # snapshots of this root to retain
 `threads` is per root rather than per agent because it is really a property of
 the disk: an NVMe root and a spinning-disk root on the same machine want
 different numbers. The default is `min(cores, 6)` — not one per core, which
-measured slower on every corpus tried (docs/COMPETITORS.md §1.2).
+measured slower on every corpus tried (docs/COMPETITORS.md §1.2). On Linux a
+root on a spinning disk is detected and walked with one thread in inode order
+instead; `disk = "hdd"` or `"ssd"` overrides the guess where sysfs is wrong
+(a virtual disk that claims to spin, a USB bridge that hides it). Network
+filesystems are deliberately left at the default: they are latency-bound and
+want more threads, not fewer.
 
 `mount_timeout` is per root for the same reason, and it matters most here: a
 server is the machine most likely to have a network share whose far end has
@@ -125,6 +130,7 @@ failing silently.
 | `roots[].dedupe_clones` | `true` | Count blocks shared between files once (APFS clones; btrfs/XFS reflinks and snapshots) and, on btrfs, compressed files at their compressed size. Opens files on btrfs and XFS — see [Security notes](#security-notes). The CLI's `--no-clone-dedupe` |
 | `roots[].threads` | `min(cores, 6)` | Threads to walk this root with |
 | `roots[].mount_timeout` | `60` | Seconds a mounted filesystem under this root gets to answer before it is recorded as unreadable; `0` waits forever |
+| `roots[].disk` | `"auto"` | `"hdd"` walks with one thread and, on Linux, asks for entries in inode order; `"ssd"` walks at the default pace; `"auto"` detects spinning disks on Linux and walks everything else as `"ssd"`. An explicit `threads` still wins. The CLI's `--disk` |
 | `roots[].keep` | — | Snapshots of this root to retain; unset keeps all |
 | `roots[].incremental` | `true` | Start from this root's last snapshot and reread only what the filesystem journal says changed. macOS (APFS) only; elsewhere every scan is full. `spacetrace-agent scan --full` overrides it for one run |
 
@@ -320,8 +326,9 @@ Three fields are worth knowing:
   both absent while walking) moves instead — through the clone and
   shared-extent settlement and the write — so a reader who watches `files`
   alone reads a healthy scan as a stuck one. On 412,983 entries the save
-  alone took 571 ms after a 753 ms walk. `clones_probed` moves only on the
-  slow macOS listing path.
+  alone took 571 ms after a 753 ms walk. `clones_probed` moves on the slow
+  macOS listing path and, on Linux, for every regular file listed (a few
+  hundred at a time); on btrfs and XFS each of those is a FIEMAP.
 - **`stalled_ms`** is absent while the scan is moving, and otherwise says how
   long *every* counter has stood still. It is measured by a watcher inside the
   agent, not from one request to the next, so polling `/status` rarely does not

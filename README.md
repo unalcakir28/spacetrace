@@ -298,6 +298,7 @@ rescans; a file linked moments after it was written (a build) does not.
 | `--threads N` | Walk with N threads (default: `min(cores, 6)`, measured) |
 | `--mount-timeout S` | Give a mounted filesystem S seconds to answer before recording it as unreadable and moving on (default 60; `0` waits forever) |
 | `--full` | With `scan --save`, read every folder. On macOS (APFS) a saved scan otherwise starts from the last saved scan of that path and rereads only what the filesystem journal says changed; it falls back to a full scan by itself, and says why, whenever the journal cannot vouch for the gap |
+| `--disk auto\|ssd\|hdd` | Pace for the disk underneath: `hdd` walks with one thread, on Linux in inode order; `auto` (default) detects spinning disks on Linux, and `--json`'s `disk_decided` says whether the disk was asked for, detected or undetected |
 | `--json` | Emit JSON (available on every command) |
 | `--db path.sqlite` | Use a different snapshot database |
 
