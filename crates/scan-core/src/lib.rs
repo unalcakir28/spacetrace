@@ -16,6 +16,8 @@ mod age;
 mod bulk;
 mod capacity;
 mod clones;
+#[cfg(target_os = "linux")]
+mod dents;
 mod extents;
 #[cfg(target_os = "macos")]
 mod fsevents;
@@ -28,6 +30,8 @@ mod ntfs;
 mod partial;
 mod rescan;
 mod scan;
+#[cfg(all(test, unix))]
+mod testing;
 mod timeout;
 mod tree;
 

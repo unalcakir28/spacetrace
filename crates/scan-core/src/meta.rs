@@ -14,6 +14,25 @@ pub enum EntryKind {
 }
 
 impl EntryKind {
+    /// The kind a `stat` mode describes.
+    ///
+    /// The type bits are the same on every Unix (POSIX), so they are spelled
+    /// once here rather than taken from `libc`, whose `mode_t` is 16 bits on
+    /// macOS and 32 on Linux.
+    #[cfg(unix)]
+    pub(crate) fn from_mode(mode: u32) -> Self {
+        const S_IFMT: u32 = 0o170_000;
+        const S_IFDIR: u32 = 0o040_000;
+        const S_IFREG: u32 = 0o100_000;
+        const S_IFLNK: u32 = 0o120_000;
+        match mode & S_IFMT {
+            S_IFDIR => EntryKind::Dir,
+            S_IFREG => EntryKind::File,
+            S_IFLNK => EntryKind::Symlink,
+            _ => EntryKind::Other,
+        }
+    }
+
     pub fn from_u8(v: u8) -> Self {
         match v {
             0 => EntryKind::Dir,
@@ -35,25 +54,6 @@ impl EntryKind {
 pub enum FileIdentity {
     Needed,
     Skipped,
-}
-
-/// One directory entry: its name, and what the platform said about it.
-///
-/// Defined here rather than beside the macOS bulk listing that produces it,
-/// because the walk names this type on every platform — one that has a
-/// one-call listing and one that does not — and a type that exists only on
-/// some of them makes the walk itself conditional.
-pub(crate) struct NamedMeta {
-    pub name: std::ffi::OsString,
-    pub meta: RawMeta,
-    /// Which family of copy-on-write clones this file's blocks belong to, when
-    /// the listing could say.
-    ///
-    /// Not part of [`RawMeta`], deliberately: that type is what `lstat`
-    /// answers and is compared against `lstat` field for field, while this is
-    /// something only the platform's own listing knows. `None` means "charge
-    /// this entry for its own blocks" — no sharing, or no way to ask.
-    pub share: Option<u64>,
 }
 
 /// Platform-normalised metadata for one entry.
@@ -95,28 +95,36 @@ impl RawMeta {
         md: &Metadata,
         identity: FileIdentity,
     ) -> (Self, Option<std::io::Error>) {
-        let ft = md.file_type();
-        let kind = if ft.is_dir() {
-            EntryKind::Dir
-        } else if ft.is_file() {
-            EntryKind::File
-        } else if ft.is_symlink() {
-            EntryKind::Symlink
-        } else {
-            EntryKind::Other
-        };
-        let (fields, failure) = platform_fields(path, md, identity);
-        let (alloc, mtime, nlink, ino, dev) = fields;
-        let meta = RawMeta {
-            kind,
-            size: md.len(),
-            alloc,
+        platform_meta(path, md, identity)
+    }
+
+    /// What a `stat` said, however it was asked: `std`'s `Metadata` and the
+    /// Linux listing's own `fstatat` both come through here, so the two
+    /// cannot disagree about a field's units.
+    ///
+    /// `blocks` is in 512-byte units whatever the filesystem's own block size
+    /// (POSIX), and saturates rather than wrapping: a count that overflowed
+    /// would be a corrupt inode, and the largest number is the honest answer
+    /// to "more than can be said".
+    #[cfg(unix)]
+    pub(crate) fn from_stat(
+        mode: u32,
+        size: u64,
+        blocks: u64,
+        mtime: i64,
+        nlink: u64,
+        ino: u64,
+        dev: u64,
+    ) -> Self {
+        RawMeta {
+            kind: EntryKind::from_mode(mode),
+            size,
+            alloc: blocks.saturating_mul(512),
             mtime,
             nlink,
             ino,
             dev,
-        };
-        (meta, failure)
+        }
     }
 
     /// True when this entry may be reachable through more than one path and
@@ -126,46 +134,64 @@ impl RawMeta {
     }
 }
 
-/// `(alloc, mtime, nlink, ino, dev)` — the fields whose source is per-platform.
-type PlatformFields = (u64, i64, u64, u64, u64);
-
+/// One `stat` answered every field, so there is nothing here that can fail
+/// and nothing the identity flag can save.
 #[cfg(unix)]
-fn platform_fields(
+fn platform_meta(
     _path: &Path,
     md: &Metadata,
     _identity: FileIdentity,
-) -> (PlatformFields, Option<std::io::Error>) {
+) -> (RawMeta, Option<std::io::Error>) {
     use std::os::unix::fs::MetadataExt;
-    // `blocks()` is always in 512-byte units, independent of the filesystem's
-    // own block size (POSIX). One `stat` answered every field, so there is
-    // nothing here that can fail and nothing the identity flag can save.
-    let fields = (
-        md.blocks() * 512,
+    let meta = RawMeta::from_stat(
+        md.mode(),
+        md.size(),
+        md.blocks(),
         md.mtime(),
         md.nlink(),
         md.ino(),
         md.dev(),
     );
-    (fields, None)
+    (meta, None)
 }
 
 #[cfg(windows)]
-fn platform_fields(
+fn platform_meta(
     path: &Path,
     md: &Metadata,
     identity: FileIdentity,
-) -> (PlatformFields, Option<std::io::Error>) {
+) -> (RawMeta, Option<std::io::Error>) {
     use std::os::windows::fs::MetadataExt;
 
+    let ft = md.file_type();
+    let kind = if ft.is_dir() {
+        EntryKind::Dir
+    } else if ft.is_file() {
+        EntryKind::File
+    } else if ft.is_symlink() {
+        EntryKind::Symlink
+    } else {
+        EntryKind::Other
+    };
     let mtime = filetime_to_unix(md.last_write_time());
-
-    match query(path, identity) {
-        Ok((alloc, nlink, ino, dev)) => ((alloc, mtime, nlink, ino, dev), None),
+    let (fields, failure) = match query(path, identity) {
+        Ok(fields) => (fields, None),
         // The entry keeps its name and logical size and stays in the tree,
         // while the caller counts the failure. Dropping it would be the larger
         // lie: the name and the length are already in hand.
-        Err(e) => ((md.file_size(), mtime, 1, 0, 0), Some(e)),
-    }
+        Err(e) => ((md.file_size(), 1, 0, 0), Some(e)),
+    };
+    let (alloc, nlink, ino, dev) = fields;
+    let meta = RawMeta {
+        kind,
+        size: md.len(),
+        alloc,
+        mtime,
+        nlink,
+        ino,
+        dev,
+    };
+    (meta, failure)
 }
 
 /// FILETIME — 100-nanosecond ticks from 1601 — to Unix seconds.

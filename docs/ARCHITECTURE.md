@@ -373,15 +373,22 @@ What a bucket snapshot means:
 The portable backend is `read_dir` + `symlink_metadata`, with metadata
 reading split out via `cfg`. macOS has had its fast path since 11 September
 2026 (B5): `getattrlistbulk` (`bulk.rs`) takes names and metadata in one call, and
-the portable path remains only for directories that hold a mount point. The
-table is the plan it came from; the other rows are still planned:
+the portable path remains only for directories that hold a mount point. Linux
+has had its own since 5 October 2026 (B6, `dents.rs`): `getdents64` into one
+per-thread buffer and an `fstatat` per entry relative to the directory's
+descriptor, with `AT_NO_AUTOMOUNT`. `std` already asked by descriptor, so what
+went is the allocations around each entry: about a tenth of a warm walk with
+glibc, and up to 3× with the static musl the agent ships as, whose allocator
+is slow under threads. `statx` with a narrow mask measured the same as
+`fstatat` and was dropped. It falls back to the portable path in the same
+place macOS does. The table is the plan it came from:
 
 | Platform | Method | Note |
 |----------|--------|-----|
 | Windows | Direct NTFS **MFT** read; incremental via the **USN journal** | Requires administrator privileges; ReFS has no MFT. Mandatory in Phase 3: WizTree scans 2 TB in ~14 s. |
 | Windows (unprivileged) | `NtQueryDirectoryFileEx`, 64 KB buffer, `FileIdBothDirectoryInformation` | Size + file id in a single call; no extra syscall needed for hardlink dedup |
 | macOS | `getattrlistbulk` | Noticeably faster than `readdir + lstat` when size/date is needed |
-| Linux | `getdents64` + `statx`, DFS per thread | The current approach already follows this model |
+| Linux | `getdents64` + `fstatat`, DFS per thread | Done (B6); warm 6–14% faster with glibc, 1.3–3.2× with musl; cold 3% and 23% |
 
 `RawMeta::for_path` in `scan-core` is the boundary of this split; the fast
 paths will plug in by producing the same `RawMeta`.

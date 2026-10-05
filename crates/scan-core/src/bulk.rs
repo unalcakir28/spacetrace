@@ -26,7 +26,21 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use crate::meta::{EntryKind, NamedMeta, RawMeta};
+use crate::meta::{EntryKind, RawMeta};
+
+/// One directory entry: its name, and what the listing said about it.
+pub(crate) struct NamedMeta {
+    pub name: std::ffi::OsString,
+    pub meta: RawMeta,
+    /// Which family of copy-on-write clones this file's blocks belong to, when
+    /// the listing could say.
+    ///
+    /// Not part of [`RawMeta`], deliberately: that type is what `lstat`
+    /// answers and is compared against `lstat` field for field, while this is
+    /// something only this listing knows. `None` means "charge this entry for
+    /// its own blocks" — no sharing, or no way to ask.
+    pub share: Option<u64>,
+}
 
 /// Not in libc's Apple constants.
 const ATTR_CMN_ERROR: libc::attrgroup_t = 0x2000_0000;
@@ -446,18 +460,16 @@ mod tests {
             .map(|e| (e.name, (e.meta, e.share)))
             .collect();
 
-        let mut slow: BTreeMap<OsString, (RawMeta, Option<u64>)> = BTreeMap::new();
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            let md = entry.metadata().unwrap();
-            let path = entry.path();
-            let (meta, failure) = RawMeta::for_path(&path, &md, crate::meta::FileIdentity::Needed);
-            assert!(failure.is_none());
-            let share = (meta.kind == EntryKind::File)
-                .then(|| clone_key(&path))
-                .flatten();
-            slow.insert(entry.file_name(), (meta, share));
-        }
+        let slow: BTreeMap<OsString, (RawMeta, Option<u64>)> = crate::testing::lstat_answers(dir)
+            .into_iter()
+            .map(|(name, answer)| {
+                let meta = answer.expect("every entry of a test directory answers");
+                let share = (meta.kind == EntryKind::File)
+                    .then(|| clone_key(&dir.join(&name)))
+                    .flatten();
+                (name, (meta, share))
+            })
+            .collect();
 
         assert_eq!(
             bulk.keys().collect::<Vec<_>>(),

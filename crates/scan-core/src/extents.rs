@@ -694,28 +694,39 @@ pub(crate) mod linux {
         }
     }
 
-    /// Map one regular file. `Ok(None)` when it neither shares nor
-    /// compresses, which is the common case and costs nothing further.
+    /// How a file is opened to be mapped, by path or relative to its
+    /// directory (`dents.rs`).
+    ///
+    /// `O_NONBLOCK` because the entry was a regular file when it was listed
+    /// and may be a FIFO by now, which a blocking open would wait on forever;
+    /// `O_NOFOLLOW` because a symlink is counted as itself (invariant 3). No
+    /// data is read, so no atime moves.
+    pub(crate) const OPEN_FLAGS: libc::c_int =
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
+
+    /// `path` opened to be mapped.
+    pub(crate) fn open(path: &Path) -> std::io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(OPEN_FLAGS)
+            .open(path)
+    }
+
+    /// Map one regular file, already opened with [`OPEN_FLAGS`]. `Ok(None)`
+    /// when it neither shares nor compresses, which is the common case and
+    /// costs nothing further.
     ///
     /// `search_denied` is shared by the whole scan: the first
     /// `TREE_SEARCH_V2` refused for want of `CAP_SYS_ADMIN` switches it off
     /// for every file after, rather than failing it again a million times.
     pub(crate) fn map(
-        path: &Path,
+        file: std::fs::File,
         meta: &RawMeta,
         domain: u32,
         btrfs: bool,
         search_denied: &AtomicBool,
         cancelled: &dyn Fn() -> bool,
     ) -> std::io::Result<Option<Mapped>> {
-        // `O_NONBLOCK` because the entry was a regular file when it was
-        // listed and may be a FIFO by now, which a blocking open would wait
-        // on forever; `O_NOFOLLOW` because a symlink is counted as itself
-        // (invariant 3). No data is read, so no atime moves.
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
-            .open(path)?;
         // The same inode `lstat` described, or the extents would be charged
         // against another file's `st_blocks`.
         let md = file.metadata()?;
@@ -1342,7 +1353,14 @@ mod linux_tests {
             calls.set(calls.get() + 1);
             true
         };
-        let out = linux::map(&path, &meta, 0, false, &AtomicBool::new(false), &cancelled);
+        let out = linux::map(
+            linux::open(&path).unwrap(),
+            &meta,
+            0,
+            false,
+            &AtomicBool::new(false),
+            &cancelled,
+        );
         let err = out.expect_err("a cancelled scan must not finish mapping");
         assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);
         assert_eq!(calls.get(), 1, "asked once, after the first batch");
@@ -1350,7 +1368,7 @@ mod linux_tests {
         let not_cancelled = || false;
         assert!(
             linux::map(
-                &path,
+                linux::open(&path).unwrap(),
                 &meta,
                 0,
                 false,

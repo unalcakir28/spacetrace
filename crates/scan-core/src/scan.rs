@@ -10,7 +10,7 @@ use crate::capacity::Capacity;
 use crate::clones::Families;
 use crate::extents::{Claims, Deferred, FsKind, Mapped, Volume, Volumes};
 use crate::journal::Rescan;
-use crate::meta::{display_name, EntryKind, FileIdentity, NamedMeta, RawMeta};
+use crate::meta::{display_name, EntryKind, FileIdentity, RawMeta};
 use crate::mounts::Mounts;
 use crate::ntfs::Table;
 use crate::partial::PartialTree;
@@ -281,11 +281,13 @@ pub struct ScanProgress {
     /// directory holding a mount point, and filesystems with no bulk listing
     /// at all.
     ///
-    /// **On Linux it is every regular file**, because there is no bulk
-    /// listing. On btrfs and XFS each of them is a real question — an `open`
-    /// and a FIEMAP, see `extents.rs` — and this is the counter that moves
-    /// while a directory of a hundred thousand of them is being asked, since
-    /// `files` is published once per directory.
+    /// **On Linux it is every regular file**, on both listing paths: no
+    /// Linux listing carries extents, so each file is asked on its own. On
+    /// btrfs and XFS each of them is a real question — an `open` and a
+    /// FIEMAP, see `extents.rs` — and this is the counter that moves while a
+    /// directory of a hundred thousand of them is being asked, since `files`
+    /// is published once per directory. The `getdents64` listing advances it
+    /// a few hundred at a time rather than per file.
     ///
     /// It used to count a phase of its own that ran after the walk, and it was
     /// 1193 ms of a 1989 ms scan on `~/github` with no other counter moving.
@@ -542,6 +544,10 @@ struct Ctx {
     opts: ScanOptions,
     mounts: Mounts,
     probe: Probe,
+    /// Whether the platform's own listing is used where it can be: the bulk
+    /// call on macOS, `getdents64` and `fstatat` on Linux. Off only in the
+    /// tests that hold it to the same answer as the ordinary walk.
+    fast_listing: bool,
     root_dev: u64,
     seen_inodes: Mutex<HashSet<(u64, u64)>>,
     hardlinks_deduped: AtomicU64,
@@ -581,6 +587,44 @@ struct Ctx {
 }
 
 impl Ctx {
+    /// A context with nothing seen yet.
+    fn new(
+        opts: ScanOptions,
+        mounts: Mounts,
+        probe: Probe,
+        fast_listing: bool,
+        root_dev: u64,
+        progress: Arc<ScanProgress>,
+    ) -> Ctx {
+        Ctx {
+            opts,
+            mounts,
+            probe,
+            fast_listing,
+            root_dev,
+            seen_inodes: Mutex::new(HashSet::new()),
+            hardlinks_deduped: AtomicU64::new(0),
+            shared_blocks: Mutex::new(HashSet::new()),
+            families: Mutex::new(Families::default()),
+            clones_deduped: AtomicU64::new(0),
+            shared_bytes_deduped: AtomicU64::new(0),
+            volumes: Volumes::default(),
+            deferred: Mutex::new(Deferred::default()),
+            compressed_denied: AtomicBool::new(false),
+            compressed_bytes_saved: AtomicI64::new(0),
+            compressed_files_inexact: AtomicU64::new(0),
+            files_unmapped: AtomicU64::new(0),
+            unseen_sharing: AtomicBool::new(false),
+            errors: Mutex::new(Vec::new()),
+            progress,
+            // What a scan that records hardlinks sets (`scan_recording`).
+            links: None,
+            errored: Mutex::new(Vec::new()),
+            // What a rescan sets (`scan_with`).
+            splice: None,
+        }
+    }
+
     /// The arena, written to directly by whichever thread finished listing a
     /// directory.
     ///
@@ -926,8 +970,25 @@ impl Ctx {
 
     /// Which of a file's extents are shared or compressed, where the
     /// filesystem can say. `None` means "charge what `st_blocks` says".
+    ///
+    /// The file at `path`, for the listing that reads a directory one entry
+    /// at a time.
     #[cfg(target_os = "linux")]
     fn map_extents(&self, volume: Volume, path: &Path, meta: &RawMeta) -> Option<Box<Mapped>> {
+        self.map_opened(volume, meta, || crate::extents::linux::open(path))
+    }
+
+    /// The same for a file `open` opens — by path, or relative to its
+    /// directory on the Linux listing. Opened only once it is known the answer
+    /// can matter: on a filesystem that cannot share, and for a file with no
+    /// blocks, nothing is opened.
+    #[cfg(target_os = "linux")]
+    fn map_opened(
+        &self,
+        volume: Volume,
+        meta: &RawMeta,
+        open: impl FnOnce() -> std::io::Result<std::fs::File>,
+    ) -> Option<Box<Mapped>> {
         let FsKind::Reflink { domain, btrfs } = volume.kind else {
             return None;
         };
@@ -938,14 +999,17 @@ impl Ctx {
             return None;
         }
         let cancelled = || self.progress.is_cancelled();
-        match crate::extents::linux::map(
-            path,
-            meta,
-            domain,
-            btrfs,
-            &self.compressed_denied,
-            &cancelled,
-        ) {
+        let mapped = open().and_then(|file| {
+            crate::extents::linux::map(
+                file,
+                meta,
+                domain,
+                btrfs,
+                &self.compressed_denied,
+                &cancelled,
+            )
+        });
+        match mapped {
             Ok(mapped) => mapped.map(Box::new),
             Err(_) => {
                 self.files_unmapped.fetch_add(1, Ordering::Relaxed);
@@ -1001,7 +1065,8 @@ struct Pending {
     name_off: u32,
     name_len: u16,
     meta: RawMeta,
-    /// See [`NamedMeta::share`].
+    /// The clone family, where the listing could say (`bulk.rs`,
+    /// `NamedMeta::share`).
     share: Option<u64>,
     /// Its shared and compressed extents, on a filesystem that says (Linux).
     /// Boxed because almost every entry has none.
@@ -1197,6 +1262,22 @@ pub(crate) enum Source {
     /// a table they read themselves.
     #[cfg(test)]
     Table(crate::ntfs::Table, u64),
+    /// The walk, with every directory listed the ordinary way rather than by
+    /// the platform's own listing: what the tests that hold the two to the
+    /// same answer compare against, on the platforms that have one.
+    #[cfg(all(test, unix))]
+    Ordinary,
+}
+
+impl Source {
+    /// Whether the platform's own listing may be used where it can be.
+    fn fast_listing(&self) -> bool {
+        match self {
+            #[cfg(all(test, unix))]
+            Source::Ordinary => false,
+            _ => true,
+        }
+    }
 }
 
 /// A scan from `source` with fresh progress, no mount table and the real
@@ -1223,8 +1304,8 @@ pub(crate) fn scan_source(
 /// supplied.
 ///
 /// Private: the extra arguments exist so the tests can build a filesystem
-/// boundary that is not one, a probe that never answers, and a tree from an
-/// NTFS table.
+/// boundary that is not one, a probe that never answers, a tree from an NTFS
+/// table, and a walk that lists every directory the ordinary way.
 pub(crate) fn scan_with(
     root: impl AsRef<Path>,
     opts: ScanOptions,
@@ -1334,28 +1415,16 @@ fn scan_recording(
     progress.partial.install(builder, root_path.clone());
 
     let ctx = Ctx {
-        root_dev: root_meta.dev,
-        opts,
-        mounts,
-        probe,
-        seen_inodes: Mutex::new(HashSet::new()),
-        hardlinks_deduped: AtomicU64::new(0),
-        shared_blocks: Mutex::new(HashSet::new()),
-        families: Mutex::new(Families::default()),
-        clones_deduped: AtomicU64::new(0),
-        shared_bytes_deduped: AtomicU64::new(0),
-        volumes: Volumes::default(),
-        deferred: Mutex::new(Deferred::default()),
-        compressed_denied: AtomicBool::new(false),
-        compressed_bytes_saved: AtomicI64::new(0),
-        compressed_files_inexact: AtomicU64::new(0),
-        files_unmapped: AtomicU64::new(0),
-        unseen_sharing: AtomicBool::new(false),
-        errors: Mutex::new(Vec::new()),
-        errored: Mutex::new(Vec::new()),
         splice,
-        progress: Arc::clone(&progress),
         links: (record && dedupes_hardlinks).then(|| Mutex::new(Vec::new())),
+        ..Ctx::new(
+            opts,
+            mounts,
+            probe,
+            source.fast_listing(),
+            root_meta.dev,
+            Arc::clone(&progress),
+        )
     };
     if let Some(e) = root_failure {
         ctx.note_error(root_id, &root_path, &e);
@@ -1479,6 +1548,8 @@ fn table_for(root: &Path, ctx: &Ctx, source: Source) -> Option<(Table, u64)> {
         Source::Volume => volume_table(root, ctx),
         #[cfg(test)]
         Source::Table(table, root) => Some((table, root)),
+        #[cfg(all(test, unix))]
+        Source::Ordinary => None,
     }
 }
 
@@ -1623,27 +1694,20 @@ fn walk(
     let mut names = String::new();
     let mut pending: Vec<Pending> = Vec::new();
 
-    // macOS can answer names and metadata in one call. Not for a directory
-    // holding a mount point, though: the whole directory arrives at once, so
-    // there is no per-entry moment left at which a filesystem that stopped
-    // answering could be given a deadline, and the protection below is worth
-    // more than the speed.
-    if !guarded {
-        if let Some(entries) = bulk_list(dir) {
-            for item in entries {
-                let (name_off, name_len) = push_name(&mut names, &item.name.to_string_lossy());
-                pending.push(Pending {
-                    name: Some(item.name),
-                    name_off,
-                    name_len,
-                    meta: item.meta,
-                    share: item.share,
-                    extents: None,
-                });
+    // The platform's own listing, where there is one. Not for a directory
+    // holding a mount point: the protection below lives in the ordinary path
+    // alone. On macOS it could not live anywhere else — the whole directory
+    // arrives in one call, so there is no per-entry moment left at which a
+    // filesystem that stopped answering could be given a deadline.
+    if !guarded && ctx.fast_listing {
+        match fast_list(dir, parent_id, volume, ctx, &mut names, &mut pending) {
+            Fast::Listed => {
+                drop(listing);
+                let subdirs = place(dir, parent_id, dev, depth, ctx, &names, pending, at);
+                return descend(subdirs, depth, volume, ctx);
             }
-            drop(listing);
-            let subdirs = place(dir, parent_id, dev, depth, ctx, &names, pending, at);
-            return descend(subdirs, depth, volume, ctx);
+            Fast::Unreadable => return,
+            Fast::Unavailable => {}
         }
     }
 
@@ -2008,16 +2072,147 @@ fn place<'a>(
     subdirs
 }
 
-/// The platform's one-call directory listing, where there is one.
+/// How many files `clones_probed` is advanced by at once on the Linux listing.
+///
+/// Per file it would be a shared atomic write in the hottest loop of the walk;
+/// per directory it would stand still for the whole of a directory of a
+/// hundred thousand files, which is the case the counter exists for
+/// (invariant 8).
+#[cfg(target_os = "linux")]
+const PROBED_BATCH: u64 = 256;
+
+/// What the platform's own listing made of a directory.
+enum Fast {
+    /// Listed: `names` and `pending` hold its entries.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+    Listed,
+    /// It could not be opened, and the error is already reported. The
+    /// ordinary path must not try again: a second open that fails says the
+    /// same thing twice, and one that succeeds after a passing `EMFILE`
+    /// hides the first failure.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Unreadable,
+    /// Not listed, nothing reported: the ordinary path lists it.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    Unavailable,
+}
+
+/// List `dir` with `getdents64` and ask each entry with `fstatat` relative to
+/// it (`dents.rs`), filling `names` and `pending` exactly as the ordinary path
+/// does. A directory that does not open is reported here, in the ordinary
+/// path's words — `Dir::open` fails as `read_dir` does, with the same error.
+///
+/// Opened once, and everything after is relative to that descriptor: no
+/// `PathBuf` per entry, and on btrfs and XFS the FIEMAP open resolves one
+/// name instead of the whole path. A path is built only for an entry whose
+/// failure has to be reported.
+#[cfg(target_os = "linux")]
+fn fast_list(
+    dir: &Path,
+    id: NodeId,
+    volume: Volume,
+    ctx: &Ctx,
+    names: &mut String,
+    pending: &mut Vec<Pending>,
+) -> Fast {
+    let listing = match crate::dents::Dir::open(dir) {
+        Ok(listing) => listing,
+        Err(e) => {
+            ctx.note_error(id, dir, &e);
+            return Fast::Unreadable;
+        }
+    };
+    let probe = ctx.opts.dedupe_clones;
+    listing.with_entries(|entries, failure| {
+        // `read_dir` yields the entries it read before an error, then the
+        // error; the entries are kept either way.
+        if let Some(e) = failure {
+            ctx.note_error(id, dir, &e);
+        }
+        let mut probed = 0u64;
+        for entry in entries {
+            let meta = match listing.stat(entry.name) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    ctx.note_error(id, &dir.join(entry.os_name()), &e);
+                    continue;
+                }
+            };
+            // The ordinary path's question about shared extents, asked on the
+            // filesystems that can answer it; see `Ctx::map_opened`.
+            let extents = if probe && meta.kind == EntryKind::File {
+                probed += 1;
+                if probed % PROBED_BATCH == 0 {
+                    ctx.progress
+                        .clones_probed
+                        .fetch_add(PROBED_BATCH, Ordering::Relaxed);
+                }
+                ctx.map_opened(volume, &meta, || listing.open_file(entry.os_name()))
+            } else {
+                None
+            };
+            let raw_name = entry.os_name().to_os_string();
+            let (name_off, name_len) = push_name(names, &raw_name.to_string_lossy());
+            pending.push(Pending {
+                name: Some(raw_name),
+                name_off,
+                name_len,
+                meta,
+                share: None,
+                extents,
+            });
+        }
+        let rest = probed % PROBED_BATCH;
+        if rest > 0 {
+            ctx.progress
+                .clones_probed
+                .fetch_add(rest, Ordering::Relaxed);
+        }
+    });
+    Fast::Listed
+}
+
+/// The platform's one-call directory listing (`bulk.rs`): names and
+/// metadata, and the clone family, in one call per batch. `Unavailable` hands
+/// the directory to the ordinary listing — a filesystem without the call, or
+/// a directory it could not open, whose error the ordinary path then reports.
 #[cfg(target_os = "macos")]
-fn bulk_list(dir: &Path) -> Option<Vec<NamedMeta>> {
-    crate::bulk::list(dir)
+fn fast_list(
+    dir: &Path,
+    _id: NodeId,
+    _volume: Volume,
+    _ctx: &Ctx,
+    names: &mut String,
+    pending: &mut Vec<Pending>,
+) -> Fast {
+    let Some(entries) = crate::bulk::list(dir) else {
+        return Fast::Unavailable;
+    };
+    for item in entries {
+        let (name_off, name_len) = push_name(names, &item.name.to_string_lossy());
+        pending.push(Pending {
+            name: Some(item.name),
+            name_off,
+            name_len,
+            meta: item.meta,
+            share: item.share,
+            extents: None,
+        });
+    }
+    Fast::Listed
 }
 
 /// Everywhere else the ordinary walk is the only walk.
-#[cfg(not(target_os = "macos"))]
-fn bulk_list(_dir: &Path) -> Option<Vec<NamedMeta>> {
-    None
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn fast_list(
+    _dir: &Path,
+    _id: NodeId,
+    _volume: Volume,
+    _ctx: &Ctx,
+    _names: &mut String,
+    _pending: &mut Vec<Pending>,
+) -> Fast {
+    Fast::Unavailable
 }
 
 /// Whether this directory's name is on the skip list.
@@ -2303,5 +2498,209 @@ mod thread_tests {
 
         assert!(names_in(&tree).iter().any(|n| n == "hidden.bin"));
         assert_eq!(stats.errors, 0);
+    }
+}
+
+/// The platform's own listing against the ordinary one, over a whole scan.
+///
+/// The listing-level tests (`bulk.rs`, `dents.rs`) compare metadata entry by
+/// entry. This compares what comes out the other end — every node, every
+/// total, every error — so a difference in how the two paths hand entries to
+/// `place`, report a failure or open a file for FIEMAP shows up too.
+#[cfg(all(test, unix))]
+mod listing_tests {
+    use super::*;
+    use crate::testing::{running_as_root, zoo};
+    use std::os::unix::fs::PermissionsExt;
+
+    /// One node as the tree reports it, keyed by path.
+    type Row = (String, u8, u64, u64, u64, u64, i64, u32, u32, u32);
+
+    fn answers(
+        root: &Path,
+        fast_listing: bool,
+        threads: usize,
+    ) -> (Vec<Row>, Vec<u64>, Vec<String>) {
+        let opts = ScanOptions {
+            threads: Some(threads),
+            ..ScanOptions::default()
+        };
+        let progress = Arc::new(ScanProgress::default());
+        let (tree, stats) = scan_with(
+            root,
+            opts,
+            Arc::clone(&progress),
+            Mounts::none(),
+            probe_mount,
+            if fast_listing {
+                Source::Volume
+            } else {
+                Source::Ordinary
+            },
+            None,
+        )
+        .unwrap();
+        let mut rows = Vec::new();
+        tree.for_each_path(None, |id, path| {
+            let n = tree.node(id);
+            // Which of two hardlinked names carries the bytes is undefined
+            // (invariant 3); both names sit in one directory here, so only
+            // the two file rows can differ, and they are compared without it.
+            let linked = n.kind == EntryKind::File && n.nlink > 1;
+            let (size, alloc) = if linked {
+                (0, 0)
+            } else {
+                (n.own_size, n.own_alloc)
+            };
+            rows.push((
+                path.to_string(),
+                n.kind as u8,
+                if linked { 0 } else { n.size },
+                if linked { 0 } else { n.alloc },
+                size,
+                alloc,
+                n.mtime,
+                n.nlink,
+                n.files,
+                n.dirs,
+            ));
+        });
+        rows.sort();
+        let mut counts = vec![
+            stats.files,
+            stats.dirs,
+            stats.errors,
+            stats.hardlinks_deduped,
+            stats.clones_deduped,
+            stats.shared_bytes_deduped,
+            stats.files_unmapped,
+            tree.total_size(),
+            tree.total_alloc(),
+        ];
+        // On Linux both paths ask every regular file about its extents and
+        // count it. On macOS differing here is the point of the bulk listing:
+        // it probes nothing, the ordinary path probes every file.
+        if cfg!(target_os = "linux") {
+            counts.push(progress.clones_probed.load(Ordering::Relaxed));
+        }
+        let mut errors: Vec<String> = stats
+            .error_samples
+            .iter()
+            .map(|(path, msg)| format!("{}: {msg}", path.display()))
+            .collect();
+        errors.sort();
+        (rows, counts, errors)
+    }
+
+    #[test]
+    fn the_fast_listing_gives_the_same_scan_as_the_ordinary_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for d in 0..6 {
+            let sub = root.join(format!("d{d}"));
+            std::fs::create_dir_all(sub.join("inner/deeper")).unwrap();
+            for f in 0..20 {
+                std::fs::write(sub.join(format!("f{f}")), vec![b'x'; 100 + f * 333]).unwrap();
+            }
+            std::fs::write(sub.join("inner/deeper/leaf"), vec![b'y'; 70_000]).unwrap();
+        }
+        std::fs::hard_link(root.join("d0/f3"), root.join("d0/f3-again")).unwrap();
+        // On btrfs and XFS a reflinked pair, so the two ways of opening a file
+        // for FIEMAP — by path, and relative to its directory — are compared
+        // too. Elsewhere `--reflink=auto` makes an ordinary copy.
+        #[cfg(target_os = "linux")]
+        {
+            let bytes: Vec<u8> = (0..1_000_000u32).map(|i| (i * 7 % 251) as u8).collect();
+            std::fs::write(root.join("d2/original.bin"), bytes).unwrap();
+            let copied = std::process::Command::new("cp")
+                .arg("--reflink=auto")
+                .arg(root.join("d2/original.bin"))
+                .arg(root.join("d4/copy.bin"))
+                .status()
+                .unwrap();
+            assert!(copied.success());
+        }
+        std::fs::create_dir(root.join("zoo")).unwrap();
+        zoo(&root.join("zoo"));
+        // More files than one batch of `clones_probed`, and not a multiple of
+        // it, so the remainder the Linux listing adds at the end is compared.
+        let wide = root.join("wide");
+        std::fs::create_dir(&wide).unwrap();
+        for i in 0..600 {
+            std::fs::write(wide.join(format!("{i:05}")), b"").unwrap();
+        }
+        // Listed but not searchable, and not listable at all: both have to be
+        // counted as the same errors, against the same paths.
+        let unsearchable = root.join("unsearchable");
+        std::fs::create_dir(&unsearchable).unwrap();
+        std::fs::write(unsearchable.join("hidden"), b"1").unwrap();
+        std::fs::set_permissions(&unsearchable, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let closed = root.join("closed");
+        std::fs::create_dir(&closed).unwrap();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let ordinary = answers(root, false, 1);
+        for threads in [1, 6] {
+            let (rows, counts, errors) = answers(root, true, threads);
+            // Row by row, so a failure names the entry rather than printing
+            // three thousand of them; the count first, so an empty side
+            // cannot pass by zipping to nothing.
+            assert_eq!(rows.len(), ordinary.0.len(), "{threads} threads");
+            for (fast, slow) in rows.iter().zip(&ordinary.0) {
+                assert_eq!(fast, slow, "the fast listing disagreed, {threads} threads");
+            }
+            assert_eq!(counts, ordinary.1, "statistics, {threads} threads");
+            assert_eq!(errors, ordinary.2, "errors, {threads} threads");
+        }
+        if !running_as_root() {
+            assert_eq!(
+                ordinary.1[2], 2,
+                "one error per unreadable path: {:?}",
+                ordinary.2
+            );
+        }
+
+        std::fs::set_permissions(&unsearchable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A directory the Linux listing cannot open is reported by that listing,
+    /// once, in the words `read_dir` would have used — not handed on to the
+    /// ordinary path to be opened and fail a second time. The test above
+    /// cannot tell the two apart: both end with the same one error.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_directory_that_does_not_open_is_reported_by_the_fast_listing() {
+        if running_as_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let closed = dir.path().join("closed");
+        std::fs::create_dir(&closed).unwrap();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let expected = std::fs::read_dir(&closed).unwrap_err().to_string();
+
+        let ctx = Ctx::new(
+            ScanOptions::default(),
+            Mounts::none(),
+            probe_mount,
+            true,
+            0,
+            Arc::default(),
+        );
+        let volume = Volume {
+            dev: 0,
+            kind: FsKind::Plain,
+        };
+        let (mut names, mut pending) = (String::new(), Vec::new());
+        let outcome = fast_list(&closed, 0, volume, &ctx, &mut names, &mut pending);
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            matches!(outcome, Fast::Unreadable),
+            "the ordinary path is not asked to retry"
+        );
+        assert_eq!(*ctx.errors.lock().unwrap(), [(closed, expected)]);
+        assert_eq!(ctx.progress.errors.load(Ordering::Relaxed), 1);
     }
 }
