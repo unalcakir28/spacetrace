@@ -71,6 +71,13 @@ fn a_closed_stdout_ends_a_command_quietly() {
 }
 
 /// The same through a shell, as a user types it.
+///
+/// Unix only: `pipefail` is a POSIX-shell question, and the Windows runner
+/// would answer it through Git Bash, an emulation layer between the binary
+/// and the pipe. There it ended in exit 1 with nothing on stderr (CI,
+/// 5 October 2026) while the closed-pipe test above, which talks to the
+/// binary directly, passed — so Windows' own answer is the one above.
+#[cfg(unix)]
 #[test]
 fn piping_into_head_exits_zero_even_under_pipefail() {
     let work = tempfile::tempdir().unwrap();
