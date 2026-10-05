@@ -46,8 +46,8 @@ use clap::Parser;
 use spacetrace_diff::{diff, ChangeKind, DiffOptions, DiffReport};
 use spacetrace_dupes::{find, Options, Sharing, DEFAULT_MIN_SIZE};
 use spacetrace_scan_core::{
-    age_profile, scan, EntryKind, Phase, ScanOptions, ScanProgress, ScanStats, SizeBasis,
-    StallWatch, Tree, DEFAULT_EDGES, STALL_GRACE,
+    age_profile, rescan, scan, stored_root, EntryKind, Phase, Rescan, ScanOptions, ScanProgress,
+    ScanStats, SizeBasis, StallWatch, Tree, DEFAULT_EDGES, STALL_GRACE,
 };
 use spacetrace_store::{
     export_csv, export_ncdu, import_ncdu, Integrity, ScanMeta, SqliteHashCache, Store,
@@ -231,16 +231,30 @@ fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
     // entry tree — and it used to happen after the line was cleared.
     let progress = Arc::new(ScanProgress::default());
     let ticker = Ticker::start(Arc::clone(&progress), !json);
-    let (tree, stats) = scan(&a.path, options, Arc::clone(&progress))
+    let host = Store::local_host();
+
+    // Only a scan that is saved starts from the last saved one: the next
+    // scan's base has to be this one, or the chain of cursors breaks. The
+    // scanner decides whether the journal can vouch for the gap and records
+    // why not when it cannot.
+    let mut store = if a.save {
+        Some(open_store(db_path)?)
+    } else {
+        None
+    };
+    let base = match &store {
+        Some(store) if !a.full => {
+            store.rescan_base(&stored_root(&a.path).to_string_lossy(), &host)?
+        }
+        _ => None,
+    };
+    let (tree, stats) = rescan(&a.path, options, Arc::clone(&progress), base)
         .with_context(|| format!("cannot scan: {}", a.path.display()))?;
 
-    let mut saved_id = None;
-    if a.save {
-        let mut store = open_store(db_path)?;
-        let host = Store::local_host();
-        saved_id =
-            Some(store.save_reporting(&tree, &stats, &host, a.label.as_deref(), &progress)?);
-    }
+    let saved_id = store
+        .as_mut()
+        .map(|store| store.save_reporting(&tree, &stats, &host, a.label.as_deref(), &progress))
+        .transpose()?;
     drop(ticker);
 
     if let Some(out) = &a.ncdu {
@@ -263,6 +277,14 @@ fn cmd_scan(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
             "files_unmapped": stats.files_unmapped,
             "unseen_sharing": stats.unseen_sharing,
             "duration_ms": stats.duration_ms,
+            // The record the snapshot stores, the same word the agent
+            // reports; what an incremental scan did beside it, for whoever
+            // is timing one against a full scan.
+            "rescan": stats.rescan.record(),
+            "incremental": match &stats.rescan {
+                Rescan::Incremental(done) => serde_json::to_value(done)?,
+                _ => serde_json::Value::Null,
+            },
             "scan_id": saved_id,
             "fs_total": stats.capacity.map(|c| c.total),
             "fs_available": stats.capacity.map(|c| c.available),
@@ -1129,7 +1151,7 @@ fn cmd_verify(a: &VerifyArgs, db_path: &Path, json: bool) -> Result<()> {
 /// is simply `None` rather than something to report. Opening the database
 /// read-only for this takes no write lock (invariant #0).
 fn entry_count_hint(db_path: &Path, root: &Path) -> Option<usize> {
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root = stored_root(root);
     let store = Store::open(db_path).ok()?;
     let previous = store
         .latest_for(&root.to_string_lossy(), Some(&Store::local_host()))
@@ -1348,6 +1370,7 @@ impl Ticker {
                         progress.dirs.load(Ordering::Relaxed),
                         progress.bytes.load(Ordering::Relaxed),
                     );
+                    let asked = progress.journal_ms.load(Ordering::Relaxed);
                     // Detected here rather than timestamped in the scanner: this
                     // thread is already polling the counters, and a clock read per
                     // entry in the walk would cost something for a case that
@@ -1370,6 +1393,16 @@ impl Ticker {
                         // "scanning…" is simply not true any more and the file
                         // count has stopped for good.
                         None => match progress.phase() {
+                            // An incremental rescan: checking and loading the
+                            // last snapshot, then copying what did not change.
+                            Phase::Walking if progress.rows().is_some() => {
+                                rows_line("using the last scan", &progress)
+                            }
+                            // Before the walk, while the journal replays; no
+                            // walk counter moves yet.
+                            Phase::Walking if counts == (0, 0, 0) && asked > 0 => {
+                                format!("  asking the journal… {}", fmt::duration(asked))
+                            }
                             Phase::Walking if bucket.is_some() => format!(
                                 "  listing… {} objects, {} folders, {}",
                                 fmt::count(counts.0),
@@ -1423,6 +1456,23 @@ impl Ticker {
     }
 }
 
+/// One line on how the tree was made, when it was not an ordinary full scan.
+///
+/// A fallback is said out loud: the scan took the time a full scan takes,
+/// and the reason is what tells the user whether the next one will too.
+fn print_rescan(rescan: &Rescan) {
+    match rescan {
+        Rescan::Full => {}
+        Rescan::Incremental(done) => println!(
+            "  incremental: {} dirs reread, {} entries reused ({} asking the journal)",
+            fmt::count(done.dirs_listed),
+            fmt::count(done.entries_reused),
+            fmt::duration(done.replay_ms),
+        ),
+        Rescan::Fallback(reason) => println!("  full scan: {reason}"),
+    }
+}
+
 fn print_scan_summary(tree: &Tree, stats: &ScanStats) {
     println!("{}", tree.root_path().display());
     println!(
@@ -1433,6 +1483,7 @@ fn print_scan_summary(tree: &Tree, stats: &ScanStats) {
         fmt::count(stats.dirs),
         fmt::duration(stats.duration_ms),
     );
+    print_rescan(&stats.rescan);
     if stats.hardlinks_deduped > 0 {
         println!(
             "  {} hardlinks counted once",
@@ -1598,6 +1649,10 @@ fn cmd_import(a: &ImportArgs, db_path: &Path, json: bool) -> Result<()> {
         error_samples: Vec::new(),
         duration_ms: 0,
         capacity: None,
+        // Nothing was walked here, so there is no journal position to give
+        // the next scan; `save_import` stores neither field in any case.
+        journal: None,
+        rescan: Default::default(),
     };
 
     let mut store = open_store(db_path)?;

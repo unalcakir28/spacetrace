@@ -1004,9 +1004,11 @@ fn saving_reports_which_phase_it_is_in_and_how_far_along() {
         .map(|(_, rows, _)| *rows)
         .collect();
 
+    // One pass since the digest is hashed as the rows are written: there is
+    // no second phase to announce, and none may show up with stale numbers.
     assert!(
-        !saving.is_empty() && !checksumming.is_empty(),
-        "both passes have to announce themselves; saw {:?}",
+        !saving.is_empty() && checksumming.is_empty(),
+        "one pass, announced as saving; saw {:?}",
         seen.iter().map(|(p, _, _)| *p).collect::<Vec<_>>()
     );
     // Moving, not merely arriving: the smallest and largest readings taken
@@ -1015,12 +1017,7 @@ fn saving_reports_which_phase_it_is_in_and_how_far_along() {
         saving.iter().max() > saving.iter().min(),
         "the saving counter never moved while it was watched"
     );
-    assert!(
-        checksumming.iter().max() > checksumming.iter().min(),
-        "the checksumming counter never moved while it was watched"
-    );
-    // Each pass counts its own rows, out of the same total, and starts again
-    // from zero rather than carrying on from the last one's figure.
+    // The pass counts its rows out of the tree's total.
     for (phase, rows, total) in seen.iter() {
         assert_eq!(*total, entries, "total for {phase:?}");
         assert!(rows <= total, "{rows} of {total} in {phase:?}");

@@ -297,6 +297,7 @@ rescans; a file linked moments after it was written (a build) does not.
 | `--files` | Report files in a diff, not just folders |
 | `--threads N` | Walk with N threads (default: `min(cores, 6)`, measured) |
 | `--mount-timeout S` | Give a mounted filesystem S seconds to answer before recording it as unreadable and moving on (default 60; `0` waits forever) |
+| `--full` | With `scan --save`, read every folder. On macOS (APFS) a saved scan otherwise starts from the last saved scan of that path and rereads only what the filesystem journal says changed; it falls back to a full scan by itself, and says why, whenever the journal cannot vouch for the gap |
 | `--json` | Emit JSON (available on every command) |
 | `--db path.sqlite` | Use a different snapshot database |
 

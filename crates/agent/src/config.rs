@@ -193,6 +193,13 @@ pub struct RootConfig {
     /// Snapshots of this root to keep. `None` keeps everything.
     #[serde(default)]
     pub keep: Option<usize>,
+
+    /// Start from this root's previous snapshot and read again only what the
+    /// filesystem journal says changed. macOS (APFS) only today; elsewhere,
+    /// and whenever the journal cannot vouch for the gap, the scan is full
+    /// and the snapshot records why. `false` makes every scan full.
+    #[serde(default = "default_incremental")]
+    pub incremental: bool,
 }
 
 impl Default for ServerConfig {
@@ -239,6 +246,10 @@ fn default_dedupe() -> bool {
     true
 }
 
+fn default_incremental() -> bool {
+    true
+}
+
 impl RootConfig {
     /// A root with nothing but a path, carrying the same defaults the config
     /// file applies to a `[[roots]]` entry that mentions nothing else.
@@ -260,6 +271,7 @@ impl RootConfig {
             threads: None,
             mount_timeout: None,
             keep: None,
+            incremental: default_incremental(),
         }
     }
 
@@ -464,6 +476,7 @@ mod tests {
         assert_eq!(built.depth, from_file.depth);
         assert_eq!(built.dedupe_hardlinks, from_file.dedupe_hardlinks);
         assert_eq!(built.keep, from_file.keep);
+        assert_eq!(built.incremental, from_file.incremental);
         assert!(built.schedule.is_none() && from_file.schedule.is_none());
     }
 

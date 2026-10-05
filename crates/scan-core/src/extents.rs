@@ -1113,6 +1113,7 @@ mod tests {
             alloc: 0,
             mtime: 0,
             nlink: 1,
+            flags: 0,
         }
     }
 

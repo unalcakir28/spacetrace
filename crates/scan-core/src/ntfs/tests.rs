@@ -417,6 +417,7 @@ fn a_cancelled_scan_from_the_table_returns_no_tree() {
         Mounts::none(),
         probe_mount,
         Source::Table(table, ROOT_RECORD),
+        None,
     );
     let err = result.expect_err("a cancelled scan has no tree");
     assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);

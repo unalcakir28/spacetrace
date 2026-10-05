@@ -18,7 +18,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use spacetrace_scan_core::{
-    EntryKind, Phase, ScanProgress, ScanStats, StoredNode, Tree, TreeAssembler,
+    Base, EntryKind, Fallback, Phase, RescanKind, ScanProgress, ScanStats, StoredNode, Tree,
+    TreeAssembler,
 };
 
 pub use csv::export_csv;
@@ -169,9 +170,9 @@ impl Store {
     /// without one the CLI cleared its progress line the moment the walk ended
     /// and then sat silent — the exact shape of "it looks stuck".
     ///
-    /// Two phases, because there are two passes over every row and they are
-    /// close to the same size (273 ms and 208 ms on that tree). Reporting them
-    /// as one would make the bar reach the end and start again.
+    /// One pass and one phase: the digest is hashed from the values as they
+    /// are bound. It used to be a second pass reading every row back (208 ms
+    /// after 273 ms of writing on that tree), reported as `Checksumming`.
     pub fn save_reporting(
         &mut self,
         tree: &Tree,
@@ -180,7 +181,7 @@ impl Store {
         label: Option<&str>,
         progress: &ScanProgress,
     ) -> Result<ScanId> {
-        self.save_as(tree, stats, host, label, progress, SCANNER_VERSION)
+        self.save_as(tree, stats, host, label, progress, Origin::Scanned)
     }
 
     /// `save`, for a tree read from another tool's export: marked with
@@ -192,8 +193,14 @@ impl Store {
         host: &str,
         label: Option<&str>,
     ) -> Result<ScanId> {
-        let version = format!("{IMPORTED_PREFIX}{SCANNER_VERSION}");
-        self.save_as(tree, stats, host, label, &ScanProgress::default(), &version)
+        self.save_as(
+            tree,
+            stats,
+            host,
+            label,
+            &ScanProgress::default(),
+            Origin::Imported,
+        )
     }
 
     fn save_as(
@@ -203,9 +210,32 @@ impl Store {
         host: &str,
         label: Option<&str>,
         progress: &ScanProgress,
-        scanner_version: &str,
+        origin: Origin,
     ) -> Result<ScanId> {
         let started_at = now_unix() - (stats.duration_ms / 1000) as i64;
+        let scanner_version = match origin {
+            Origin::Scanned => SCANNER_VERSION.to_string(),
+            Origin::Imported => format!("{IMPORTED_PREFIX}{SCANNER_VERSION}"),
+        };
+        let root = tree.root_path().to_string_lossy();
+        // Every value is written once, here, and both bound and hashed from
+        // this one place, so what is stored and what is digested cannot part.
+        let meta = digest::ScanRow {
+            host,
+            root: &root,
+            started_at,
+            duration_ms: stats.duration_ms as i64,
+            total_size: tree.total_size() as i64,
+            total_alloc: tree.total_alloc() as i64,
+            files: stats.files as i64,
+            dirs: stats.dirs as i64,
+            errors: stats.errors as i64,
+            hardlinks_deduped: stats.hardlinks_deduped as i64,
+            scanner_version: &scanner_version,
+            label,
+            fs_total: stats.capacity.map(|c| c.total as i64),
+            fs_available: stats.capacity.map(|c| c.available as i64),
+        };
         let tx = self.write_transaction()?;
         tx.execute(
             "INSERT INTO scans (host, root, started_at, duration_ms, total_size, total_alloc,
@@ -213,68 +243,91 @@ impl Store {
                                 fs_total, fs_available)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
-                host,
-                tree.root_path().to_string_lossy(),
-                started_at,
-                stats.duration_ms as i64,
-                tree.total_size() as i64,
-                tree.total_alloc() as i64,
-                stats.files as i64,
-                stats.dirs as i64,
-                stats.errors as i64,
-                stats.hardlinks_deduped as i64,
-                scanner_version,
-                label,
-                stats.capacity.map(|c| c.total as i64),
-                stats.capacity.map(|c| c.available as i64),
+                meta.host,
+                meta.root,
+                meta.started_at,
+                meta.duration_ms,
+                meta.total_size,
+                meta.total_alloc,
+                meta.files,
+                meta.dirs,
+                meta.errors,
+                meta.hardlinks_deduped,
+                meta.scanner_version,
+                meta.label,
+                meta.fs_total,
+                meta.fs_available,
             ],
         )?;
         let scan_id = tx.last_insert_rowid();
 
+        // Hashed as it is written rather than read back afterwards: the
+        // digest is `digest::Running` either way, and the second pass over
+        // every row cost 208 ms against 273 ms of writing on 412,983 entries.
+        let mut digest = digest::Running::scan(&meta);
         {
             progress.begin_rows(Phase::Saving, tree.len() as u64);
+            let mut rows = RowCounter::new(Some(progress));
             let mut stmt = tx.prepare(
                 "INSERT INTO entries (scan_id, id, parent_id, name, kind, size, alloc, mtime,
                                       nlink, files, dirs, children_start, children_len)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             )?;
             for (idx, node) in tree.nodes().iter().enumerate() {
-                let parent: Option<i64> = if node.has_parent() {
-                    Some(node.parent as i64)
-                } else {
-                    None
+                let row = digest::EntryRow {
+                    id: idx as i64,
+                    parent: node.has_parent().then_some(node.parent as i64),
+                    name: tree.name(idx as u32),
+                    kind: i64::from(node.kind as u8),
+                    size: node.size as i64,
+                    alloc: node.alloc as i64,
+                    mtime: node.mtime,
+                    nlink: i64::from(node.nlink),
+                    files: i64::from(node.files),
+                    dirs: i64::from(node.dirs),
+                    children_start: i64::from(node.children_start),
+                    children_len: i64::from(node.children_len),
                 };
                 stmt.execute(params![
                     scan_id,
-                    idx as i64,
-                    parent,
-                    tree.name(idx as u32),
-                    node.kind as u8,
-                    node.size as i64,
-                    node.alloc as i64,
-                    node.mtime,
-                    node.nlink as i64,
-                    node.files as i64,
-                    node.dirs as i64,
-                    node.children_start as i64,
-                    node.children_len as i64,
+                    row.id,
+                    row.parent,
+                    row.name,
+                    row.kind,
+                    row.size,
+                    row.alloc,
+                    row.mtime,
+                    row.nlink,
+                    row.files,
+                    row.dirs,
+                    row.children_start,
+                    row.children_len,
                 ])?;
-                progress.row_done();
+                digest.entry(&row);
+                rows.tick();
             }
         }
-
-        // Computed by reading the rows back rather than from the tree in
-        // hand, so that the one function every reader uses is also the one
-        // that produced the stored value. A second encoder over the in-memory
-        // tree would save a pass and would eventually disagree with this one
-        // about some field, which surfaces as "your snapshot is corrupt" on a
-        // snapshot that is fine.
-        progress.begin_rows(Phase::Checksumming, tree.len() as u64);
-        let hash = digest::of_reporting(&tx, "main", scan_id, Some(progress))?;
+        let content_hash = digest.finish();
         tx.execute(
             "UPDATE scans SET content_hash = ?1 WHERE id = ?2",
-            params![hash, scan_id],
+            params![content_hash, scan_id],
         )?;
+
+        // An imported tree was not walked here: it has no journal position,
+        // no flags worth the name, and no record of how it was read. No row
+        // is what a rescan reads as "nothing to start from".
+        if let Origin::Scanned = origin {
+            schema::create_rescan_state(&tx)?;
+            let record = stats.rescan.record();
+            let flags = encode_flags(tree);
+            let check =
+                digest::rescan_state(&content_hash, stats.journal.as_deref(), &record, &flags);
+            tx.execute(
+                "INSERT INTO rescan_state (scan_id, journal, rescan, flags, digest)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![scan_id, stats.journal, record, flags, check],
+            )?;
+        }
 
         tx.commit()?;
         // Back to zero, so a caller still polling after this returns does not
@@ -289,8 +342,150 @@ impl Store {
             .scan(scan_id)?
             .with_context(|| format!("no scan with id {scan_id}"))?;
         let hint = meta.files.saturating_add(meta.dirs);
-        let tree = assemble(&self.conn, "main", scan_id, hint, &meta.root)?;
+        let tree = assemble(
+            &self.conn,
+            "main",
+            scan_id,
+            hint,
+            &meta.root,
+            Flags::Unknown,
+            None,
+            None,
+        )?;
         Ok((tree, meta))
+    }
+
+    /// The newest scan of `root` by `host`, as the base an incremental
+    /// rescan would start from (`spacetrace_scan_core::rescan`); `None` when
+    /// there is no scan of it at all.
+    ///
+    /// Two refusals are decided here, from what only the store knows: a scan
+    /// imported from another tool's export, and one dated in the future —
+    /// the clock moved backwards, and what "since then" means is no longer
+    /// clear. A scan that arrived by `import_snapshot` needs no rule of its
+    /// own: the import does not carry the cursor across, so it has none.
+    ///
+    /// Nothing is read beyond one row until the rescan asks: the tree is
+    /// loaded by the returned `load`, which a scan that falls back never
+    /// calls.
+    pub fn rescan_base(&self, root: &str, host: &str) -> Result<Option<Base<'_>>> {
+        let Some(meta) = self.latest_for(root, Some(host))? else {
+            return Ok(None);
+        };
+        // One read for everything the load needs besides the rows.
+        let sql = if schema::has_rescan_state(&self.conn)? {
+            "SELECT s.content_hash, r.journal, r.flags, r.rescan, r.digest
+             FROM scans s LEFT JOIN rescan_state r ON r.scan_id = s.id WHERE s.id = ?1"
+        } else {
+            "SELECT content_hash, NULL, NULL, NULL, NULL FROM scans WHERE id = ?1"
+        };
+        let state: StoredState = self.conn.query_row(sql, [meta.id], |row| {
+            Ok(StoredState {
+                content_hash: row.get(0)?,
+                journal: row.get(1)?,
+                flags: row.get(2)?,
+                rescan: row.get(3)?,
+                digest: row.get(4)?,
+            })
+        })?;
+        let journal = if meta.is_import() {
+            Err(Fallback::ImportedBase)
+        } else if meta.started_at > now_unix() {
+            Err(Fallback::FutureBase)
+        } else if !state.is_intact() {
+            // Checked before the journal is asked: the cursor is one of the
+            // values it vouches for.
+            Err(Fallback::BaseDamaged)
+        } else {
+            state.journal.ok_or(Fallback::NoCursor)
+        };
+        let (content_hash, flags) = (state.content_hash, state.flags);
+        Ok(Some(Base {
+            journal,
+            load: Box::new(move |progress: &ScanProgress| {
+                self.load_base(&meta, content_hash, flags, progress)
+            }),
+        }))
+    }
+
+    /// One scan's `rescan_state.rescan`; `None` where there is none — the
+    /// table not created yet, a scan this build did not walk.
+    fn rescan_record(&self, scan_id: ScanId) -> Result<Option<String>> {
+        if !schema::has_rescan_state(&self.conn)? {
+            return Ok(None);
+        }
+        let record = self
+            .conn
+            .query_row(
+                "SELECT rescan FROM rescan_state WHERE scan_id = ?1",
+                [scan_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(record)
+    }
+
+    /// Load `meta`'s scan as a rescan's base, checked against its digest in
+    /// the same pass.
+    ///
+    /// **The check is the point.** An incremental scan takes over every value
+    /// it does not read again, and its own digest is computed over them as
+    /// they are — so a base damaged on disk would pass its damage on to a
+    /// snapshot that then verifies as intact, and to every rescan after it.
+    /// Hashed while the rows are assembled, and compared before the tree is
+    /// handed over: one read of the scan, not one to check and one to load.
+    ///
+    /// The rows are counted under `Walking` (invariant 8): there is no phase
+    /// for loading a base, and the walk is what it prepares.
+    fn load_base(
+        &self,
+        meta: &ScanMeta,
+        content_hash: Option<String>,
+        flags: Option<Vec<u8>>,
+        progress: &ScanProgress,
+    ) -> Result<Tree, Fallback> {
+        // No digest is no evidence: every scan this build saved has one. No
+        // flags is no knowledge of what may be copied, and a row this build
+        // wrote always has them.
+        let stored = content_hash.ok_or(Fallback::BaseDamaged)?;
+        let flags =
+            decode_flags(&flags.ok_or(Fallback::BaseDamaged)?).ok_or(Fallback::BaseDamaged)?;
+        let mut digest = digest::Running::read_scan(&self.conn, "main", meta.id)
+            .map_err(|_| Fallback::BaseDamaged)?;
+        let hint = meta.files.saturating_add(meta.dirs);
+        progress.begin_rows(Phase::Walking, hint);
+        let tree = assemble(
+            &self.conn,
+            "main",
+            meta.id,
+            hint,
+            &meta.root,
+            Flags::Sparse(&flags),
+            Some(progress),
+            Some(&mut digest),
+        );
+        progress.begin_rows(Phase::Walking, 0);
+        let tree = tree.map_err(|_| Fallback::BaseDamaged)?;
+        if digest.finish() != stored {
+            return Err(Fallback::BaseDamaged);
+        }
+        Ok(tree)
+    }
+
+    /// How a stored scan's tree was produced.
+    ///
+    /// `None` for a scan this build did not walk — saved before this was
+    /// recorded, imported from another tool, or pushed from another machine,
+    /// whose record is its sender's business and is not carried across.
+    ///
+    /// Also `None` for a record this build cannot read — a reason a newer
+    /// build added — rather than an error: it says nothing this build could
+    /// act on.
+    pub fn rescan_of(&self, scan_id: ScanId) -> Result<Option<RescanKind>> {
+        anyhow::ensure!(self.scan(scan_id)?.is_some(), "no scan with id {scan_id}");
+        Ok(self
+            .rescan_record(scan_id)?
+            .and_then(|record| RescanKind::parse(&record)))
     }
 
     /// Recompute a stored scan's digest and compare it with the one written
@@ -561,7 +756,16 @@ impl Store {
                     Ok((f.max(0) as u64).saturating_add(d.max(0) as u64))
                 },
             )?;
-            let entries = match assemble(&self.conn, "incoming", source_id, hint, &root) {
+            let entries = match assemble(
+                &self.conn,
+                "incoming",
+                source_id,
+                hint,
+                &root,
+                Flags::Unknown,
+                None,
+                None,
+            ) {
                 Ok(tree) => tree.len() as u64,
                 Err(e) => anyhow::bail!(
                     "the snapshot of {root} from {host} is refused: {e}; nothing was imported"
@@ -794,49 +998,162 @@ fn check_incoming_shape(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Who wrote a scan being saved.
+#[derive(Clone, Copy)]
+enum Origin {
+    /// This build walked it.
+    Scanned,
+    /// Another tool exported it (`spacetrace import`).
+    Imported,
+}
+
+/// One scan's row of `rescan_state`, with its scan's `content_hash`; every
+/// field `None` where the scan has no row.
+struct StoredState {
+    content_hash: Option<String>,
+    journal: Option<String>,
+    flags: Option<Vec<u8>>,
+    rescan: Option<String>,
+    digest: Option<String>,
+}
+
+impl StoredState {
+    /// Whether the row matches its own digest. No row is intact — it reads
+    /// as "no cursor" — and so is a row whose scan has no digest to bind it
+    /// to, which `load_base` refuses on its own.
+    fn is_intact(&self) -> bool {
+        let (Some(rescan), Some(stored)) = (&self.rescan, &self.digest) else {
+            return self.rescan.is_none();
+        };
+        let Some(content_hash) = &self.content_hash else {
+            return true;
+        };
+        let flags = self.flags.as_deref().unwrap_or_default();
+        digest::rescan_state(content_hash, self.journal.as_deref(), rescan, flags) == *stored
+    }
+}
+
+/// What `assemble` knows of each entry's `Node::flags`.
+#[derive(Clone, Copy)]
+enum Flags<'a> {
+    /// Nothing: every flag set, the reading that lets a rescan take nothing
+    /// over. Every load but a rescan's base.
+    Unknown,
+    /// The directories with flags, in id order; every other entry has none.
+    Sparse(&'a [(u32, u8)]),
+}
+
+/// One record of the flags blob: a `u32` id and a `u8`, little-endian.
+const FLAG_RECORD: usize = 5;
+
+/// The directories of `tree` whose flags are not zero, as stored in
+/// `rescan_state.flags`.
+///
+/// Directories only, because a file's flags matter only to the directory
+/// above it, whose own flags already carry them rolled up: a rescan copies a
+/// directory only when its flags are zero, and then everything below it is
+/// zero too. On a developer's 1.4 million entries that is 20,794 records
+/// (104 KB) where one byte per entry would be 1.4 MB; on 932,000 entries of
+/// `~/Library`, 1,140.
+fn encode_flags(tree: &Tree) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (id, node) in tree.nodes().iter().enumerate() {
+        if node.is_dir() && node.flags() != 0 {
+            out.extend_from_slice(&(id as u32).to_le_bytes());
+            out.push(node.flags());
+        }
+    }
+    out
+}
+
+/// `encode_flags`, read back; `None` for a blob it did not write — a length
+/// that is not whole records, or ids out of order.
+fn decode_flags(blob: &[u8]) -> Option<Vec<(u32, u8)>> {
+    if blob.len() % FLAG_RECORD != 0 {
+        return None;
+    }
+    let records: Vec<(u32, u8)> = blob
+        .chunks_exact(FLAG_RECORD)
+        .map(|r| (u32::from_le_bytes([r[0], r[1], r[2], r[3]]), r[4]))
+        .collect();
+    records
+        .windows(2)
+        .all(|pair| pair[0].0 < pair[1].0)
+        .then_some(records)
+}
+
 /// Read one scan's rows from `schema` (`main`, or the alias of an ATTACHed
 /// file) and assemble them into a checked tree.
 ///
 /// One function for `load` and for `import_snapshot`, so the check a snapshot
 /// passes on the way in is the same one it passes on every later read.
+#[allow(clippy::too_many_arguments)]
 fn assemble(
     conn: &Connection,
     schema: &str,
     scan_id: ScanId,
     entries_hint: u64,
     root: &str,
+    flags: Flags<'_>,
+    progress: Option<&ScanProgress>,
+    mut digest: Option<&mut digest::Running>,
 ) -> Result<Tree> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT parent_id, name, kind, size, alloc, mtime, nlink, files, dirs,
-                children_start, children_len
-         FROM {schema}.entries WHERE scan_id = ?1 ORDER BY id"
+        "SELECT {} FROM {schema}.entries WHERE scan_id = ?1 ORDER BY id",
+        digest::ENTRY_COLUMNS
     ))?;
+    let mut flagged = match flags {
+        Flags::Unknown => None,
+        Flags::Sparse(records) => Some(records.iter().peekable()),
+    };
+    let mut counter = RowCounter::new(progress);
     // Names are interned into the tree's shared arena as the rows arrive,
     // so the assembler holds the only offsets and no caller can invent one.
     let mut rows = stmt.query([scan_id])?;
     let mut assembler = TreeAssembler::with_capacity(entries_hint.min(MAX_CAPACITY_HINT) as usize);
+    let mut index: u32 = 0;
     while let Some(row) = rows.next()? {
-        let parent: Option<i64> = row.get(0)?;
-        let name: String = row.get(1)?;
-        assembler.push(StoredNode {
-            parent: parent.map_or(Tree::NO_PARENT, |p| p as u32),
-            name: &name,
-            kind: EntryKind::from_u8(row.get::<_, u8>(2)?),
-            size: row.get::<_, i64>(3)? as u64,
-            alloc: row.get::<_, i64>(4)? as u64,
+        counter.tick();
+        let row = digest::EntryRow::from_row(row)?;
+        if let Some(digest) = digest.as_deref_mut() {
+            digest.entry(&row);
+        }
+        let node = StoredNode {
+            parent: row.parent.map_or(Tree::NO_PARENT, |p| p as u32),
+            name: row.name,
+            kind: EntryKind::from_u8(row.kind as u8),
+            size: row.size as u64,
+            alloc: row.alloc as u64,
             // Not stored: a snapshot keeps subtree totals, and the entry's
             // own share of them is only used while a live tree is being
             // edited. Loading one back therefore reports zero here, which
             // is pre-existing behaviour and not introduced by the arena.
             own_size: 0,
             own_alloc: 0,
-            mtime: row.get(5)?,
-            nlink: row.get::<_, i64>(6)? as u32,
-            files: row.get::<_, i64>(7)? as u32,
-            dirs: row.get::<_, i64>(8)? as u32,
-            children_start: row.get::<_, i64>(9)? as u32,
-            children_len: row.get::<_, i64>(10)? as u32,
-        });
+            mtime: row.mtime,
+            nlink: row.nlink as u32,
+            files: row.files as u32,
+            dirs: row.dirs as u32,
+            children_start: row.children_start as u32,
+            children_len: row.children_len as u32,
+        };
+        // Rows arrive in id order and the records are in id order, so one
+        // cursor walks both. Bits this build does not know are kept: a newer
+        // writer's extra reasons not to copy stay reasons not to copy.
+        match flagged.as_mut() {
+            None => assembler.push(node),
+            Some(records) => {
+                let own = records
+                    .next_if(|&&(id, _)| id == index)
+                    .map_or(0, |&(_, f)| f);
+                assembler.push_with_flags(node, own);
+            }
+        }
+        index = index.wrapping_add(1);
+    }
+    // A record for an id the scan does not have is a blob for another tree.
+    if flagged.is_some_and(|mut records| records.next().is_some()) {
+        anyhow::bail!("scan {scan_id}'s flags name entries it does not have");
     }
 
     // Checked rather than trusted: this same code path loads snapshots
@@ -845,6 +1162,50 @@ fn assemble(
     assembler
         .finish(PathBuf::from(root))
         .map_err(|e| anyhow::anyhow!("scan {scan_id} is not a usable tree: {e}"))
+}
+
+/// Counts rows into `ScanProgress::rows_done` a batch at a time.
+///
+/// Per row was one shared atomic increment per row on the hottest loops in
+/// the store; a watcher only needs the number to move (invariant 8), and it
+/// moves thousands of times a second either way. Whatever is left is added
+/// when the counter goes, early return included.
+struct RowCounter<'a> {
+    progress: Option<&'a ScanProgress>,
+    pending: u64,
+}
+
+impl<'a> RowCounter<'a> {
+    const BATCH: u64 = 4096;
+
+    fn new(progress: Option<&'a ScanProgress>) -> Self {
+        RowCounter {
+            progress,
+            pending: 0,
+        }
+    }
+
+    fn tick(&mut self) {
+        self.pending += 1;
+        if self.pending == Self::BATCH {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if let Some(progress) = self.progress {
+            progress
+                .rows_done
+                .fetch_add(self.pending, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.pending = 0;
+    }
+}
+
+impl Drop for RowCounter<'_> {
+    fn drop(&mut self) {
+        self.flush();
+    }
 }
 
 /// Compare the stored digest of one scan against the content beside it.

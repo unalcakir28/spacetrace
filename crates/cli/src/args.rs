@@ -161,6 +161,12 @@ pub struct ScanArgs {
     #[arg(long)]
     pub save: bool,
 
+    /// With --save, read every directory instead of starting from the last
+    /// saved scan of this path (on macOS, a saved scan rereads only what the
+    /// filesystem journal says changed)
+    #[arg(long)]
+    pub full: bool,
+
     /// Label for the stored snapshot (e.g. "weekly")
     #[arg(long, value_name = "TEXT")]
     pub label: Option<String>,

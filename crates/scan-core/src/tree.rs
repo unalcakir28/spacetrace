@@ -48,6 +48,15 @@ pub struct Node {
     name_off: u32,
     name_len: u16,
     pub kind: EntryKind,
+    /// What this subtree holds that a later scan cannot take over unread —
+    /// see [`Node::SHARED`] and its neighbours.
+    ///
+    /// Free in memory: the fields above and below come to 71 bytes, so the
+    /// struct was 72 with one byte of padding before this was added and is
+    /// 72 after. The order the fields are declared in does not matter — Rust
+    /// reorders them to pack — which is why it is one byte of padding and not
+    /// the five a C layout would leave after `kind`.
+    flags: u8,
     /// Logical size of this node's whole subtree (own size for files).
     pub size: u64,
     /// Allocated size of this node's whole subtree.
@@ -66,8 +75,60 @@ pub struct Node {
 }
 
 impl Node {
+    /// Something at or below this entry shares its identity with another
+    /// name: a hardlinked file, a member of an APFS clone family, a file with
+    /// extents shared on btrfs or XFS.
+    ///
+    /// **This is what lets a rescan reuse part of an older tree at all.** The
+    /// arena stores no identity — no inode, no clone id — so a subtree copied
+    /// across from an older scan cannot take part in the accounting that
+    /// charges a shared file once (`Ctx::claim`): a hardlink with one name in
+    /// a copied subtree and one in a re-read one would be charged twice. A
+    /// subtree whose flag is clear holds no such file, and copying it is
+    /// sound; one whose flag is set is read again.
+    pub const SHARED: u8 = 1 << 0;
+    /// The walk recorded an error at or below this entry: a directory it
+    /// could not list, an entry it could not read, a mount that did not
+    /// answer, a directory nested past the depth limit.
+    ///
+    /// The tree keeps no trace of which entries those were, so a subtree with
+    /// an error in it cannot be copied into a later scan without losing the
+    /// error from that scan's count (invariant 7).
+    pub const ERRORS: u8 = 1 << 1;
+    /// At or below this entry is a directory on another device than its
+    /// parent — a mount point.
+    ///
+    /// A filesystem's change journal speaks for that filesystem only, and a
+    /// network mount's speaks for nobody: changes made by another machine
+    /// leave no record here. A volume mounted or unmounted between two scans
+    /// also replaces a directory's contents without a change inside it.
+    pub const MOUNT: u8 = 1 << 2;
+    /// This entry itself is a directory on another device than its parent.
+    ///
+    /// The one bit that is **not** rolled up, because the question it answers
+    /// is about one entry: was *this* directory a mount point when the older
+    /// scan read it? `MOUNT` on an ancestor only says one is somewhere below.
+    /// A rescan that met a directory flagged here, now on its parent's device,
+    /// is looking at the directory a volume used to cover: what the older
+    /// scan holds beneath it is the volume's contents, and must not be
+    /// copied into the directory that has reappeared.
+    pub const MOUNT_POINT: u8 = 1 << 3;
+
+    /// Every flag a directory takes over from what lies below it.
+    const ROLLED_UP: u8 = Node::SHARED | Node::ERRORS | Node::MOUNT;
+
     pub fn is_dir(&self) -> bool {
         self.kind == EntryKind::Dir
+    }
+
+    /// [`Node::SHARED`], [`Node::ERRORS`] and [`Node::MOUNT`], for this entry
+    /// and everything below it; [`Node::MOUNT_POINT`], for this entry alone.
+    ///
+    /// A snapshot does not store them with its entries: a loaded tree has
+    /// every bit set, the reading that copies nothing, except a rescan's base,
+    /// which the store loads with the flags it kept beside the snapshot.
+    pub fn flags(&self) -> u8 {
+        self.flags
     }
 
     pub fn has_parent(&self) -> bool {
@@ -441,6 +502,39 @@ impl Tree {
         Some(removed)
     }
 
+    /// Make a loaded snapshot ready to be copied from by a rescan.
+    ///
+    /// A snapshot stores subtree totals, not each entry's own share of them
+    /// (`own_size` and `own_alloc` load as 0), and the walk builds trees from
+    /// own values. They come back by subtraction — an entry's total less its
+    /// children's — in the one reverse pass the layout allows. Saturating,
+    /// because the totals are only as consistent as the file, and a damaged
+    /// one must give wrong numbers rather than a panic; the caller checks the
+    /// digest before trusting it at all.
+    ///
+    /// The flags are rolled up again in the same pass. They were stored
+    /// rolled up, so on a sound snapshot this changes nothing; on one whose
+    /// directory flags disagree with their contents it errs towards copying
+    /// less.
+    pub(crate) fn prepare_as_base(&mut self) {
+        for node in &mut self.nodes {
+            node.own_size = node.size;
+            node.own_alloc = node.alloc;
+        }
+        for i in (1..self.nodes.len()).rev() {
+            let (size, alloc, flags, parent) = {
+                let n = &self.nodes[i];
+                (n.size, n.alloc, n.flags, n.parent as usize)
+            };
+            let Some(p) = self.nodes.get_mut(parent) else {
+                continue;
+            };
+            p.own_size = p.own_size.saturating_sub(size);
+            p.own_alloc = p.own_alloc.saturating_sub(alloc);
+            p.flags |= flags & Node::ROLLED_UP;
+        }
+    }
+
     /// Resolve a `/`-separated path relative to the root.
     pub fn find(&self, rel: &str) -> Option<NodeId> {
         let mut cur = ROOT;
@@ -460,6 +554,9 @@ pub(crate) struct NewNode<'a> {
     pub(crate) alloc: u64,
     pub(crate) mtime: i64,
     pub(crate) nlink: u32,
+    /// This entry's own [`Node::flags`]; [`TreeBuilder::aggregate`] adds in
+    /// everything below it.
+    pub(crate) flags: u8,
 }
 
 /// Builds the arena, one directory's worth of children at a time.
@@ -504,6 +601,7 @@ impl TreeBuilder {
             own_alloc: entry.alloc,
             mtime: entry.mtime,
             nlink: entry.nlink,
+            flags: entry.flags,
             files: u32::from(entry.kind != EntryKind::Dir),
             dirs: 0,
             children_start: 0,
@@ -567,11 +665,16 @@ impl TreeBuilder {
     /// Roll subtree totals up from the leaves. Relies on the arena layout:
     /// every child has a higher index than its parent, so one reverse pass
     /// reaches a node only after everything below it has been added in.
+    ///
+    /// The flags ride the same pass: a directory's are its own and those of
+    /// everything under it, which is the question a rescan asks of a subtree
+    /// ("may this be copied?") answered once, here, rather than by a descent
+    /// per directory later.
     pub(crate) fn aggregate(&mut self) {
         for i in (1..self.nodes.len()).rev() {
-            let (size, alloc, files, dirs, is_dir) = {
+            let (size, alloc, files, dirs, is_dir, flags) = {
                 let n = &self.nodes[i];
-                (n.size, n.alloc, n.files, n.dirs, n.is_dir())
+                (n.size, n.alloc, n.files, n.dirs, n.is_dir(), n.flags)
             };
             let parent = self.nodes[i].parent as usize;
             let p = &mut self.nodes[parent];
@@ -579,6 +682,17 @@ impl TreeBuilder {
             p.alloc += alloc;
             p.files += files;
             p.dirs += dirs + u32::from(is_dir);
+            p.flags |= flags & Node::ROLLED_UP;
+        }
+    }
+
+    /// Set `flags` on node `id`, before aggregation carries them upward.
+    ///
+    /// For what is learned about a directory after its entry was written —
+    /// an error while listing it, which happens after its parent pushed it.
+    pub(crate) fn mark(&mut self, id: NodeId, flags: u8) {
+        if let Some(node) = self.nodes.get_mut(id as usize) {
+            node.flags |= flags;
         }
     }
 
@@ -825,6 +939,7 @@ impl Tree {
             alloc: root.alloc,
             mtime: root.mtime,
             nlink: root.nlink,
+            flags: IMPORTED_FLAGS,
         });
 
         // An explicit queue rather than a recursive descent, because a nested
@@ -848,6 +963,7 @@ impl Tree {
                     alloc: child.alloc,
                     mtime: child.mtime,
                     nlink: child.nlink,
+                    flags: IMPORTED_FLAGS,
                 }),
             );
             for (index, child) in children.into_iter().enumerate() {
@@ -861,6 +977,14 @@ impl Tree {
         Ok(builder.finish(root_path))
     }
 }
+
+/// What an imported entry is flagged with: everything.
+///
+/// Another tool's export says nothing about identity, errors or mounts, so
+/// nothing in it may be taken over by a rescan. Nothing should be — an
+/// imported snapshot is never a rescan's base — and this is the second reason
+/// it cannot be.
+const IMPORTED_FLAGS: u8 = Node::SHARED | Node::ERRORS | Node::MOUNT | Node::MOUNT_POINT;
 
 /// Whether a name arena of `len` bytes can be addressed by `u32` offsets.
 fn names_fit(len: usize) -> Result<(), TreeError> {
@@ -935,7 +1059,19 @@ impl TreeAssembler {
         }
     }
 
+    /// Add one row whose [`Node::flags`] are not known, which is every row of
+    /// a snapshot loaded for any purpose but a rescan's base. They come back
+    /// with every flag set: the reading that lets nothing be taken over
+    /// unread.
     pub fn push(&mut self, row: StoredNode<'_>) {
+        self.push_with_flags(row, IMPORTED_FLAGS);
+    }
+
+    /// Add one row together with the [`Node::flags`] stored beside it.
+    ///
+    /// A separate call rather than a field of [`StoredNode`], which callers
+    /// outside this repository build by name.
+    pub fn push_with_flags(&mut self, row: StoredNode<'_>, flags: u8) {
         let (name_off, name_len) = intern(&mut self.names, row.name);
         self.nodes.push(Node {
             parent: row.parent,
@@ -948,6 +1084,7 @@ impl TreeAssembler {
             own_alloc: row.own_alloc,
             mtime: row.mtime,
             nlink: row.nlink,
+            flags,
             files: row.files,
             dirs: row.dirs,
             children_start: row.children_start,
@@ -1067,6 +1204,7 @@ mod tests {
             alloc: size,
             mtime: 0,
             nlink: 1,
+            flags: 0,
         }
     }
 
@@ -1078,6 +1216,7 @@ mod tests {
             alloc: 0,
             mtime: 0,
             nlink: 1,
+            flags: 0,
         }
     }
 
@@ -1306,5 +1445,73 @@ mod tests {
         let tree = builder.finish(PathBuf::from("/synthetic"));
         assert_eq!(tree.node(root).children_len, 1);
         assert_eq!(Tree::check(tree.nodes()), Ok(()));
+    }
+
+    /// The flag byte was added on the claim that it costs nothing: 106 bytes
+    /// per entry live, of which `Node` is 72, is the figure the memory notes
+    /// rest on. Growing it to 80 would be 8 bytes on every entry of every
+    /// tree, which is a decision and not a side effect.
+    #[test]
+    fn a_node_is_still_72_bytes() {
+        assert_eq!(std::mem::size_of::<Node>(), 72);
+    }
+
+    /// A flag set on one entry reaches every ancestor and nothing else. A
+    /// sibling subtree must stay clear, or a rescan could copy nothing at all.
+    #[test]
+    fn a_flag_rolls_up_to_every_ancestor_and_no_further() {
+        let mut builder = TreeBuilder::with_capacity(8);
+        let root = builder.push_root(dir("root"));
+        let top = builder.push_block(root, [dir("linked"), dir("clean")].into_iter());
+        let (linked, clean) = (top, top + 1);
+        let deep = builder.push_block(linked, [dir("deep")].into_iter());
+        let mut shared = file("x", 1);
+        shared.flags = Node::SHARED;
+        builder.push_block(deep, [shared, file("plain", 1)].into_iter());
+        builder.push_block(clean, [file("a", 1)].into_iter());
+        builder.mark(clean, Node::ERRORS);
+
+        let tree = builder.finish(PathBuf::from("/synthetic"));
+        let flags = |path: &str| tree.node(tree.find(path).unwrap()).flags();
+
+        assert_eq!(flags("linked/deep/x"), Node::SHARED);
+        assert_eq!(flags("linked/deep/plain"), 0, "a sibling file stays clear");
+        assert_eq!(flags("linked/deep"), Node::SHARED);
+        assert_eq!(flags("linked"), Node::SHARED);
+        assert_eq!(flags("clean"), Node::ERRORS, "marked after its entry");
+        assert_eq!(
+            flags("clean/a"),
+            0,
+            "marking a directory is not its children"
+        );
+        assert_eq!(flags(""), Node::SHARED | Node::ERRORS, "the root sees both");
+    }
+
+    /// A row read back without its flags — a snapshot from before they were
+    /// stored — must not read as "nothing shared here": that is the one value
+    /// that would let a rescan copy it.
+    #[test]
+    fn a_row_without_stored_flags_comes_back_with_all_of_them() {
+        let mut assembler = TreeAssembler::with_capacity(1);
+        assembler.push(StoredNode {
+            parent: NO_PARENT,
+            name: "root",
+            kind: EntryKind::Dir,
+            size: 0,
+            alloc: 0,
+            own_size: 0,
+            own_alloc: 0,
+            mtime: 0,
+            nlink: 1,
+            files: 0,
+            dirs: 0,
+            children_start: 0,
+            children_len: 0,
+        });
+        let tree = assembler.finish(PathBuf::from("/synthetic")).unwrap();
+        assert_eq!(
+            tree.node(ROOT).flags(),
+            Node::SHARED | Node::ERRORS | Node::MOUNT | Node::MOUNT_POINT
+        );
     }
 }

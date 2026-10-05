@@ -12,7 +12,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use spacetrace_scan_core::{scan, Phase, ScanProgress, StallWatch, STALL_GRACE};
+use spacetrace_scan_core::{
+    rescan, stored_root, Phase, RescanKind, ScanProgress, StallWatch, STALL_GRACE,
+};
 use spacetrace_store::{ScanId, ScanMeta, Store};
 
 use crate::config::{Config, RootConfig};
@@ -35,6 +37,10 @@ pub struct ScanOutcome {
     pub dirs: u64,
     pub errors: u64,
     pub duration_ms: u64,
+    /// How the scan was made. Serialised as the word the snapshot stores:
+    /// `full`, `incremental`, or `fallback:<reason>`.
+    #[serde(serialize_with = "as_record")]
+    pub rescan: RescanKind,
     /// Snapshots dropped by this root's retention policy after saving.
     pub pruned: usize,
 }
@@ -76,7 +82,8 @@ pub struct InFlight {
     pub rows_done: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows_total: Option<u64>,
-    /// `walking`, `finishing`, `saving` or `checksumming`. Each phase moves a
+    /// `walking`, `finishing` or `saving` (`checksumming` from an older
+    /// agent, which read the rows back after writing them). Each phase moves a
     /// different counter — while the snapshot is being written only
     /// `rows_done` does — so a reader who does not know the phase reads a
     /// healthy scan as a stuck one.
@@ -364,14 +371,25 @@ impl Runner {
         let mut options = root.scan_options();
         options.expected_entries = self.entry_count_hint(&root.path);
 
-        let (tree, stats) = scan(&root.path, options, Arc::clone(&progress))
+        // The previous snapshot of this root is also where an incremental
+        // scan starts. It is offered, not imposed: the scanner decides
+        // whether the journal can vouch for everything since, and falls back
+        // to a full scan — recorded in the snapshot — when it cannot.
+        let mut store = self.open_store()?;
+        let base = if root.incremental {
+            store
+                .rescan_base(&stored_name(&root.path), &self.host)
+                .with_context(|| format!("reading the last scan of {}", root.path.display()))?
+        } else {
+            None
+        };
+        let (tree, stats) = rescan(&root.path, options, Arc::clone(&progress), base)
             .with_context(|| format!("scanning {}", root.path.display()))?;
 
         // The same progress object the claim registered, so `/status` keeps
         // answering while the tree is being written. On a big root that is
         // seconds of work, and without this the agent reports a scan with
         // every counter stopped (invariant 8).
-        let mut store = self.open_store()?;
         let scan_id = store
             .save_reporting(&tree, &stats, &self.host, root.label.as_deref(), &progress)
             .with_context(|| format!("saving snapshot of {}", root.path.display()))?;
@@ -401,6 +419,7 @@ impl Runner {
             dirs: stats.dirs,
             errors: stats.errors,
             duration_ms: stats.duration_ms,
+            rescan: stats.rescan.kind(),
             pruned,
         })
     }
@@ -472,14 +491,13 @@ impl Runner {
     }
 }
 
-/// The name the scanner stores a root under: its canonical path, or the path
-/// as given when that cannot be resolved. The same expression `scan` uses, so
-/// the two cannot disagree about which rows belong to a root.
+fn as_record<S: serde::Serializer>(kind: &RescanKind, out: S) -> Result<S::Ok, S::Error> {
+    out.serialize_str(&kind.record())
+}
+
+/// The name the scanner stores a root under ([`stored_root`]), as text.
 fn stored_name(root: &Path) -> String {
-    root.canonicalize()
-        .unwrap_or_else(|_| root.to_path_buf())
-        .to_string_lossy()
-        .into_owned()
+    stored_root(root).to_string_lossy().into_owned()
 }
 
 /// The phase as `/status` names it.
@@ -631,6 +649,44 @@ mod tests {
         let scans = runner.list_scans().unwrap();
         assert_eq!(scans.len(), 1);
         assert_eq!(scans[0].id, outcome.scan_id);
+    }
+
+    /// The next scan of a root starts from the last one, the snapshot says
+    /// so, and `incremental = false` turns it off.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_scheduled_rescan_starts_from_the_last_snapshot_unless_told_not_to() {
+        let dir = fixture();
+        let home = tempfile::tempdir().unwrap();
+        let db = home.path().join("db.sqlite");
+        let mut cfg = config_for(dir.path(), &db);
+        cfg.roots[0].keep = None;
+        let runner = Runner::new(&cfg);
+
+        let first = runner.scan_root(&cfg.roots[0]).unwrap();
+        assert_eq!(first.rescan, RescanKind::Full, "nothing to start from");
+        fs::write(dir.path().join("sub/c.txt"), b"new").unwrap();
+
+        // A replay past its budget is the machine's load, not the subject
+        // here; its snapshot is a full one, and the next scan starts from it.
+        let deadline = RescanKind::Fallback(spacetrace_scan_core::Fallback::Deadline);
+        let second = (0..5)
+            .map(|_| runner.scan_root(&cfg.roots[0]).unwrap())
+            .find(|o| o.rescan != deadline)
+            .expect("five replays in a row outlasted their budget");
+        assert_eq!(second.rescan, RescanKind::Incremental);
+        assert_eq!(second.files, 3);
+        let store = runner.open_store().unwrap();
+        assert_eq!(
+            store.rescan_of(second.scan_id).unwrap(),
+            Some(RescanKind::Incremental)
+        );
+
+        let mut full = cfg.roots[0].clone();
+        full.incremental = false;
+        let third = runner.scan_root(&full).unwrap();
+        assert_eq!(third.rescan, RescanKind::Full);
+        assert_eq!(third.files, 3);
     }
 
     #[test]

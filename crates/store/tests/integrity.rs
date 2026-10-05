@@ -587,6 +587,36 @@ fn a_bad_snapshot_is_refused_without_waiting_for_the_write_lock() {
     writer.execute_batch("ROLLBACK").unwrap();
 }
 
+/// The digest the save computes from the values it binds is the one every
+/// reader computes from the rows: `verify` reads them back through
+/// `digest::of`, the save hashed them in its insert loop. Every kind of value
+/// the encoding tells apart is here: a label and none, a capacity and none, a
+/// name outside ASCII, a link count above one, an empty directory.
+#[test]
+fn the_digest_written_while_saving_is_the_one_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("çağ/empty")).unwrap();
+    fs::write(dir.path().join("çağ/ünïcode.txt"), b"x").unwrap();
+    fs::write(dir.path().join("a"), vec![1u8; 5000]).unwrap();
+    fs::hard_link(dir.path().join("a"), dir.path().join("çağ/b")).unwrap();
+    let (tree, stats) = scan_fixture(&dir);
+    assert!(
+        stats.capacity.is_some(),
+        "the fixture measures its filesystem"
+    );
+    let work = tempfile::tempdir().unwrap();
+    let mut store = Store::open(work.path().join("db.sqlite")).unwrap();
+
+    let without_capacity = spacetrace_scan_core::ScanStats {
+        capacity: None,
+        ..stats.clone()
+    };
+    for (stats, label) in [(&stats, Some("weekly")), (&without_capacity, None)] {
+        let id = store.save(&tree, stats, "host", label).unwrap();
+        assert_eq!(store.verify(id).unwrap(), Integrity::Intact, "{label:?}");
+    }
+}
+
 /// Write the digest the current content hashes to, as a forger would.
 fn reseal(path: &std::path::Path, id: ScanId) {
     let store = Store::open(path).unwrap();

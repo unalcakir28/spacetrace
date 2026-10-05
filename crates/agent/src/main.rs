@@ -63,6 +63,10 @@ struct ScanArgs {
     /// Scan only this root (must be listed in the config)
     #[arg(long, value_name = "PATH")]
     root: Option<PathBuf>,
+
+    /// Read every root in full, even where `incremental` is on
+    #[arg(long)]
+    full: bool,
 }
 
 #[derive(Args, Debug)]
@@ -178,7 +182,7 @@ fn cmd_check(config: &Config, runner: &Runner) -> Result<()> {
 }
 
 fn cmd_scan(config: &Config, runner: &Runner, args: &ScanArgs) -> Result<()> {
-    let targets: Vec<_> = match &args.root {
+    let mut targets: Vec<_> = match &args.root {
         Some(path) => {
             let root = runner
                 .configured_root(path)
@@ -188,18 +192,22 @@ fn cmd_scan(config: &Config, runner: &Runner, args: &ScanArgs) -> Result<()> {
         None => config.roots.clone(),
     };
     anyhow::ensure!(!targets.is_empty(), "no roots configured to scan");
+    for root in &mut targets {
+        root.incremental &= !args.full;
+    }
 
     let mut failures = 0;
     for root in &targets {
         match runner.scan_root(root) {
             Ok(o) => println!(
-                "{}  snapshot #{}  {} files  {} dirs  {} errors  {} ms{}",
+                "{}  snapshot #{}  {} files  {} dirs  {} errors  {} ms  {}{}",
                 o.root,
                 o.scan_id,
                 o.files,
                 o.dirs,
                 o.errors,
                 o.duration_ms,
+                o.rescan,
                 if o.pruned > 0 {
                     format!("  ({} pruned)", o.pruned)
                 } else {

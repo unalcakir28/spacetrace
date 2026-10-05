@@ -72,6 +72,14 @@ scan slow, while giving up too early drops an entire volume out of a total
 that claims to be complete. Waiting is no longer silent either — `/status`
 reports the stall and the directory it is waiting on.
 
+On macOS, a scheduled scan starts from the root's last snapshot and rereads
+only what FSEvents says changed since (`incremental`, on by default). Any doubt
+— a lost journal, changed options, a replay that would take longer than the
+last full scan did — means a full scan instead. Each snapshot records which it
+was in a side table, `rescan_state`, that stays on the agent: `full`,
+`incremental`, or `fallback:<reason>`. The schema version does not change, and
+a pushed snapshot carries none of it.
+
 Then check what it will do before starting it:
 
 ```bash
@@ -118,6 +126,7 @@ failing silently.
 | `roots[].threads` | `min(cores, 6)` | Threads to walk this root with |
 | `roots[].mount_timeout` | `60` | Seconds a mounted filesystem under this root gets to answer before it is recorded as unreadable; `0` waits forever |
 | `roots[].keep` | — | Snapshots of this root to retain; unset keeps all |
+| `roots[].incremental` | `true` | Start from this root's last snapshot and reread only what the filesystem journal says changed. macOS (APFS) only; elsewhere every scan is full. `spacetrace-agent scan --full` overrides it for one run |
 
 The token is resolved in this order: `server.token`, `server.token_file`, then
 the `SPACETRACE_TOKEN` environment variable. `serve` refuses to start without
@@ -305,10 +314,11 @@ because a path alone cannot answer the question the endpoint is opened for:
 
 Three fields are worth knowing:
 
-- **`phase`** is `walking`, `finishing`, `saving` or `checksumming`. After
-  the walk ends `files` stops moving and `rows_done` (of `rows_total`, both
-  absent while walking) moves instead — through the clone and shared-extent
-  settlement, the write and the digest — so a reader who watches `files`
+- **`phase`** is `walking`, `finishing` or `saving`; an older agent also
+  reports `checksumming`, a second pass the save now does while writing.
+  After the walk ends `files` stops moving and `rows_done` (of `rows_total`,
+  both absent while walking) moves instead — through the clone and
+  shared-extent settlement and the write — so a reader who watches `files`
   alone reads a healthy scan as a stuck one. On 412,983 entries the save
   alone took 571 ms after a 753 ms walk. `clones_probed` moves only on the
   slow macOS listing path.

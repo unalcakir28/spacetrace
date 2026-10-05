@@ -19,6 +19,11 @@
 //! 100,000 back 29.9 ms, 1,000,000 back 835 ms, and the whole history 19.4 s.
 //! The last one is the shape of the failure — far past the point where walking
 //! everything is cheaper, and reported by not finishing rather than by a flag.
+//!
+//! The scanner's own reader is `src/fsevents.rs`, which grew out of this and
+//! is crate-private, so this keeps its own bindings: it is the experiment that
+//! decided the design, kept runnable so the numbers above can be taken again.
+//! A change in what FSEvents reports belongs in `fsevents.rs` and its tests.
 
 #[cfg(not(target_os = "macos"))]
 fn main() {

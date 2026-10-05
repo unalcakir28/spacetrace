@@ -66,6 +66,11 @@ impl Mounts {
         Mounts { points, parents }
     }
 
+    /// Every mount point in the table.
+    pub(crate) fn points(&self) -> impl Iterator<Item = &Path> {
+        self.points.iter().map(PathBuf::as_path)
+    }
+
     /// Whether anything mounted lives directly inside `dir`.
     ///
     /// Asked once per directory the walk lists. When it is false — the

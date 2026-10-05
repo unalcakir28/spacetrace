@@ -17,24 +17,30 @@ mod bulk;
 mod capacity;
 mod clones;
 mod extents;
+#[cfg(target_os = "macos")]
+mod fsevents;
+mod journal;
 mod meta;
 mod mounts;
 // Only Windows reads a volume; everywhere else the parser runs in the tests.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod ntfs;
 mod partial;
+mod rescan;
 mod scan;
 mod timeout;
 mod tree;
 
 pub use age::{age_profile, age_profile_at, median_bands, AgeBucket, AgeProfile, DEFAULT_EDGES};
 pub use capacity::{capacity_of, Capacity};
+pub use journal::{Fallback, Incremental, Rescan, RescanKind};
 pub use meta::{EntryKind, FileIdentity, RawMeta};
 pub use mounts::Mounts;
 pub use partial::PartialTree;
+pub use rescan::{Base, LoadBase};
 pub use scan::{
-    probe_mount, scan, scan_with_hardlinks, LinkedName, Phase, ScanOptions, ScanProgress,
-    ScanStats, StallWatch, MAX_CAPACITY_HINT, MOUNT_TIMEOUT, STALL_GRACE,
+    probe_mount, rescan, scan, scan_with_hardlinks, stored_root, LinkedName, Phase, ScanOptions,
+    ScanProgress, ScanStats, StallWatch, MAX_CAPACITY_HINT, MOUNT_TIMEOUT, STALL_GRACE,
 };
 pub use timeout::with_deadline;
 pub use tree::{

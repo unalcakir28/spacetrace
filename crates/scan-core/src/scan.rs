@@ -9,11 +9,13 @@ use rayon::prelude::*;
 use crate::capacity::Capacity;
 use crate::clones::Families;
 use crate::extents::{Claims, Deferred, FsKind, Mapped, Volume, Volumes};
+use crate::journal::Rescan;
 use crate::meta::{display_name, EntryKind, FileIdentity, NamedMeta, RawMeta};
 use crate::mounts::Mounts;
 use crate::ntfs::Table;
 use crate::partial::PartialTree;
-use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
+use crate::rescan::{At, Base, Next, Plan, Splice};
+use crate::tree::{NewNode, Node, NodeId, Tree, TreeBuilder};
 
 /// How many failing paths we keep for the report before we only count them.
 pub(crate) const MAX_REPORTED_ERRORS: usize = 64;
@@ -174,10 +176,11 @@ pub enum Phase {
     Saving,
     /// Reading those rows back to compute the snapshot's content hash.
     ///
-    /// A second pass over the same rows, and a deliberate one: the stored
-    /// digest has to come from the same function every reader uses, or it
-    /// eventually disagrees with them about some field and a healthy snapshot
-    /// reports itself corrupt.
+    /// **No longer entered.** The save hashes each row as it binds it, in
+    /// `Saving`, through the same encoder every reader uses — which is what
+    /// the second pass existed to guarantee. Kept because it is public: the
+    /// desktop app matches on it and the agent's `/status` names it, and an
+    /// older agent still reports it.
     Checksumming,
 }
 
@@ -212,7 +215,7 @@ pub const STALL_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 /// that assembled its own tuple would go on ignoring the new one and report a
 /// healthy phase as a stall.
 pub struct StallWatch {
-    counters: [u64; 6],
+    counters: [u64; 7],
     /// When these values were **first** seen — not the second sighting. The
     /// counters stopped somewhere between the two, and the first is the
     /// earliest moment they are known to have been still already.
@@ -225,7 +228,7 @@ impl StallWatch {
     /// blocked on its own root — is still reported.
     pub fn new(now: std::time::Instant, grace: std::time::Duration) -> Self {
         StallWatch {
-            counters: [0; 6],
+            counters: [0; 7],
             since: now,
             grace,
         }
@@ -245,6 +248,7 @@ impl StallWatch {
             progress.errors.load(Ordering::Relaxed),
             progress.clones_probed.load(Ordering::Relaxed),
             progress.rows_done.load(Ordering::Relaxed),
+            progress.journal_ms.load(Ordering::Relaxed),
         ];
         if counters != self.counters {
             self.counters = counters;
@@ -261,6 +265,10 @@ impl StallWatch {
 /// Live counters a UI can poll while a scan runs, and the switch that stops it.
 #[derive(Debug, Default)]
 pub struct ScanProgress {
+    /// Every phase entered, in order: what a test reads to hold the phases
+    /// to running forwards only.
+    #[cfg(test)]
+    pub(crate) phases_seen: Mutex<Vec<Phase>>,
     pub files: AtomicU64,
     pub dirs: AtomicU64,
     pub bytes: AtomicU64,
@@ -297,6 +305,17 @@ pub struct ScanProgress {
     phase: AtomicU8,
     /// Set by [`ScanProgress::cancel`] and read once per directory.
     cancelled: AtomicBool,
+    /// Milliseconds spent waiting on the filesystem's change journal, at the
+    /// start of an incremental rescan.
+    ///
+    /// A clock rather than a count of something, deliberately: FSEvents reads
+    /// its log from the cursor onwards and filters by path itself, so a
+    /// replay through a busy day's log under a quiet root delivers nothing
+    /// for as long as it takes, and no count would move. The wait is bounded
+    /// by its budget (the last full scan's duration), so a moving clock here
+    /// truthfully says "waiting on something that will end", which is the
+    /// question a watcher asks (invariant 8).
+    pub journal_ms: AtomicU64,
     /// The arena the walk is filling, so a caller can read the tree as it
     /// stands rather than waiting for the whole disk.
     ///
@@ -346,6 +365,11 @@ impl ScanProgress {
     }
 
     fn enter_phase(&self, phase: Phase) {
+        #[cfg(test)]
+        self.phases_seen
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(phase);
         self.phase.store(phase as u8, Ordering::Relaxed);
     }
 
@@ -482,6 +506,16 @@ pub struct ScanStats {
     /// does it fill up". `None` means the platform could not answer, which is
     /// not an error.
     pub capacity: Option<Capacity>,
+    /// Where the next scan of this root can ask the filesystem's change
+    /// journal to start from, stored with the snapshot as it is.
+    ///
+    /// `None` where there is no journal to trust: a platform this crate has
+    /// none for yet, a filesystem other than APFS, a volume without history.
+    /// Opaque on purpose — the store keeps it and hands it back, and only
+    /// this crate reads it.
+    pub journal: Option<String>,
+    /// Whether this tree was read in full or built from the previous one.
+    pub rescan: crate::journal::Rescan,
 }
 
 /// How the walk asks a mount point whether it is alive.
@@ -533,6 +567,13 @@ struct Ctx {
     files_unmapped: AtomicU64,
     unseen_sharing: AtomicBool,
     errors: Mutex<Vec<(PathBuf, String)>>,
+    /// The directories those errors were met in, flagged [`Node::ERRORS`]
+    /// once the walk is over. Rare enough that a list beats a lock on the
+    /// arena per error.
+    errored: Mutex<Vec<NodeId>>,
+    /// The previous snapshot and the changes since it, when this scan is
+    /// rebuilding rather than reading everything.
+    splice: Option<Splice>,
     progress: Arc<ScanProgress>,
     /// Every hardlinked name met, for [`scan_with_hardlinks`]; `None` for a
     /// scan that did not ask.
@@ -576,9 +617,10 @@ impl Ctx {
     /// metadata could not be read is dropped, and the walk carries on with its
     /// siblings — which is the whole point, since today one dead mount takes
     /// the rest of its directory down with it.
-    fn note_unreachable_mount(&self, path: &Path) {
+    fn note_unreachable_mount(&self, at: NodeId, path: &Path) {
         let limit = self.opts.mount_timeout.unwrap_or(MOUNT_TIMEOUT);
         self.note_error(
+            at,
             path,
             &std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
@@ -592,10 +634,12 @@ impl Ctx {
 
     /// Records of the volume's table that were in use and could not be read.
     /// Each is a file missing from the scan, so each is an error (invariant
-    /// 7); with no path to name, the record number stands in for one.
-    fn note_unreadable_records(&self, root: &Path, table: &Table) {
+    /// 7); with no path to name, the record number stands in for one, and
+    /// with no directory to name, the root (`at`) is the one marked.
+    fn note_unreadable_records(&self, at: NodeId, root: &Path, table: &Table) {
         for record in &table.bad_records {
             self.note_error(
+                at,
                 &root.join(format!("<MFT record {record}>")),
                 &std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -608,12 +652,24 @@ impl Ctx {
         self.count_errors(table.bad_count - table.bad_records.len() as u64);
     }
 
-    fn note_error(&self, path: &Path, err: &std::io::Error) {
+    /// Count an error met while listing directory `at` — or, for the root,
+    /// while reading the root itself.
+    ///
+    /// The node is the directory, not the entry, even when one entry is what
+    /// failed: an entry that could not be read is not in the tree at all, and
+    /// it is the directory whose listing came out incomplete.
+    fn note_error(&self, at: NodeId, path: &Path, err: &std::io::Error) {
         self.count_errors(1);
-        let mut guard = self.errors.lock().unwrap();
-        if guard.len() < MAX_REPORTED_ERRORS {
-            guard.push((path.to_path_buf(), err.to_string()));
+        {
+            let mut guard = self.errors.lock().unwrap();
+            if guard.len() < MAX_REPORTED_ERRORS {
+                guard.push((path.to_path_buf(), err.to_string()));
+            }
         }
+        self.errored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(at);
     }
 
     /// The one place the error counter moves.
@@ -1036,8 +1092,7 @@ pub fn scan(
     opts: ScanOptions,
     progress: Arc<ScanProgress>,
 ) -> std::io::Result<(Tree, ScanStats)> {
-    let mounts = mounts_for(&opts);
-    scan_with(root, opts, progress, mounts, probe_mount, Source::Volume)
+    rescan(root, opts, progress, None)
 }
 
 /// One name of a hardlinked file, as a walk met it: the node it is in the
@@ -1076,6 +1131,7 @@ pub fn scan_with_hardlinks(
         mounts,
         probe_mount,
         Source::Volume,
+        None,
         true,
     )
 }
@@ -1088,6 +1144,47 @@ fn mounts_for(opts: &ScanOptions) -> Mounts {
         Some(_) => Mounts::read(),
         None => Mounts::none(),
     }
+}
+
+/// [`scan`], building on the previous snapshot of the same root where the
+/// volume's change journal can say what changed since.
+///
+/// Gives the same tree a full scan of the same filesystem would — that is
+/// the whole contract, and the tests hold it to the snapshot digest — and
+/// falls back to a full scan, silently but recorded in
+/// [`ScanStats::rescan`], whenever it cannot be sure: no journal, another
+/// volume, a replay slower than the last full scan, lost events, a base
+/// that is imported, damaged or scanned with other options. `base` is
+/// `None` for a first scan, or when a full one is wanted.
+///
+/// **macOS only, for now**: FSEvents on APFS. Elsewhere this is [`scan`],
+/// and `base.load` is never called.
+pub fn rescan(
+    root: impl AsRef<Path>,
+    opts: ScanOptions,
+    progress: Arc<ScanProgress>,
+    base: Option<Base<'_>>,
+) -> std::io::Result<(Tree, ScanStats)> {
+    let mounts = mounts_for(&opts);
+    scan_with(
+        root,
+        opts,
+        progress,
+        mounts,
+        probe_mount,
+        Source::Volume,
+        base,
+    )
+}
+
+/// The path a scan of `root` is recorded under: canonical, or as given when
+/// it cannot be resolved.
+///
+/// One function because every caller that looks a root up in the store —
+/// the size hint, the rescan base, the agent's record of each root — has to
+/// name it exactly as the scan did, or it finds no rows and says nothing.
+pub fn stored_root(root: &Path) -> PathBuf {
+    root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
 }
 
 /// Where the entries below a directory root come from.
@@ -1111,7 +1208,15 @@ pub(crate) fn scan_source(
     source: Source,
 ) -> std::io::Result<(Tree, ScanStats)> {
     let progress = Arc::new(ScanProgress::default());
-    scan_with(root, opts, progress, Mounts::none(), probe_mount, source)
+    scan_with(
+        root,
+        opts,
+        progress,
+        Mounts::none(),
+        probe_mount,
+        source,
+        None,
+    )
 }
 
 /// `scan`, with the mount table, the probe and the source of entries
@@ -1127,13 +1232,16 @@ pub(crate) fn scan_with(
     mounts: Mounts,
     probe: Probe,
     source: Source,
+    base: Option<Base<'_>>,
 ) -> std::io::Result<(Tree, ScanStats)> {
-    let (tree, stats, _) = scan_recording(root, opts, progress, mounts, probe, source, false)?;
+    let (tree, stats, _) =
+        scan_recording(root, opts, progress, mounts, probe, source, base, false)?;
     Ok((tree, stats))
 }
 
 /// [`scan_with`], also returning every hardlinked name it met when `record`
 /// is set: [`scan_with_hardlinks`]'s.
+#[allow(clippy::too_many_arguments)]
 fn scan_recording(
     root: impl AsRef<Path>,
     opts: ScanOptions,
@@ -1141,11 +1249,12 @@ fn scan_recording(
     mounts: Mounts,
     probe: Probe,
     source: Source,
+    base: Option<Base<'_>>,
     record: bool,
 ) -> std::io::Result<(Tree, ScanStats, Vec<LinkedName>)> {
     let started = std::time::Instant::now();
     let root = root.as_ref();
-    let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root_path = stored_root(root);
 
     // Built before `opts` moves into the context below.
     let pool = walk_pool(opts.threads)?;
@@ -1157,11 +1266,51 @@ fn scan_recording(
         &root_md,
         identity_needed(&opts, root_md.is_dir()),
     );
+    // Before the walk reads anything: every change from here on gets a later
+    // position, so the next scan replays it even if this walk saw it too.
+    // Before the replay too, for the same reason — the replay reads up to the
+    // present, and anything it misses after this point is the next scan's.
+    let journal = crate::journal::system();
+    let cursor = crate::journal::take(journal, &root_path, &root_meta, &opts);
+    let plan = match base {
+        Some(base) if root_meta.kind == EntryKind::Dir => {
+            // The walk's own table where it read one. With the protection
+            // off it did not, and whether a volume is mounted under the root
+            // still decides what may be copied.
+            let read_now;
+            let mounted = if opts.mount_timeout.is_some() {
+                &mounts
+            } else {
+                read_now = Mounts::read();
+                &read_now
+            };
+            let now = journal.zip(cursor.as_ref());
+            crate::rescan::plan(&root_path, now, base, &progress, mounted)
+                .map_err(|()| cancelled())?
+        }
+        _ => Plan::Full(Rescan::Full),
+    };
+    // What a full scan of this root costs, for the next replay's budget:
+    // the walk and what follows it, not the replay or base load a fallback
+    // spent before deciding to walk.
+    let walk_started = std::time::Instant::now();
+    let (splice, mut rescan, full_ms) = match plan {
+        Plan::Full(kind) => (None, kind, None),
+        Plan::Incremental {
+            splice,
+            report,
+            full_ms,
+        } => (Some(*splice), Rescan::Incremental(report), Some(full_ms)),
+    };
 
     // The arena exists before the walk does, because the walk writes into it.
     // Its capacity is a guess unless the caller has one: see
-    // `ScanOptions::expected_entries`.
-    let mut builder = TreeBuilder::with_capacity(arena_capacity(opts.expected_entries));
+    // `ScanOptions::expected_entries`. A rescan has the best guess there is.
+    let hint = match &splice {
+        Some(splice) => Some(splice.base_len()),
+        None => opts.expected_entries,
+    };
+    let mut builder = TreeBuilder::with_capacity(arena_capacity(hint));
     let root_name = display_name(&root_path);
     let root_id = builder.push_root(NewNode {
         name: &root_name,
@@ -1174,6 +1323,10 @@ fn scan_recording(
         alloc: root_meta.alloc,
         mtime: root_meta.mtime,
         nlink: 1,
+        // A root that is itself a shared file is a one-node tree with
+        // nothing to reuse; and a root's own device is the one every mount
+        // below it is told apart from, so it is never a mount itself here.
+        flags: 0,
     });
 
     // Handed over before the walk starts, because from here on the arena is
@@ -1199,21 +1352,26 @@ fn scan_recording(
         files_unmapped: AtomicU64::new(0),
         unseen_sharing: AtomicBool::new(false),
         errors: Mutex::new(Vec::new()),
+        errored: Mutex::new(Vec::new()),
+        splice,
         progress: Arc::clone(&progress),
         links: (record && dedupes_hardlinks).then(|| Mutex::new(Vec::new())),
     };
     if let Some(e) = root_failure {
-        ctx.note_error(&root_path, &e);
+        ctx.note_error(root_id, &root_path, &e);
     }
 
     if root_meta.kind == EntryKind::Dir {
         progress.dirs.fetch_add(1, Ordering::Relaxed);
         match table_for(&root_path, &ctx, source) {
             Some((table, root)) => {
-                ctx.note_unreadable_records(&root_path, &table);
+                ctx.note_unreadable_records(root_id, &root_path, &table);
                 from_table(&table, root, &root_path, root_id, &ctx);
             }
-            None => pool.install(|| walk(&root_path, root_id, 1, root_meta.dev, None, &ctx)),
+            None => {
+                let at = ctx.splice.as_ref().map(Splice::root);
+                pool.install(|| walk(&root_path, root_id, 1, root_meta.dev, None, &ctx, at));
+            }
         }
     } else {
         progress.files.fetch_add(1, Ordering::Relaxed);
@@ -1231,12 +1389,31 @@ fn scan_recording(
     // exact nodes, and once they are gone a snapshot answers `None` — which is
     // what a refresh still in flight has to be told.
     let mut builder = progress.partial.take();
+    // The subtrees a rescan takes over unread, before anything that orders
+    // entries by path looks at the arena — and still under `Walking`, which
+    // is what it stands in for: the phase only runs forwards.
+    if let (Some(splice), Rescan::Incremental(report)) = (&ctx.splice, &mut rescan) {
+        report.entries_reused = splice
+            .copy_into(&mut builder, &progress)
+            .ok_or_else(cancelled)?;
+        report.dirs_listed = splice.dirs_listed.load(Ordering::Relaxed);
+    }
     progress.enter_phase(Phase::Finishing);
+    for &dir in ctx
+        .errored
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+    {
+        builder.mark(dir, Node::ERRORS);
+    }
     // Before `finish`, whose aggregation then carries what it adds up the
     // tree like any other leaf value.
     ctx.settle_shared(&mut builder)?;
     ctx.settle_clones(&mut builder)?;
     let tree = builder.finish(root_path);
+    let duration_ms = started.elapsed().as_millis() as u64;
+    let walk_ms = walk_started.elapsed().as_millis() as u64;
 
     let stats = ScanStats {
         files: progress.files.load(Ordering::Relaxed),
@@ -1250,10 +1427,20 @@ fn scan_recording(
         files_unmapped: ctx.files_unmapped.load(Ordering::Relaxed),
         unseen_sharing: ctx.unseen_sharing.load(Ordering::Relaxed),
         error_samples: ctx.errors.into_inner().unwrap(),
-        duration_ms: started.elapsed().as_millis() as u64,
+        duration_ms,
         // Asked once, after the walk: it describes the mount, not the tree,
         // and a failure here must not fail the scan.
         capacity: crate::capacity::capacity_of(tree.root_path()),
+        // A rescan passes the last full scan's budget on; anything that read
+        // every directory sets a new one.
+        journal: cursor.map(|cursor| {
+            crate::journal::Cursor {
+                full_ms: full_ms.unwrap_or(walk_ms),
+                ..cursor
+            }
+            .encode()
+        }),
+        rescan,
     };
     let links = ctx
         .links
@@ -1333,6 +1520,7 @@ fn from_table(table: &Table, root: u64, root_path: &Path, root_id: NodeId, ctx: 
         path: root_path.to_path_buf(),
         dev: ctx.root_dev,
         ino: root,
+        at: None,
     };
     let mut stack = vec![(top, 1usize)];
     while let Some((dir, depth)) = stack.pop() {
@@ -1344,7 +1532,9 @@ fn from_table(table: &Table, root: u64, root_path: &Path, root_id: NodeId, ctx: 
             .children(dir.ino)
             .map(|child| pending_from(&child, &mut names, ctx))
             .collect();
-        let subdirs = place(&dir.path, dir.id, depth, ctx, &names, pending);
+        let subdirs = place(
+            &dir.path, dir.id, dir.dev, depth, ctx, &names, pending, None,
+        );
         stack.extend(subdirs.into_iter().map(|sub| (sub, depth + 1)));
     }
 }
@@ -1388,11 +1578,25 @@ fn pending_from(child: &crate::ntfs::Child<'_>, names: &mut String, ctx: &Ctx) -
 ///
 /// `dev` is this directory's own device and `parent` the volume its parent was
 /// on, `None` for the root; see `Ctx::volume_of` for what a change costs.
-fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Volume>, ctx: &Ctx) {
+///
+/// `at` is where this directory sits in a rescan's base and changed paths;
+/// `None` reads it and everything below it, as a full scan does.
+fn walk(
+    dir: &Path,
+    parent_id: NodeId,
+    depth: usize,
+    dev: u64,
+    parent: Option<Volume>,
+    ctx: &Ctx,
+    at: Option<At<'_>>,
+) {
     // Checked before the syscall, so a cancelled scan stops issuing I/O
     // immediately instead of draining whatever rayon had already queued.
     if ctx.progress.is_cancelled() {
         return;
+    }
+    if let Some(splice) = &ctx.splice {
+        splice.dirs_listed.fetch_add(1, Ordering::Relaxed);
     }
     // Guarded from here to the end of the listing loop, and no further: this
     // is the stretch that blocks on a mount that has stopped answering, and
@@ -1404,7 +1608,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
     // be able to name the directory either way. One that does not answer in
     // time is unreadable, like any mount past its deadline (invariant 7).
     let Some(volume) = ctx.volume_of(dev, dir, parent) else {
-        ctx.note_unreachable_mount(dir);
+        ctx.note_unreachable_mount(parent_id, dir);
         return;
     };
     // One lookup for the whole directory. Almost every directory on a real
@@ -1438,7 +1642,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
                 });
             }
             drop(listing);
-            let subdirs = place(dir, parent_id, depth, ctx, &names, pending);
+            let subdirs = place(dir, parent_id, dev, depth, ctx, &names, pending, at);
             return descend(subdirs, depth, volume, ctx);
         }
     }
@@ -1446,7 +1650,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
-            ctx.note_error(dir, &e);
+            ctx.note_error(parent_id, dir, &e);
             return;
         }
     };
@@ -1455,7 +1659,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                ctx.note_error(dir, &e);
+                ctx.note_error(parent_id, dir, &e);
                 continue;
             }
         };
@@ -1468,11 +1672,11 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
             match ctx.probe_mount(&path) {
                 Some(Ok(md)) => md,
                 Some(Err(e)) => {
-                    ctx.note_error(&path, &e);
+                    ctx.note_error(parent_id, &path, &e);
                     continue;
                 }
                 None => {
-                    ctx.note_unreachable_mount(&path);
+                    ctx.note_unreachable_mount(parent_id, &path);
                     continue;
                 }
             }
@@ -1480,7 +1684,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
             match entry.metadata() {
                 Ok(md) => md,
                 Err(e) => {
-                    ctx.note_error(&path, &e);
+                    ctx.note_error(parent_id, &path, &e);
                     continue;
                 }
             }
@@ -1491,7 +1695,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
         // other read failure (invariant #7). The entry itself stays: it has a
         // name and a logical size, and dropping it would be the larger lie.
         if let Some(e) = failure {
-            ctx.note_error(&path, &e);
+            ctx.note_error(parent_id, &path, &e);
         }
         // The clone family the bulk listing would have handed over for free.
         // This path is reached for a directory holding a mount point and for
@@ -1521,27 +1725,38 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
     // Listing done; the recursion that follows is not what hangs.
     drop(listing);
 
-    let subdirs = place(dir, parent_id, depth, ctx, &names, pending);
+    let subdirs = place(dir, parent_id, dev, depth, ctx, &names, pending, at);
     descend(subdirs, depth, volume, ctx);
 }
 
 /// Walk the subdirectories `place` handed back, in parallel.
-fn descend(subdirs: Vec<Subdir>, depth: usize, volume: Volume, ctx: &Ctx) {
+fn descend(subdirs: Vec<Subdir<'_>>, depth: usize, volume: Volume, ctx: &Ctx) {
     if subdirs.is_empty() {
         return;
     }
     subdirs.into_par_iter().for_each(|sub| {
-        walk(&sub.path, sub.id, depth + 1, sub.dev, Some(volume), ctx);
+        walk(
+            &sub.path,
+            sub.id,
+            depth + 1,
+            sub.dev,
+            Some(volume),
+            ctx,
+            sub.at,
+        );
     });
 }
 
 /// A subdirectory `place` put in the arena and the walk should enter.
-struct Subdir {
+struct Subdir<'a> {
     id: NodeId,
     path: PathBuf,
     dev: u64,
     /// Its file identity, which is how the table source finds its entries.
     ino: u64,
+    /// Where a rescan stands in its base for this directory; `None` reads
+    /// everything below it.
+    at: Option<At<'a>>,
 }
 
 /// Account for one directory's entries, write them into the arena as a block,
@@ -1558,17 +1773,36 @@ struct Subdir {
 /// disk, and the one part that could contend (`claim_inode`) is behind a
 /// process-wide mutex either way. Now only the subdirectories become tasks,
 /// which is a tenth as many on a real disk.
-fn place(
+#[allow(clippy::too_many_arguments)]
+fn place<'a>(
     dir: &Path,
     parent_id: NodeId,
+    dir_dev: u64,
     depth: usize,
-    ctx: &Ctx,
+    ctx: &'a Ctx,
     names: &str,
     pending: Vec<Pending>,
-) -> Vec<Subdir> {
+    at: Option<At<'a>>,
+) -> Vec<Subdir<'a>> {
     let mut children: Vec<NewNode<'_>> = Vec::with_capacity(pending.len());
     // By index in this block until the block is in the arena.
-    let mut subdirs: Vec<Subdir> = Vec::new();
+    let mut subdirs: Vec<Subdir<'a>> = Vec::new();
+    // Subdirectories a rescan fills from its base after the walk, by index in
+    // this block, like `deferred` below.
+    let mut copies: Vec<(NodeId, NodeId)> = Vec::new();
+    let name_of = |p: &Pending| {
+        let from = p.name_off as usize;
+        names
+            .get(from..from + p.name_len as usize)
+            .unwrap_or_default()
+    };
+    // Decided with the whole listing in hand, because whether the journal
+    // named something this directory no longer shows is a question about
+    // all of it.
+    let plan = match (&ctx.splice, at) {
+        (Some(splice), Some(at)) => Some(splice.plan(at, pending.iter().map(name_of))),
+        _ => None,
+    };
     // Counted up here and published once per directory rather than once per
     // entry. The watcher only needs the numbers to be moving (`StallWatch`),
     // and they move thousands of times a second either way.
@@ -1591,18 +1825,14 @@ fn place(
     let mut linked: Vec<(NodeId, u64, u64)> = Vec::new();
 
     for (index, entry) in pending.into_iter().enumerate() {
+        let stored = name_of(&entry);
         let Pending {
             name,
-            name_off,
-            name_len,
             meta,
             share,
             extents,
+            ..
         } = entry;
-        let from = name_off as usize;
-        let stored = names
-            .get(from..from + name_len as usize)
-            .unwrap_or_default();
         let name = name.as_deref().unwrap_or(std::ffi::OsStr::new(stored));
         let is_dir = meta.kind == EntryKind::Dir;
         if is_dir {
@@ -1610,6 +1840,21 @@ fn place(
         } else {
             files += 1;
         }
+        // Asked of every name, charged or not and whatever the options say:
+        // over-flagging costs a later rescan one more directory to read,
+        // under-flagging costs it a file charged twice. A repeat hardlink is
+        // flagged as much as the name that carries the bytes.
+        let flags = if is_dir {
+            if meta.dev != dir_dev {
+                Node::MOUNT | Node::MOUNT_POINT
+            } else {
+                0
+            }
+        } else if meta.is_hardlinked() || share.is_some() || extents.is_some() {
+            Node::SHARED
+        } else {
+            0
+        };
 
         // A hardlinked file already counted elsewhere stays visible in the tree
         // but contributes no bytes, so a directory's total never double-counts
@@ -1658,6 +1903,7 @@ fn place(
         let too_deep = is_dir && depth >= MAX_WALK_DEPTH;
         if too_deep {
             ctx.note_error(
+                parent_id,
                 &dir.join(name),
                 &std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -1674,12 +1920,26 @@ fn place(
         // recurse with, and building one for every entry was an allocation per
         // entry for the nine in ten that are not directories.
         if descend {
-            subdirs.push(Subdir {
-                id: index as NodeId,
-                path: dir.join(name),
-                dev: meta.dev,
-                ino: meta.ino,
-            });
+            let next = match &plan {
+                Some(plan) => plan.next(stored, meta.dev, dir_dev),
+                None => Next::Visit(None),
+            };
+            let visit = match next {
+                Next::Copy(from) => {
+                    copies.push((index as NodeId, from));
+                    None
+                }
+                Next::Visit(at) => Some(at),
+            };
+            if let Some(at) = visit {
+                subdirs.push(Subdir {
+                    id: index as NodeId,
+                    path: dir.join(name),
+                    dev: meta.dev,
+                    ino: meta.ino,
+                    at,
+                });
+            }
         }
 
         children.push(NewNode {
@@ -1692,6 +1952,7 @@ fn place(
             // stores a `u32`, and a link count that overflowed one would be a
             // filesystem bug rather than something to carry eight bytes for.
             nlink: meta.nlink.min(u64::from(u32::MAX)) as u32,
+            flags,
         });
     }
 
@@ -1734,6 +1995,11 @@ fn place(
             dev,
             ino,
         }));
+    }
+    if let Some(splice) = &ctx.splice {
+        for (index, from) in copies {
+            splice.defer_copy(start + index, from, &ctx.progress);
+        }
     }
 
     for sub in &mut subdirs {
@@ -1922,6 +2188,7 @@ mod thread_tests {
             mounts,
             never_answers,
             Source::Volume,
+            None,
         )
         .unwrap();
 
@@ -1957,6 +2224,7 @@ mod thread_tests {
             Mounts::from_paths([root.join("mnt")]),
             never_answers,
             Source::Volume,
+            None,
         )
         .unwrap();
         let (whole, _) = scan_with(
@@ -1966,6 +2234,7 @@ mod thread_tests {
             Mounts::none(),
             never_answers,
             Source::Volume,
+            None,
         )
         .unwrap();
 
@@ -1991,6 +2260,7 @@ mod thread_tests {
             Mounts::from_paths([root.join("mnt")]),
             answers_normally,
             Source::Volume,
+            None,
         )
         .unwrap();
         let (plain, _) = scan_with(
@@ -2000,6 +2270,7 @@ mod thread_tests {
             Mounts::none(),
             never_answers,
             Source::Volume,
+            None,
         )
         .unwrap();
 
@@ -2026,6 +2297,7 @@ mod thread_tests {
             Mounts::from_paths([root.join("mnt")]),
             never_answers,
             Source::Volume,
+            None,
         )
         .unwrap();
 

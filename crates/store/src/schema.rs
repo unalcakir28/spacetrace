@@ -170,6 +170,53 @@ fn migrate_from(conn: &Connection, found: i64) -> Result<()> {
     Ok(())
 }
 
+/// The table an incremental rescan keeps beside the snapshots it may start
+/// from: for each scan this build walked, the journal cursor the next scan
+/// may replay from, how this one was made, and the directories it may not
+/// take over unread.
+///
+/// **Not part of the schema version**, on purpose. It belongs to the machine
+/// that wrote it — a cursor is a position in this machine's journal — so it
+/// is never exported, never imported, and an older build that opens the file
+/// neither needs nor notices it. Bumping `SCHEMA_VERSION` for it would have
+/// made every older desktop and CLI refuse the database for a feature they
+/// do not have. `ON DELETE CASCADE` keeps it in step with `scans` under every
+/// build, since `foreign_keys` is on for each connection that opens the file.
+///
+/// Created on the save path, inside the write transaction that already
+/// holds the lock — never on open (invariant 0).
+pub(crate) fn create_rescan_state(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS main.rescan_state (
+             scan_id INTEGER PRIMARY KEY REFERENCES scans(id) ON DELETE CASCADE,
+             -- scan-core's cursor, opaque here. NULL where the root had no
+             -- journal to take one from.
+             journal TEXT,
+             -- `full`, `incremental` or `fallback:<reason>`.
+             rescan  TEXT NOT NULL,
+             -- The directories whose `Node::flags` are not zero, as a run of
+             -- (u32 id, u8 flags) little-endian records in id order. Every
+             -- other entry's are zero. NULL is 'not known', and no rescan
+             -- starts from it.
+             flags   BLOB,
+             -- digest::rescan_state of this row and the scan's content_hash.
+             -- What makes damage that still parses read as damage.
+             digest  TEXT NOT NULL
+         )",
+    )?;
+    Ok(())
+}
+
+/// Whether `conn`'s main database has the table, asked without taking a lock.
+pub(crate) fn has_rescan_state(conn: &Connection) -> Result<bool> {
+    let found: i64 = conn.query_row(
+        "SELECT count(*) FROM main.sqlite_master WHERE type = 'table' AND name = 'rescan_state'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(found > 0)
+}
+
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let mut rows = stmt.query([])?;
