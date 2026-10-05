@@ -292,9 +292,19 @@ fn replay_capped(
 
     let asked = Instant::now();
     let _turn = take_turn(asked, progress)?;
-    let started = Instant::now();
-    let sink = Arc::new(Sink::new(cap));
+    let barrier_marker = Marker::new().ok_or(NoAnswer::Failed)?;
+    // The marker's directory is watched beside the root, and its records are
+    // not changes under the root — unless it is under the root, when they
+    // are, and are left in like any other.
+    let skip = (!barrier_marker.dir.starts_with(root))
+        .then(|| barrier_marker.dir.as_os_str().as_bytes().to_vec());
+    let sink = Arc::new(Sink::new(
+        cap,
+        barrier_marker.path.as_os_str().as_bytes().to_vec(),
+        skip,
+    ));
     let bytes = root.as_os_str().as_bytes();
+    let marker_dir = barrier_marker.dir.as_os_str().as_bytes();
 
     // SAFETY: every CF object created here is released on every path out.
     // The callback reaches `sink` through the context's `info`, and the
@@ -315,14 +325,26 @@ fn replay_capped(
         if cf_path.is_null() {
             return Err(NoAnswer::Failed);
         }
-        let values = [cf_path];
+        let cf_marker = CFStringCreateWithBytes(
+            std::ptr::null(),
+            marker_dir.as_ptr(),
+            marker_dir.len() as isize,
+            UTF8,
+            0,
+        );
+        if cf_marker.is_null() {
+            CFRelease(cf_path);
+            return Err(NoAnswer::Failed);
+        }
+        let values = [cf_path, cf_marker];
         let paths = CFArrayCreate(
             std::ptr::null(),
             values.as_ptr(),
-            1,
+            values.len() as isize,
             &kCFTypeArrayCallBacks as *const c_void,
         );
         CFRelease(cf_path);
+        CFRelease(cf_marker);
         if paths.is_null() {
             return Err(NoAnswer::Failed);
         }
@@ -352,14 +374,29 @@ fn replay_capped(
             return Err(NoAnswer::Failed);
         }
         FSEventStreamSetDispatchQueue(stream, queue);
+        #[cfg(test)]
+        std::thread::sleep(SLOW_START.get());
         if FSEventStreamStart(stream) == 0 {
             FSEventStreamInvalidate(stream);
             FSEventStreamRelease(stream);
             dispatch_release(queue);
             return Err(NoAnswer::Failed);
         }
+        // The budget is for the journal's answer, and starts once the stream
+        // is asking. Starting it is not that: `FSEventStreamStart` took 0.45
+        // to 1.9 s per call for a binary sitting in a directory of 320,000
+        // entries (a busy `target/debug/deps`), against 0.3 ms anywhere
+        // else — measured, same binary, same minute — and counted in the
+        // budget it turned every rescan from there into a deadline fallback.
+        // `journal_ms` still counts it, from `asked`.
+        let started = Instant::now();
 
-        let outcome = sink.wait(asked, started, budget, progress);
+        // The history first, then the barrier: written only now, the marker
+        // reaches the stream live, behind everything fseventsd had queued.
+        let outcome = sink
+            .wait(asked, started, budget, progress, |s| s.history_done)
+            .and_then(|()| barrier_marker.write())
+            .and_then(|()| sink.wait(asked, started, budget, progress, |s| s.synced));
         if outcome.is_ok() {
             FSEventStreamFlushSync(stream);
         }
@@ -380,6 +417,13 @@ fn replay_capped(
 
 /// One replay at a time per process; see [`replay`].
 static TURN: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+thread_local! {
+    /// Time added before `FSEventStreamStart` on this thread: how a test
+    /// plays the slow start measured for a binary in a crowded directory.
+    static SLOW_START: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
+}
 
 /// Wait for [`TURN`] without becoming a scan that cannot be stopped or that
 /// looks stuck: polled, with the cancel switch read and `journal_ms` moved
@@ -458,6 +502,11 @@ struct Sink {
     state: Mutex<SinkState>,
     done: Condvar,
     cap: usize,
+    /// This replay's [`Marker`] path: seeing it is the barrier.
+    marker: Vec<u8>,
+    /// The marker directory, where it is not under the root: its records are
+    /// the barrier's, not changes.
+    skip: Option<Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -466,15 +515,19 @@ struct SinkState {
     /// and a rescan acts on each distinct one once.
     events: HashSet<Change>,
     history_done: bool,
+    /// The marker written after `HistoryDone` has come back.
+    synced: bool,
     overflowed: bool,
 }
 
 impl Sink {
-    fn new(cap: usize) -> Sink {
+    fn new(cap: usize, marker: Vec<u8>, skip: Option<Vec<u8>>) -> Sink {
         Sink {
             state: Mutex::new(SinkState::default()),
             done: Condvar::new(),
             cap,
+            marker,
+            skip,
         }
     }
 
@@ -486,7 +539,7 @@ impl Sink {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Block until the history is over, the budget — counted from `started`,
+    /// Block until `reached` holds, the budget — counted from `started`,
     /// when this replay got its turn — is spent, or the scan is cancelled.
     /// `journal_ms` counts from `asked`, the queue included, so it never runs
     /// backwards.
@@ -496,13 +549,14 @@ impl Sink {
         started: Instant,
         budget: Duration,
         progress: &ScanProgress,
+        reached: impl Fn(&SinkState) -> bool,
     ) -> Result<(), NoAnswer> {
         let mut guard = self.lock();
         loop {
             if guard.overflowed {
                 return Err(NoAnswer::TooMany);
             }
-            if guard.history_done {
+            if reached(&guard) {
                 return Ok(());
             }
             let waited = started.elapsed();
@@ -551,18 +605,86 @@ extern "C" fn on_events(
             state.history_done = true;
             continue;
         }
+        let path = unsafe { std::ffi::CStr::from_ptr(*paths.add(i)) }.to_bytes();
+        if path == sink.marker.as_slice() {
+            state.synced = true;
+        }
+        if sink.skip.as_deref().is_some_and(|dir| under(path, dir)) {
+            continue;
+        }
         if state.overflowed {
             continue;
         }
-        let path = unsafe { std::ffi::CStr::from_ptr(*paths.add(i)) };
-        state.events.insert(change(path.to_bytes().to_vec(), flags));
+        state.events.insert(change(path.to_vec(), flags));
         if state.events.len() > sink.cap {
             state.overflowed = true;
             state.events = HashSet::new();
         }
     }
-    if state.history_done || state.overflowed {
+    if state.history_done || state.synced || state.overflowed {
         sink.done.notify_all();
+    }
+}
+
+/// Whether `path` is `dir` or below it.
+fn under(path: &[u8], dir: &[u8]) -> bool {
+    path.strip_prefix(dir)
+        .is_some_and(|rest| rest.is_empty() || rest[0] == b'/')
+}
+
+/// A file this process writes after the history is over, and waits to see
+/// come back: the barrier that makes a replay cover everything up to now.
+///
+/// **Why it is needed.** fseventsd numbers a record when it takes it from
+/// the kernel, and `HistoryDone` means the end of what it has numbered — not
+/// of what has happened. A change finished just before the replay can still
+/// be on its way, and the replay ends without it: the rescan then copies
+/// that directory from the base, and the snapshot is wrong. Measured with a
+/// file written and replayed at once, twenty times: one build of the tests
+/// saw every change, because its replays took about 130 ms; the same binary
+/// copied out of its target directory replayed in about 25 ms and missed 17
+/// of the 20. How long fseventsd takes to answer depends on the client, then,
+/// and nothing about it can be relied on.
+///
+/// **Why it works.** The kernel hands fseventsd its records in the order
+/// they happen, through one queue for every volume, and a stream delivers
+/// live records in the order fseventsd takes them. So once a marker written
+/// after `HistoryDone` has come back, every change finished before the
+/// replay began has come back before it. In a directory of this program's
+/// own under the temporary directory, never in the root: a scan writes
+/// nothing where it reads. Removed again when the replay ends.
+struct Marker {
+    dir: std::path::PathBuf,
+    path: std::path::PathBuf,
+}
+
+impl Marker {
+    /// A fresh name in the marker directory, which is made if missing.
+    /// Canonical, because FSEvents reports real paths.
+    fn new() -> Option<Marker> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join("spacetrace-fsevents");
+        std::fs::create_dir_all(&dir).ok()?;
+        let dir = dir.canonicalize().ok()?;
+        let name = format!(
+            "sync-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        Some(Marker {
+            path: dir.join(name),
+            dir,
+        })
+    }
+
+    fn write(&self) -> Result<(), NoAnswer> {
+        std::fs::write(&self.path, b"").map_err(|_| NoAnswer::Failed)
+    }
+}
+
+impl Drop for Marker {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -639,6 +761,54 @@ pub(crate) mod tests {
                 .iter()
                 .any(|e| e.path == grown.as_os_str().as_bytes() && !e.is_dir),
             "{events:?}"
+        );
+    }
+
+    /// Starting the stream can be slow for reasons that have nothing to do
+    /// with the journal — measured, 0.45 to 1.9 s per start for a binary in a
+    /// directory of 320,000 entries, against 0.3 ms — and the budget is for
+    /// the journal's answer, not for that. Played here with a start made
+    /// 800 ms slow under a 500 ms budget.
+    #[test]
+    fn a_slow_stream_start_does_not_spend_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let progress = ScanProgress::default();
+        SLOW_START.set(Duration::from_millis(800));
+        let got = replay(
+            &root,
+            current_event_id(),
+            Duration::from_millis(500),
+            &progress,
+        );
+        SLOW_START.set(Duration::ZERO);
+        assert!(got.is_ok(), "{got:?}");
+    }
+
+    /// A change made the moment before the replay is in it. fseventsd numbers
+    /// a record when it takes it from the kernel, which can be after a
+    /// replay asked from before it has already been told the history is
+    /// over — so `HistoryDone` alone is not "everything up to now". Twenty
+    /// rounds, each writing a file and replaying at once, with no settling.
+    #[test]
+    fn a_change_made_just_before_the_replay_is_in_it() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let progress = ScanProgress::default();
+        let mut missed = Vec::new();
+        for round in 0..20 {
+            let since = current_event_id();
+            let file = root.join(format!("just-now-{round}"));
+            std::fs::write(&file, b"x").unwrap();
+            let events = replay(&root, since, Duration::from_secs(10), &progress).unwrap();
+            if !events.iter().any(|e| e.path == file.as_os_str().as_bytes()) {
+                missed.push(round);
+            }
+        }
+        assert!(
+            missed.is_empty(),
+            "rounds whose change the replay missed: {missed:?}"
         );
     }
 
