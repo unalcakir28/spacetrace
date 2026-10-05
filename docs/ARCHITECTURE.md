@@ -499,9 +499,12 @@ query. No server setup is required.
 - **The FIEMAP costs an open and an ioctl per file on btrfs and reflink XFS.**
   Warm cache, 100,000 files, 6 threads: btrfs 14 → 81 ms, XFS 13 → 42 ms
   (2 October); cold cache btrfs 143 → 238 ms. With every extent shared, XFS's answer serialises
-  inside the kernel and gets *slower* with more threads (271 ms at 1 thread,
-  728 ms at 6, unstable between runs) — measured on a loop device in a VM, so
-  to be re-measured on real hardware before anything is tuned to it.
+  inside the kernel and got *slower* with more threads (271 ms at 1 thread,
+  728 ms at 6). Since 5 October 2026 FIEMAP on XFS goes through a gate: one
+  thread at a time, in runs of 64 files, armed on the first shared extent,
+  so unshared XFS pays nothing (100k shared files, 6 threads: 855 → 200 ms
+  warm; TODO A6). Measured on loop devices in a VM; real hardware is still
+  to be checked.
   `--no-clone-dedupe` switches it off.
 - **ZFS is detected and not corrected** (unverified: no ZFS in the test
   kernel). Its `st_blocks` already reflects compression, but block cloning
@@ -526,10 +529,10 @@ query. No server setup is required.
 ## Development
 
 ```bash
-cargo test --workspace                       # 177 tests
+cargo test --workspace                       # current count: CLAUDE.md
 cargo clippy --workspace --all-targets       # should be warning-free
 cargo fmt --all
-cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc
+cargo check -p spacetrace-scan-core --target x86_64-pc-windows-msvc --all-targets
 ```
 
 Tests use a real filesystem in temporary directories, including hardlink,

@@ -324,7 +324,7 @@ structure afterwards. `dust`, which does, peaks at 773 MiB.
 | **FreeSize** | **.NET + Photino.Blazor** `[binary]` | **`DirectoryInfo.GetFiles`/`GetDirectories`** `[binary]` | **No trace of it** `[binary]` |
 | Diskaroo | Swift (mac) + WPF/.NET 8 (Win); Linux `[not found]` `[vendor]` | **Itself admits it does not read the MFT** `[vendor]` | `[not found]` |
 | DiskRaptor | Rust + Tauri 2 `[binary]` | jwalk (mac) / walkdir (Win, Linux) + `getattrlistbulk`, `FindFirstFileW` `[binary]` | rayon, jwalk |
-| **spacetrace** | **Rust** | `getattrlistbulk` (macOS), `getdents64` + `fstatat` (Linux), `read_dir` + `symlink_metadata` elsewhere | **rayon, measured 5.2×** `[measured]` |
+| **spacetrace** | **Rust** | `getattrlistbulk` (macOS), `getdents64` + `fstatat` (Linux), the MFT (Windows, elevated, NTFS; awaiting CI), `read_dir` + `symlink_metadata` elsewhere | **rayon, measured 5.2×** `[measured]` |
 
 ### 2.1 Feature matrix
 
@@ -508,7 +508,7 @@ figure `[vendor]`.
 
 | Weakness | Who does better |
 |----------|--------------|
-| **No Windows MFT fast path** | WizTree, TreeSize (admin), WinDirStat 2.5.0 |
+| ~~No Windows MFT fast path~~ → **written on 5 October 2026** (B4, elevated whole-volume NTFS), **awaiting Windows CI**; the unprivileged route is unbuilt | WizTree, TreeSize (admin), WinDirStat 2.5.0 |
 | ~~Windows `alloc` wrong + hardlink dedupe off~~ → **written on 9 September 2026, awaiting CI confirmation.** Remaining gap: on Windows, directory blocks don't enter `alloc` | TreeSize, WizTree, WinDirStat 2.5.0 |
 | ~~No APFS clone deduplication~~ → **closed on 9 September 2026** (`F_LOG2PHYS_EXT`, on by default) | **DaisyDisk 4.34** (counts a clone's first appearance and gives the rest 0 bytes) |
 | **Memory is 11–17× the target** | dua-cli (64 B), ncdu 2 (25 B) |

@@ -516,7 +516,8 @@ snapshot already present with the same host, root and start time is skipped.
   open exists to ask `FS_IOC_FIEMAP` which of the file's blocks are shared, and,
   as root on btrfs, `BTRFS_IOC_TREE_SEARCH_V2` how large its compressed extents
   are on disk. It is still an open per file, which a scan elsewhere is not (a
-  walk is otherwise `readdir` and `lstat` only), so anything that watches opens
+  walk is otherwise a directory listing and a `fstatat` per entry —
+  `getdents64` on Linux), so anything that watches opens
   sees one per file: fanotify-based EDR and antivirus, IMA measurement, audit
   rules on reads. FIEMAP also takes the file's inode lock shared for the call,
   which a writer holding it exclusively waits behind, briefly. Nothing is opened

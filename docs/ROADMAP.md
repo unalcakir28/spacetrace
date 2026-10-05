@@ -71,7 +71,7 @@ first version this is not a missing feature, it is a trust decision.
 - Coloring by file type, send to trash, open in Finder/Explorer ✅
 - "Add remote source": agent URL; browsing a remote snapshot as if it were local ✅
 - Diff view: growing/shrinking folders ✅
-- Windows MFT fast path, macOS Full Disk Access onboarding, timeline ⏳
+- Windows MFT fast path (written, awaiting Windows CI), macOS Full Disk Access onboarding, timeline ⏳
 
 The layout engine is in this repo: `crates/treemap` (squarified + LOD +
 hierarchical hit-test), 21 tests. The application shell is in a separate
