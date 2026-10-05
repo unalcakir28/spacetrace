@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::journal::{Barrier, Change, ChangeKind, Journal, NoAnswer};
+use crate::journal::{Change, ChangeKind, Journal, NoAnswer};
 use crate::meta::RawMeta;
 use crate::scan::ScanProgress;
 
@@ -31,6 +31,8 @@ type EventId = u64;
 pub(crate) struct FsEvents;
 
 impl Journal for FsEvents {
+    type Barrier = Marker;
+
     /// The digit is the cursor format's version.
     fn kind(&self) -> &'static str {
         "fsevents1"
@@ -46,8 +48,8 @@ impl Journal for FsEvents {
 
     /// A [`Marker`] in the temporary directory, where that is on `root`'s
     /// volume.
-    fn barrier(&self, root: &Path) -> Result<Barrier, NoAnswer> {
-        Ok(Barrier(Box::new(Marker::new(root)?)))
+    fn barrier(&self, root: &Path) -> Result<Marker, NoAnswer> {
+        Marker::new(root)
     }
 
     fn replay(
@@ -55,14 +57,10 @@ impl Journal for FsEvents {
         root: &Path,
         since: u64,
         budget: Duration,
-        barrier: Barrier,
+        barrier: Marker,
         progress: &ScanProgress,
     ) -> Result<Vec<Change>, NoAnswer> {
-        let marker = barrier
-            .0
-            .downcast::<Marker>()
-            .map_err(|_| NoAnswer::Failed)?;
-        replay(root, since, budget, MAX_CHANGES, *marker, progress)
+        replay(root, since, budget, MAX_CHANGES, barrier, progress)
     }
 }
 
@@ -304,6 +302,9 @@ fn replay(
 
     let asked = Instant::now();
     let _turn = take_turn(asked, progress)?;
+    if HANGING.load(Ordering::SeqCst) {
+        return Err(NoAnswer::Stuck);
+    }
     // Read on this thread, which a test sets, and handed to the one that
     // starts the stream.
     #[cfg(test)]
@@ -312,6 +313,8 @@ fn replay(
     let slow_start = Duration::ZERO;
 
     let sink = Arc::new(Sink::new(cap, root, &marker));
+    #[cfg(test)]
+    LAST_REFS.set(Some(Arc::clone(&sink.refs)));
     let bytes = root.as_os_str().as_bytes();
     let marker_dir = marker.dir.as_os_str().as_bytes();
 
@@ -321,8 +324,8 @@ fn replay(
     // FSEvents gives back only when it will not call the callback again — so
     // a callback still queued when this gives up finds the sink alive
     // whatever this function has dropped by then. The barrier on the queue
-    // in `Stream::close` is the second guard: nothing of this stream is
-    // running there afterwards.
+    // when a `Stream` is dropped is the second guard: nothing of this stream
+    // is running there afterwards.
     let stream = unsafe {
         let cf_path = CFStringCreateWithBytes(
             std::ptr::null(),
@@ -383,15 +386,19 @@ fn replay(
             return Err(NoAnswer::Failed);
         }
         FSEventStreamSetDispatchQueue(stream, queue);
-        Stream { stream, queue }
+        Stream {
+            stream,
+            queue,
+            started: false,
+        }
     };
 
-    let outcome = start(stream, asked, budget, slow_start, progress).and_then(|started| {
-        let answer = sink.wait(asked, started, budget, progress);
-        // SAFETY: a stream `start` reports started is this thread's again.
-        unsafe { stream.close(true) };
-        answer
-    });
+    let outcome =
+        start(stream, asked, budget, slow_start, progress).and_then(|(stream, started)| {
+            let answer = sink.wait(asked, started, budget, progress);
+            drop(stream);
+            answer
+        });
     progress
         .journal_ms
         .store(asked.elapsed().as_millis() as u64, Ordering::Relaxed);
@@ -399,45 +406,61 @@ fn replay(
     Ok(sink.take())
 }
 
-/// A created stream and the queue it delivers on, as one value that can
-/// cross to the thread that starts it. Whoever holds it last closes it, once.
-#[derive(Clone, Copy)]
+/// A created stream and the queue it delivers on, owned by one holder at a
+/// time — the replay, or the thread starting it — and closed when that
+/// holder drops it: once, by construction, whichever way it leaves.
 struct Stream {
     stream: *mut c_void,
     queue: *mut c_void,
+    /// Whether `FSEventStreamStart` succeeded, so that dropping stops it.
+    started: bool,
 }
 
 // SAFETY: FSEvents and libdispatch objects may be used from any thread; the
-// one rule, no two calls on a stream at once, is kept by handing it over
-// whole — `start` and its thread never touch it at the same time.
+// one rule, no two calls on a stream at once, is kept by moving the one
+// `Stream` between the replay and the thread that starts it.
 unsafe impl Send for Stream {}
 
-impl Stream {
-    /// Stop (if `started`), invalidate and release the stream, then wait out
+impl Drop for Stream {
+    /// Stop (if started), invalidate and release the stream, then wait out
     /// any callback still queued and release the queue.
-    ///
-    /// # Safety
-    /// Called once, by the stream's only holder.
-    unsafe fn close(self, started: bool) {
-        if started {
-            FSEventStreamStop(self.stream);
+    fn drop(&mut self) {
+        // SAFETY: this value is the stream's and the queue's only owner, and
+        // is dropped once.
+        unsafe {
+            if self.started {
+                FSEventStreamStop(self.stream);
+            }
+            FSEventStreamInvalidate(self.stream);
+            FSEventStreamRelease(self.stream);
+            // A serial queue runs its blocks in order, so an empty one
+            // submitted now returns only once every callback already queued
+            // has finished.
+            dispatch_sync_f(self.queue, std::ptr::null_mut(), barrier);
+            dispatch_release(self.queue);
         }
-        FSEventStreamInvalidate(self.stream);
-        FSEventStreamRelease(self.stream);
-        // A serial queue runs its blocks in order, so an empty one submitted
-        // now returns only once every callback already queued has finished.
-        dispatch_sync_f(self.queue, std::ptr::null_mut(), barrier);
-        dispatch_release(self.queue);
     }
 }
 
 /// Where a stream start handed to its own thread has got to.
 enum Starting {
     Running,
-    Done(bool),
-    /// The replay stopped waiting; the starting thread closes the stream.
+    /// Started; the stream comes back to the replay.
+    Started(Stream),
+    /// Did not start; the thread has closed it.
+    Failed,
+    /// The replay stopped waiting; the thread closes the stream when the
+    /// start returns.
     Abandoned,
 }
+
+/// Whether an abandoned start has still not returned. While it has not,
+/// every replay is refused (`NoAnswer::Stuck`): fseventsd is not answering,
+/// and each new stream would only add a thread, a stream, a queue and a sink
+/// waiting beside the first. Cleared by that thread once the start returns
+/// and its stream is closed. One at a time, because none starts while it is
+/// set.
+static HANGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Start `stream` on a thread of its own and wait for it as for anything
 /// else FSEvents does: cancellable, `journal_ms` moving, and for at most
@@ -455,41 +478,45 @@ enum Starting {
 /// that never returns would otherwise hold a scan nobody can stop, with
 /// every counter still. Past its allowance or on cancel the replay walks
 /// away, and the thread closes the stream whenever the call does return.
-/// The turn is given up with it: the next replay may run beside a start
-/// still hanging, which costs it time and nothing else.
+/// The turn is given up with it, and until the start returns every replay
+/// is refused at once ([`HANGING`]).
 ///
-/// `Err` only after the stream has been taken care of: closed here when the
-/// start failed, or left to the thread when abandoned.
+/// The stream moves to the thread and back: the started stream and the
+/// instant it started, or why not — in which case whoever held it last has
+/// closed it.
 fn start(
     stream: Stream,
     asked: Instant,
     budget: Duration,
     slow_start: Duration,
     progress: &ScanProgress,
-) -> Result<Instant, NoAnswer> {
+) -> Result<(Stream, Instant), NoAnswer> {
     let shared = Arc::new((Mutex::new(Starting::Running), Condvar::new()));
     let theirs = Arc::clone(&shared);
     let spawned = std::thread::Builder::new()
         .name("spacetrace-fsevents-start".into())
         .spawn(move || {
+            let mut stream = stream;
             std::thread::sleep(slow_start);
-            // SAFETY: the replay does not touch the stream until this has
-            // reported back, and not at all once it has abandoned it.
-            let ok = unsafe { FSEventStreamStart(stream.stream) } != 0;
+            // SAFETY: this thread owns the stream until it hands it back.
+            stream.started = unsafe { FSEventStreamStart(stream.stream) } != 0;
             let (state, done) = &*theirs;
             let mut state = state.lock().unwrap_or_else(|p| p.into_inner());
             if matches!(*state, Starting::Abandoned) {
                 drop(state);
-                // SAFETY: abandoned, so this thread is the last holder.
-                unsafe { stream.close(ok) };
+                drop(stream);
+                HANGING.store(false, Ordering::SeqCst);
                 return;
             }
-            *state = Starting::Done(ok);
+            *state = if stream.started {
+                Starting::Started(stream)
+            } else {
+                Starting::Failed
+            };
             done.notify_all();
         });
+    // A thread that could not be made dropped the stream with its closure.
     if spawned.is_err() {
-        // SAFETY: no thread took it; never started.
-        unsafe { stream.close(false) };
         return Err(NoAnswer::Failed);
     }
 
@@ -497,14 +524,9 @@ fn start(
     let (state, done) = &*shared;
     let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
     loop {
-        match *guard {
-            Starting::Done(true) => return Ok(Instant::now()),
-            Starting::Done(false) => {
-                drop(guard);
-                // SAFETY: the thread has finished with it; it never started.
-                unsafe { stream.close(false) };
-                return Err(NoAnswer::Failed);
-            }
+        match std::mem::replace(&mut *guard, Starting::Running) {
+            Starting::Started(stream) => return Ok((stream, Instant::now())),
+            Starting::Failed => return Err(NoAnswer::Failed),
             Starting::Running | Starting::Abandoned => {}
         }
         progress
@@ -518,6 +540,8 @@ fn start(
             None
         };
         if let Some(why) = why {
+            // Under the lock, so the thread cannot clear it first.
+            HANGING.store(true, Ordering::SeqCst);
             *guard = Starting::Abandoned;
             return Err(why);
         }
@@ -548,6 +572,9 @@ thread_local! {
     /// crowded directory, or one that hangs. Read by the asking thread and
     /// handed to the one that starts the stream.
     static SLOW_START: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
+
+    /// The reference counts of the last sink a replay on this thread made.
+    static LAST_REFS: std::cell::RefCell<Option<Arc<Refs>>> = const { std::cell::RefCell::new(None) };
 
     /// Where this thread's [`Marker::new`] makes its directory, in place of
     /// the temporary directory: how a test reaches a rescan whose marker
@@ -587,30 +614,44 @@ fn take_turn(
 /// not to matter next to the replay itself.
 const TICK: Duration = Duration::from_millis(20);
 
-/// References the streams took to their sinks, and gave back, ever. Read by
-/// a test.
+/// The references one stream took to its sink and gave back. Kept beside
+/// the sink rather than in it, so a test can read them after the sink is
+/// gone, and per sink, so other tests' streams do not count.
 #[cfg(test)]
-static SINK_RETAINS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-#[cfg(test)]
-static SINK_RELEASES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[derive(Default)]
+struct Refs {
+    taken: std::sync::atomic::AtomicUsize,
+    given: std::sync::atomic::AtomicUsize,
+}
 
 /// The context's `retain`: the stream takes a reference of its own to the
 /// sink, so the sink outlives every callback FSEvents may still make.
 extern "C" fn retain_sink(info: *const c_void) -> *const c_void {
-    #[cfg(test)]
-    SINK_RETAINS.fetch_add(1, Ordering::SeqCst);
     // SAFETY: `info` is `Arc::as_ptr` of a live `Arc<Sink>` (the replay's own
     // reference keeps it alive while the stream is created).
-    unsafe { Arc::increment_strong_count(info as *const Sink) };
+    unsafe {
+        #[cfg(test)]
+        {
+            let sink = &*(info as *const Sink);
+            sink.refs.taken.fetch_add(1, Ordering::SeqCst);
+        }
+        Arc::increment_strong_count(info as *const Sink);
+    }
     info
 }
 
 /// The context's `release`: FSEvents gives back what `retain_sink` took.
 extern "C" fn release_sink(info: *const c_void) {
-    #[cfg(test)]
-    SINK_RELEASES.fetch_add(1, Ordering::SeqCst);
-    // SAFETY: balances exactly one `retain_sink` on the same pointer.
-    unsafe { Arc::decrement_strong_count(info as *const Sink) };
+    // SAFETY: balances exactly one `retain_sink` on the same pointer, which
+    // is alive until this gives its reference back.
+    unsafe {
+        #[cfg(test)]
+        {
+            let sink = &*(info as *const Sink);
+            sink.refs.given.fetch_add(1, Ordering::SeqCst);
+        }
+        Arc::decrement_strong_count(info as *const Sink);
+    }
 }
 
 /// Nothing: what is waited for is that the queue reaches it.
@@ -641,6 +682,8 @@ struct Sink {
     /// records are not changes under the root either. Under it, they are:
     /// making and removing it changes its parent, which a full scan sees.
     marker_dir_outside: bool,
+    #[cfg(test)]
+    refs: Arc<Refs>,
 }
 
 #[derive(Default)]
@@ -675,7 +718,13 @@ impl Sink {
             cap,
             marker: marker.path.as_os_str().as_bytes().to_vec(),
             marker_dir: marker.dir.as_os_str().as_bytes().to_vec(),
-            marker_dir_outside: !marker.dir.starts_with(root),
+            // Both sides canonical: the marker's directory is, and a root
+            // spelled through a symlink would otherwise never hold it.
+            marker_dir_outside: !marker
+                .dir
+                .starts_with(root.canonicalize().as_deref().unwrap_or(root)),
+            #[cfg(test)]
+            refs: Arc::default(),
         }
     }
 
@@ -697,15 +746,14 @@ impl Sink {
         if path == self.marker.as_slice() {
             state.synced = true;
         }
-        // A record that covers the marker without naming it — a drop, a
-        // directory FSEvents says to rescan, a record that does not say what
-        // changed — leaves "has it come back?" without an answer, and the
-        // replay without its barrier.
+        // A record that says FSEvents lost track of what is under the marker
+        // — dropped records, a directory to scan again — leaves "has it come
+        // back?" without an answer, and the replay without its barrier. A
+        // record that merely does not say what changed (a coalesced one, the
+        // directory's metadata or `com.apple.provenance`) loses nothing:
+        // the marker's own record still comes.
         let covers_marker = in_marker_dir || under(&self.marker_dir, path);
-        if covers_marker
-            && (flags & (LOST | flag::MUST_SCAN_SUB_DIRS) != 0
-                || (in_marker_dir && flags & KINDS == 0))
-        {
+        if covers_marker && flags & (LOST | flag::MUST_SCAN_SUB_DIRS) != 0 {
             state.barrier_lost = true;
         }
         if in_marker_dir && (path != self.marker_dir.as_slice() || self.marker_dir_outside) {
@@ -738,11 +786,13 @@ impl Sink {
             if guard.overflowed {
                 return Err(NoAnswer::TooMany);
             }
-            if guard.barrier_lost {
-                return Err(NoAnswer::Lost);
-            }
+            // The marker seen wins over a loss reported around it: it came
+            // back, in order, and that is all the barrier asks.
             if guard.answered() {
                 return Ok(());
+            }
+            if guard.barrier_lost && !guard.synced {
+                return Err(NoAnswer::Lost);
             }
             let waited = started.elapsed();
             progress
@@ -851,7 +901,16 @@ fn under(path: &[u8], dir: &[u8]) -> bool {
 /// on its own volume, which means into somebody's disk, so a rescan of it
 /// falls back instead (`Fallback::MarkerVolume`) — every external disk,
 /// until a marker that needs no write is found.
-struct Marker {
+///
+/// `/` is not one of them: on macOS 27 the sealed System volume reports the
+/// Data volume's device (`stat -f %d / /usr/bin /Users` all 16777234,
+/// measured), and nothing writes to the System volume while it is mounted.
+/// The volumes mounted under `/` — `VM`, `Preboot` and the rest — are other
+/// devices, and those subtrees are read in full every time anyway
+/// (`rescan::DirPlan::next`), so the marker's order does not matter there.
+/// Where a macOS reports the System volume as a device of its own, `/`
+/// falls back like any other volume.
+pub(crate) struct Marker {
     /// Removes the directory, the marker with it, when dropped.
     _owner: tempfile::TempDir,
     /// The directory, canonical, because FSEvents reports real paths.
@@ -1063,6 +1122,7 @@ pub(crate) mod tests {
             marker: format!("{marker_dir}/sync").into_bytes(),
             marker_dir: marker_dir.as_bytes().to_vec(),
             marker_dir_outside: outside_root,
+            refs: Arc::default(),
         }
     }
 
@@ -1135,7 +1195,6 @@ pub(crate) mod tests {
         for (path, flags) in [
             ("/t/m", flag::MUST_SCAN_SUB_DIRS | flag::USER_DROPPED),
             ("/t/m", flag::MUST_SCAN_SUB_DIRS | flag::ITEM_IS_DIR),
-            ("/t/m/sync", 0),
             ("/", flag::MUST_SCAN_SUB_DIRS | flag::KERNEL_DROPPED),
         ] {
             let sink = sink_for("/t/m", true);
@@ -1154,6 +1213,35 @@ pub(crate) mod tests {
                 flag::MUST_SCAN_SUB_DIRS | flag::USER_DROPPED
             ),
             Err(NoAnswer::Deadline)
+        );
+    }
+
+    /// A record that only fails to say what changed — coalesced, or the
+    /// directory's metadata and `com.apple.provenance` — is not a loss: the
+    /// marker still comes. And once the marker is in, a loss reported around
+    /// it changes nothing.
+    #[test]
+    fn noise_around_the_marker_is_not_a_loss() {
+        const INODE_META: u32 = 0x0000_0400;
+        const XATTR: u32 = 0x0000_8000;
+        let sink = sink_for("/t/m", true);
+        for (path, flags) in [
+            ("/t/m", 0),
+            ("/t/m", flag::ITEM_IS_DIR | INODE_META | XATTR),
+            ("", flag::HISTORY_DONE),
+        ] {
+            assert_eq!(after(&sink, path, flags), Err(NoAnswer::Deadline), "{path}");
+        }
+        // A record naming the marker is the marker, whatever else it says.
+        assert_eq!(after(&sink, "/t/m/sync", 0), Ok(()));
+
+        let sink = sink_for("/t/m", true);
+        after(&sink, "/t/m/sync", CREATED_FILE).unwrap_err();
+        sink.record(&mut sink.lock(), b"", flag::HISTORY_DONE);
+        assert_eq!(
+            after(&sink, "/t/m", flag::MUST_SCAN_SUB_DIRS | flag::USER_DROPPED),
+            Ok(()),
+            "the marker came back before the loss"
         );
     }
 
@@ -1190,6 +1278,23 @@ pub(crate) mod tests {
             };
             assert_eq!(got, want, "outside the root: {outside}");
         }
+    }
+
+    /// Whether the marker's directory is under the root is asked of both in
+    /// their real spelling: the directory is canonical, and a root reached
+    /// through a symlink holds it all the same.
+    #[test]
+    fn a_root_reached_through_a_symlink_holds_its_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap().join("real");
+        std::fs::create_dir_all(real.join("tmp")).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let marker = Marker::write_in(&link.join("tmp")).unwrap();
+        assert!(!Sink::new(10, &link, &marker).marker_dir_outside);
+        assert!(!Sink::new(10, &real, &marker).marker_dir_outside);
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert!(Sink::new(10, elsewhere.path(), &marker).marker_dir_outside);
     }
 
     /// The same, through a real replay whose marker directory is made under
@@ -1280,16 +1385,57 @@ pub(crate) mod tests {
         assert!(got.is_ok(), "{got:?}");
     }
 
+    /// Run `test`, one of this module's tests marked ignored, in a process
+    /// of its own. A start it abandons hangs on in a thread, and while it
+    /// does every replay in the process is refused (`HANGING`) — which would
+    /// fail whatever else runs beside it.
+    fn in_own_process(test: &str) {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("fsevents::tests::{test}"),
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env(OWN_PROCESS, "1")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && text.contains("1 passed"),
+            "{test}:\n{text}"
+        );
+    }
+
+    /// Set for a test [`in_own_process`] runs; without it those tests do
+    /// nothing, so `cargo test -- --ignored` does not run them side by side.
+    const OWN_PROCESS: &str = "SPACETRACE_TEST_OWN_PROCESS";
+
     /// A start that does not return is walked away from at its allowance,
-    /// with the counter moving meanwhile (invariant 8). Played with a start
-    /// held for 60 s; the upper bound leaves room for the turn, which other
-    /// replays in this test binary hold.
+    /// with the counter moving meanwhile (invariant 8); until it returns,
+    /// the next replay is refused at once rather than starting a stream
+    /// beside it; once it has, replays work again.
     #[test]
-    fn a_start_that_hangs_is_abandoned_at_its_allowance() {
+    fn a_start_that_hangs_is_abandoned_and_blocks_the_next_until_it_returns() {
+        in_own_process("hanging_start_alone");
+    }
+
+    #[test]
+    #[ignore = "run in a process of its own by \
+                a_start_that_hangs_is_abandoned_and_blocks_the_next_until_it_returns"]
+    fn hanging_start_alone() {
+        if std::env::var_os(OWN_PROCESS).is_none() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let progress = ScanProgress::default();
-        SLOW_START.set(Duration::from_secs(60));
+        // Long enough past the allowance that walking away at it cannot be
+        // mistaken for waiting it out, on a loaded machine too: 6.1 s was
+        // seen for a 5 s allowance with the build in a crowded directory.
+        let hang = START_FLOOR + Duration::from_secs(4);
+        SLOW_START.set(hang);
         let asked = Instant::now();
         let got = ask(
             &root,
@@ -1301,16 +1447,51 @@ pub(crate) mod tests {
         let waited = asked.elapsed();
         assert_eq!(got.unwrap_err(), NoAnswer::Deadline);
         assert!(
-            waited >= START_FLOOR && waited < Duration::from_secs(40),
+            waited >= START_FLOOR && waited < hang - Duration::from_secs(1),
             "{waited:?}"
         );
         assert!(progress.journal_ms.load(Ordering::Relaxed) >= START_FLOOR.as_millis() as u64);
+
+        let refused = Instant::now();
+        let got = ask(
+            &root,
+            current_event_id(),
+            Duration::from_secs(10),
+            &progress,
+        );
+        assert_eq!(got.unwrap_err(), NoAnswer::Stuck);
+        assert!(refused.elapsed() < Duration::from_secs(1));
+
+        let deadline = asked + hang + Duration::from_secs(10);
+        while HANGING.load(Ordering::SeqCst) {
+            assert!(
+                Instant::now() < deadline,
+                "the hanging start never returned"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let got = ask(
+            &root,
+            current_event_id(),
+            Duration::from_secs(10),
+            &progress,
+        );
+        assert!(got.is_ok(), "{got:?}");
     }
 
     /// A scan cancelled while the stream is starting stops then, not when
     /// the start returns (invariant 5).
     #[test]
     fn a_scan_cancelled_during_the_start_stops_at_once() {
+        in_own_process("cancelled_start_alone");
+    }
+
+    #[test]
+    #[ignore = "run in a process of its own by a_scan_cancelled_during_the_start_stops_at_once"]
+    fn cancelled_start_alone() {
+        if std::env::var_os(OWN_PROCESS).is_none() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let progress = ScanProgress::default();
@@ -1455,12 +1636,13 @@ pub(crate) mod tests {
 
     /// The stream holds its own reference to what its callback writes into,
     /// through the context's retain and release: a callback FSEvents still
-    /// has queued when the replay gives up must not find the sink freed.
+    /// has queued when the replay gives up must not find the sink freed. And
+    /// it gives it back: no sink is leaked per replay. Counted for this
+    /// replay's sink alone, so streams other tests leave behind do not count.
     #[test]
     fn the_stream_holds_its_own_reference_to_the_sink() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let before = SINK_RETAINS.load(Ordering::SeqCst);
         let progress = ScanProgress::default();
         ask(
             &root,
@@ -1469,16 +1651,16 @@ pub(crate) mod tests {
             &progress,
         )
         .unwrap();
-        let taken = SINK_RETAINS.load(Ordering::SeqCst);
-        assert!(taken > before, "FSEvents never took a reference of its own");
-        // And gives every one back: no sink is leaked per replay. Other
-        // replays may run in between; all that were taken by now come back.
+        let refs = LAST_REFS.take().expect("the replay made a sink");
+        let taken = refs.taken.load(Ordering::SeqCst);
+        assert!(taken > 0, "FSEvents never took a reference of its own");
         let deadline = Instant::now() + Duration::from_secs(10);
-        while SINK_RELEASES.load(Ordering::SeqCst) < taken && Instant::now() < deadline {
+        while refs.given.load(Ordering::SeqCst) < taken && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(
-            SINK_RELEASES.load(Ordering::SeqCst) >= taken,
+        assert_eq!(
+            refs.given.load(Ordering::SeqCst),
+            taken,
             "a reference was never given back"
         );
     }

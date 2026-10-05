@@ -168,6 +168,31 @@ fn a_pushed_snapshot_carries_no_rescan_state() {
     assert_eq!(base.journal.unwrap_err(), Fallback::NoCursor);
 }
 
+/// A reason a newer build added, read by this one: still a fallback, as
+/// `fallback:unknown`, and never an error. Played by writing the record as
+/// that build would.
+#[test]
+fn a_reason_from_a_newer_build_reads_as_an_unknown_fallback() {
+    let dir = fixture();
+    let db = dir.path().join("db.sqlite");
+    let (tree, stats) = scan_of(&dir);
+    let id = Store::open(&db)
+        .unwrap()
+        .save(&tree, &stats, "here", None)
+        .unwrap();
+    Connection::open(&db)
+        .unwrap()
+        .execute(
+            "UPDATE rescan_state SET rescan = 'fallback:from-a-newer-build' WHERE scan_id = ?1",
+            [id],
+        )
+        .unwrap();
+    assert_eq!(
+        Store::open(&db).unwrap().rescan_of(id).unwrap(),
+        Some(RescanKind::Fallback(Fallback::Unknown))
+    );
+}
+
 /// Another tool's export was never walked here: no row, and the reason a
 /// rescan gives is the one a user can act on.
 #[test]

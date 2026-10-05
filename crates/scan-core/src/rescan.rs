@@ -87,9 +87,9 @@ impl From<Fallback> for Refusal {
 ///
 /// `Err` only for a cancelled scan (invariant 5); every other way this can
 /// go wrong is a full scan with the reason recorded.
-pub(crate) fn plan(
+pub(crate) fn plan<J: Journal>(
     root: &Path,
-    now: Option<(&dyn Journal, &Cursor)>,
+    now: Option<(&J, &Cursor)>,
     base: Base<'_>,
     progress: &ScanProgress,
     mounted: &crate::Mounts,
@@ -110,9 +110,9 @@ pub(crate) fn plan(
     }
 }
 
-fn try_plan(
+fn try_plan<J: Journal>(
     root: &Path,
-    journal: &dyn Journal,
+    journal: &J,
     now: &Cursor,
     base: Base<'_>,
     progress: &ScanProgress,
@@ -205,6 +205,7 @@ fn refusal(why: NoAnswer) -> Refusal {
         NoAnswer::Lost => Refusal::Fallback(Fallback::EventsLost),
         NoAnswer::NoBarrier => Refusal::Fallback(Fallback::NoBarrier),
         NoAnswer::MarkerVolume => Refusal::Fallback(Fallback::MarkerVolume),
+        NoAnswer::Stuck => Refusal::Fallback(Fallback::JournalStuck),
         NoAnswer::Cancelled => Refusal::Cancelled,
     }
 }

@@ -84,13 +84,21 @@ impl RescanKind {
         }
     }
 
-    /// [`RescanKind::record`], read back; `None` for text it did not write —
-    /// a reason a newer build added, say.
+    /// [`RescanKind::record`], read back; `None` for text it did not write.
+    ///
+    /// A fallback whose reason this build does not know — one a newer build
+    /// added — reads as [`Fallback::Unknown`]: still a fallback, which is
+    /// all an older reader can say of it, and never an error.
     pub fn parse(text: &str) -> Option<RescanKind> {
         match text {
             "full" => Some(RescanKind::Full),
             "incremental" => Some(RescanKind::Incremental),
-            _ => Fallback::from_code(text.strip_prefix("fallback:")?).map(RescanKind::Fallback),
+            _ => {
+                let code = text.strip_prefix("fallback:")?;
+                Some(RescanKind::Fallback(
+                    Fallback::from_code(code).unwrap_or(Fallback::Unknown),
+                ))
+            }
         }
     }
 }
@@ -165,11 +173,18 @@ pub enum Fallback {
     /// The root is on another volume than the replay's marker, where the
     /// marker cannot vouch for the order of its changes — an external disk.
     MarkerVolume,
+    /// An earlier replay's stream is still starting, long past its
+    /// allowance: the journal is not answering, and another stream beside it
+    /// would only pile up.
+    JournalStuck,
+    /// A reason this build does not know, read from a snapshot a newer build
+    /// wrote. Never produced by a scan.
+    Unknown,
 }
 
 impl Fallback {
     /// Every reason, for reading a code back.
-    const ALL: [Fallback; 16] = [
+    const ALL: [Fallback; 18] = [
         Fallback::NoCursor,
         Fallback::ImportedBase,
         Fallback::FutureBase,
@@ -186,6 +201,8 @@ impl Fallback {
         Fallback::TooOld,
         Fallback::NoBarrier,
         Fallback::MarkerVolume,
+        Fallback::JournalStuck,
+        Fallback::Unknown,
     ];
 
     /// The one table: each reason's stable code and the sentence a person
@@ -238,6 +255,11 @@ impl Fallback {
                 "marker-volume",
                 "the root is on another volume than the replay's marker",
             ),
+            Fallback::JournalStuck => (
+                "journal-stuck",
+                "the journal is still starting an earlier replay",
+            ),
+            Fallback::Unknown => ("unknown", "a reason this build does not know"),
         }
     }
 
@@ -301,11 +323,6 @@ pub(crate) enum ChangeKind {
     Lost,
 }
 
-/// What [`Journal::barrier`] hands to [`Journal::replay`]: the journal's own,
-/// opaque to the rescan.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) struct Barrier(pub(crate) Box<dyn std::any::Any>);
-
 /// Why a journal produced no answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -325,6 +342,8 @@ pub(crate) enum NoAnswer {
     NoBarrier,
     /// The root is on another volume than the marker could be written on.
     MarkerVolume,
+    /// An earlier replay's stream is still starting; this one was not tried.
+    Stuck,
 }
 
 /// A volume change journal, as a rescan uses one.
@@ -344,6 +363,10 @@ pub(crate) enum NoAnswer {
 /// Linux, which has no journal; a Linux journal must flag that file's
 /// directory first, or an incremental scan would drop it from the count.
 pub(crate) trait Journal: Sync {
+    /// What [`Journal::barrier`] hands to [`Journal::replay`]: the journal's
+    /// own, opaque to the rescan.
+    type Barrier;
+
     /// The first word of every cursor this journal writes, format version
     /// included. A stored cursor with another is never replayed.
     fn kind(&self) -> &'static str;
@@ -360,7 +383,7 @@ pub(crate) trait Journal: Sync {
     /// answer then holds every change finished before this call. Asked for
     /// before the base is loaded, so that the mark's way through the journal
     /// runs while the base loads rather than after it.
-    fn barrier(&self, root: &Path) -> Result<Barrier, NoAnswer>;
+    fn barrier(&self, root: &Path) -> Result<Self::Barrier, NoAnswer>;
 
     /// Everything that changed under `root` after position `since` and up
     /// to `barrier` at least, or why there is no answer within `budget`.
@@ -371,21 +394,66 @@ pub(crate) trait Journal: Sync {
         root: &Path,
         since: u64,
         budget: Duration,
-        barrier: Barrier,
+        barrier: Self::Barrier,
         progress: &ScanProgress,
     ) -> Result<Vec<Change>, NoAnswer>;
 }
 
 /// This platform's journal, where this build reads one.
 #[cfg(target_os = "macos")]
-pub(crate) fn system() -> Option<&'static dyn Journal> {
+pub(crate) type System = crate::fsevents::FsEvents;
+
+/// This platform's journal, where this build reads one.
+#[cfg(target_os = "macos")]
+pub(crate) fn system() -> Option<&'static System> {
     Some(&crate::fsevents::FsEvents)
 }
 
 /// None elsewhere yet: every scan reads everything.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn system() -> Option<&'static dyn Journal> {
+pub(crate) type System = NoJournal;
+
+/// None elsewhere yet: every scan reads everything.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn system() -> Option<&'static System> {
     None
+}
+
+/// The journal of a platform that has none: a type with no values, so that
+/// the code generic over a journal compiles everywhere.
+#[cfg(not(target_os = "macos"))]
+pub(crate) enum NoJournal {}
+
+#[cfg(not(target_os = "macos"))]
+impl Journal for NoJournal {
+    type Barrier = std::convert::Infallible;
+
+    fn kind(&self) -> &'static str {
+        match *self {}
+    }
+
+    fn volume(&self, _: &Path, _: &RawMeta) -> Option<String> {
+        match *self {}
+    }
+
+    fn position(&self) -> u64 {
+        match *self {}
+    }
+
+    fn barrier(&self, _: &Path) -> Result<Self::Barrier, NoAnswer> {
+        match *self {}
+    }
+
+    fn replay(
+        &self,
+        _: &Path,
+        _: u64,
+        _: Duration,
+        barrier: Self::Barrier,
+        _: &ScanProgress,
+    ) -> Result<Vec<Change>, NoAnswer> {
+        match barrier {}
+    }
 }
 
 /// A position in a volume's change journal, and what it was taken under.
@@ -457,8 +525,8 @@ impl Cursor {
 ///
 /// Its `full_ms` is left at 0: how long the walk takes is known only after it,
 /// and whoever finishes the scan fills it in.
-pub(crate) fn take(
-    journal: Option<&dyn Journal>,
+pub(crate) fn take<J: Journal>(
+    journal: Option<&J>,
     root: &Path,
     root_meta: &RawMeta,
     opts: &ScanOptions,
@@ -671,7 +739,11 @@ mod tests {
         for kind in kinds {
             assert_eq!(RescanKind::parse(&kind.record()), Some(kind));
         }
-        assert_eq!(RescanKind::parse("fallback:not-a-reason"), None);
+        assert_eq!(
+            RescanKind::parse("fallback:from-a-newer-build"),
+            Some(RescanKind::Fallback(Fallback::Unknown)),
+            "a reason added later is still a fallback"
+        );
         assert_eq!(RescanKind::parse("partial"), None);
     }
 }

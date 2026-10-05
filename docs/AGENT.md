@@ -83,7 +83,9 @@ only what FSEvents says changed since (`incremental`, on by default). Any doubt
 last full scan did — means a full scan instead. So does a root on another
 volume than the agent's temporary directory, such as an external disk: the
 replay proves it is complete with a marker file written there, and that
-proof was measured not to hold across volumes. Each snapshot records which it
+proof was measured not to hold across volumes. `/` is not affected on macOS
+27, where the System and Data volumes report one device; volumes mounted
+below a root are read in full on every scan anyway. Each snapshot records which it
 was in a side table, `rescan_state`, that stays on the agent: `full`,
 `incremental`, or `fallback:<reason>`. The schema version does not change, and
 a pushed snapshot carries none of it.

@@ -684,6 +684,13 @@ fn changes_during_the_walk_are_caught_by_the_next_rescan() {
 /// A volume mounted inside the root between two scans, then unmounted. Its
 /// contents are not in this volume's journal, so it is read in full every
 /// time, and the directory it covered is read again when it goes.
+///
+/// Read in full is also why the replay's marker, on the root's volume, need
+/// not be ordered against changes on this one: nothing below a mount point
+/// is ever copied from the base (`DirPlan::next`: another device, a base
+/// `MOUNT_POINT`, or `Dirty::mark_mounted`), so no event from it decides
+/// anything. Each rescan here is incremental, and one is made right after a
+/// write on the image.
 #[test]
 fn a_volume_mounted_and_unmounted_under_the_root() {
     let bench = Bench::new(|root| {
@@ -696,28 +703,36 @@ fn a_volume_mounted_and_unmounted_under_the_root() {
         eprintln!("skipped: no disk image could be attached here");
         return;
     };
+    // Below a directory of its own on the image: a file straight in the
+    // mount point would be seen by listing that one directory, and this is
+    // about the whole subtree being read.
+    fs::create_dir_all(bench.root.join("beta/m1/mnt/deep")).unwrap();
     fs::write(
-        bench.root.join("beta/m1/mnt/on-the-image.bin"),
+        bench.root.join("beta/m1/mnt/deep/on-the-image.bin"),
         vec![6u8; 9000],
     )
     .unwrap();
     let (tree, stats, _) = bench.rescan();
     let (full, full_stats) = bench.full();
     assert_same(&tree, &stats, &full, &full_stats);
-    eprintln!("mounted: {:?}", stats.rescan);
+    assert!(stats.rescan.is_incremental(), "mounted: {:?}", stats.rescan);
 
     // A rescan from a base with the mount in it, a change elsewhere, and
     // one on the image.
     fs::write(bench.root.join("alpha/m0/note.txt"), b"elsewhere").unwrap();
     fs::write(
-        bench.root.join("beta/m1/mnt/on-the-image.bin"),
+        bench.root.join("beta/m1/mnt/deep/on-the-image.bin"),
         vec![6u8; 19_000],
     )
     .unwrap();
     let (tree, stats, _) = bench.rescan();
     let (full, full_stats) = bench.full();
     assert_same(&tree, &stats, &full, &full_stats);
-    eprintln!("with the mount in the base: {:?}", stats.rescan);
+    assert!(
+        stats.rescan.is_incremental(),
+        "with the mount in the base: {:?}",
+        stats.rescan
+    );
 
     drop(image);
     let (tree, stats, _) = bench.rescan();
