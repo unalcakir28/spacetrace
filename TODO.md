@@ -8,8 +8,9 @@ Last updated: 2 October 2026 (**The idea pool and two long-open items
 closed, nothing released yet:** `scan --ssh`, `scan s3://`, `watch`, `pkgs`,
 the agent's `/metrics`, A6 shared and compressed extents on btrfs and XFS, the
 cushion surfaces in the treemap layout, and the site's fonts served from its
-own origin. Every one went through a review whose fixes are in. Waiting: the
-desktop half of the cushion treemap, which needs a core push and a pin bump.)
+own origin. Every one went through a review whose fixes are in. On
+5 October the desktop and hub pins moved onto it, and the desktop gained the
+cushion treemap's drawing half.)
 
 Before that, 14 September 2026 (**Version cut: CLI 0.7.0, desktop 0.7.0,
 hub 0.5.0.** Since it stayed fixed at v3, the schema had no order requirement.
@@ -1589,18 +1590,17 @@ No decision made yet, will be discussed when its turn comes.
 - [x] Duplicate finder → **C4**, done 11 September 2026
 - [x] ncdu/gdu JSON **import** → **C8**, done 11 September 2026
 - [x] File age heat map → **C7**, done 11 September 2026
-- [ ] **Cushion-shaded treemap** — core side done *(2 October 2026)*, the
-      desktop side waits for a core push and a pin bump. van Wijk & van de
+- [x] **Cushion-shaded treemap** — done: core side *(2 October 2026)*,
+      desktop side with the pin bump *(5 October 2026)*. van Wijk & van de
       Wetering 1999 (h = 0.5, f = 0.75, Ia = 40, Is = 215, light [1, 2, 10]
       with y flipped for screen space). The four coefficients per tile are
       accumulated in the core's layout pass (`treemap/src/cushion.rs`),
       tested there, and sent only on request as f32 (+43 B/tile, 52 → 95).
-      The desktop change (prototyped, not committed) lights each device
-      pixel once, from an owner map, and multiplies that onto the cached
+      The desktop lights each device pixel once, from an owner map, and multiplies that onto the cached
       flat layer, so it composes with every colour mode. At DPR 2 in
       Chromium: repaint 4 → 28 ms (16k tiles) and 17 → 42 ms (147k); hover
       unchanged. Default stays Flat.
-      **Still open:** landing the desktop half; frame time on WKWebView,
+      **Still open:** frame time on WKWebView,
       WebKitGTK and WebView2; a cheaper owner pass (12 ms, 7.2× overdraw) if
       those turn out slow.
 - [x] **Cloud roots — S3** — done *(2 October 2026)*. `spacetrace scan

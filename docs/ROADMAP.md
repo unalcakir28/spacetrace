@@ -129,8 +129,8 @@ Not phase-ordered, chosen based on demand.
 - [x] Live view: `spacetrace watch` — C12
 - [x] SSH mode: `scan --ssh`, nothing installed on the other side
 - [x] Prometheus `/metrics` on the agent
-- [ ] Cushion-shaded treemap: layout done in the core, the desktop half
-  waits for a pin bump
+- [x] Cushion-shaded treemap: surfaces from the core's layout, lit in the
+  desktop
 - [ ] Incremental rescan via the USN journal (Windows)
 
 ---
