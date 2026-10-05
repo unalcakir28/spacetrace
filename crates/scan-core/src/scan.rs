@@ -9,6 +9,8 @@ use rayon::prelude::*;
 use crate::capacity::Capacity;
 use crate::clones::Families;
 use crate::extents::{Claims, Deferred, FsKind, Mapped, Volume, Volumes};
+#[cfg(target_os = "linux")]
+use crate::extents::{GATE_PATIENCE, GATE_RUN};
 use crate::journal::Rescan;
 use crate::meta::{display_name, EntryKind, FileIdentity, RawMeta};
 use crate::mounts::Mounts;
@@ -594,6 +596,7 @@ impl Ctx {
         probe: Probe,
         fast_listing: bool,
         root_dev: u64,
+        gated: bool,
         progress: Arc<ScanProgress>,
     ) -> Ctx {
         Ctx {
@@ -608,7 +611,7 @@ impl Ctx {
             families: Mutex::new(Families::default()),
             clones_deduped: AtomicU64::new(0),
             shared_bytes_deduped: AtomicU64::new(0),
-            volumes: Volumes::default(),
+            volumes: Volumes::new(gated),
             deferred: Mutex::new(Deferred::default()),
             compressed_denied: AtomicBool::new(false),
             compressed_bytes_saved: AtomicI64::new(0),
@@ -856,10 +859,7 @@ impl Ctx {
     /// every name reports.
     fn volume_of(&self, dev: u64, dir: &Path, parent: Option<Volume>) -> Option<Volume> {
         if !self.opts.dedupe_clones {
-            return Some(Volume {
-                dev,
-                kind: FsKind::Plain,
-            });
+            return Some(Volume::plain(dev));
         }
         if let Some(parent) = parent {
             if parent.dev == dev {
@@ -868,10 +868,7 @@ impl Ctx {
             let subvolume = matches!(parent.kind, FsKind::Reflink { btrfs: true, .. })
                 && !self.mounts.contains(dir);
             if subvolume {
-                return Some(Volume {
-                    dev,
-                    kind: parent.kind,
-                });
+                return Some(Volume { dev, ..parent });
             }
         }
         let volume = self.volumes.lookup(dev, dir, self.opts.mount_timeout)?;
@@ -974,18 +971,77 @@ impl Ctx {
     /// The file at `path`, for the listing that reads a directory one entry
     /// at a time.
     #[cfg(target_os = "linux")]
-    fn map_extents(&self, volume: Volume, path: &Path, meta: &RawMeta) -> Option<Box<Mapped>> {
-        self.map_opened(volume, meta, || crate::extents::linux::open(path))
+    fn map_extents(&self, volume: &Volume, path: &Path, meta: &RawMeta) -> Option<Box<Mapped>> {
+        self.map_file(volume, meta, || crate::extents::linux::open(path))
     }
 
-    /// The same for a file `open` opens — by path, or relative to its
-    /// directory on the Linux listing. Opened only once it is known the answer
-    /// can matter: on a filesystem that cannot share, and for a file with no
-    /// blocks, nothing is opened.
+    /// Nowhere else says which extents are shared.
+    #[cfg(not(target_os = "linux"))]
+    fn map_extents(&self, _volume: &Volume, _path: &Path, _meta: &RawMeta) -> Option<Box<Mapped>> {
+        None
+    }
+
+    /// The pass for a directory whose filesystem's FIEMAP gate is armed
+    /// (`Volume::defers_fiemap`): every regular file, after the listing, in
+    /// runs of [`GATE_RUN`] under one permit. `open` opens a file of the
+    /// directory by name. Counted in `clones_probed` as it goes, since on a
+    /// directory of a hundred thousand shared files this is the loop that
+    /// runs long (invariant 8).
+    ///
+    /// A pass of its own because holding a permit for a run is what makes
+    /// the gate pay, and interleaved with the listing a run would hold it
+    /// across the stat of every entry too.
     #[cfg(target_os = "linux")]
-    fn map_opened(
+    fn map_deferred(
         &self,
-        volume: Volume,
+        volume: &Volume,
+        pending: &mut [Pending],
+        open: impl Fn(&std::ffi::OsStr) -> std::io::Result<std::fs::File>,
+    ) {
+        let gate = volume.gate.as_deref();
+        let mut probed = Probed::new(&self.progress.clones_probed);
+        let mut permit = None;
+        let mut run = 0usize;
+        for entry in pending
+            .iter_mut()
+            .filter(|p| p.meta.kind == EntryKind::File)
+        {
+            // Per file, unlike the listing's once per directory: each file
+            // here costs an open and a FIEMAP and may wait for a permit, so a
+            // directory of a hundred thousand shared files would otherwise
+            // run to its end after the scan was cancelled (invariant 5).
+            if self.progress.is_cancelled() {
+                break;
+            }
+            probed.one();
+            // Every walk path carries the name it listed.
+            let Some(name) = entry.name.as_deref() else {
+                continue;
+            };
+            if run == 0 {
+                permit = gate.and_then(|g| g.enter(GATE_PATIENCE));
+            }
+            entry.extents = self.map_file(volume, &entry.meta, || open(name));
+            if let Some(permit) = &permit {
+                permit.tick();
+            }
+            run += 1;
+            if run == GATE_RUN {
+                permit = None;
+                run = 0;
+            }
+        }
+        drop(permit);
+    }
+
+    /// One file, opened by `open` — by path, or relative to its directory on
+    /// the Linux listing — only once it is known the answer can matter: on a
+    /// filesystem that cannot share, and for a file with no blocks, nothing
+    /// is opened. A file that shares anything arms its filesystem's gate.
+    #[cfg(target_os = "linux")]
+    fn map_file(
+        &self,
+        volume: &Volume,
         meta: &RawMeta,
         open: impl FnOnce() -> std::io::Result<std::fs::File>,
     ) -> Option<Box<Mapped>> {
@@ -1010,18 +1066,20 @@ impl Ctx {
             )
         });
         match mapped {
-            Ok(mapped) => mapped.map(Box::new),
+            Ok(mapped) => {
+                let mapped = mapped?;
+                if let Some(gate) = &volume.gate {
+                    gate.observe(&mapped);
+                }
+                Some(Box::new(mapped))
+            }
+            // Stopped by the cancel, not refused by the filesystem.
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => None,
             Err(_) => {
                 self.files_unmapped.fetch_add(1, Ordering::Relaxed);
                 None
             }
         }
-    }
-
-    /// Nowhere else says which extents are shared.
-    #[cfg(not(target_os = "linux"))]
-    fn map_extents(&self, _volume: Volume, _path: &Path, _meta: &RawMeta) -> Option<Box<Mapped>> {
-        None
     }
 }
 
@@ -1423,6 +1481,9 @@ fn scan_recording(
             probe,
             source.fast_listing(),
             root_meta.dev,
+            // A gate holds threads back from each other; one thread has
+            // nobody to hold back.
+            pool.current_num_threads() > 1,
             Arc::clone(&progress),
         )
     };
@@ -1700,7 +1761,7 @@ fn walk(
     // arrives in one call, so there is no per-entry moment left at which a
     // filesystem that stopped answering could be given a deadline.
     if !guarded && ctx.fast_listing {
-        match fast_list(dir, parent_id, volume, ctx, &mut names, &mut pending) {
+        match fast_list(dir, parent_id, &volume, ctx, &mut names, &mut pending) {
             Fast::Listed => {
                 drop(listing);
                 let subdirs = place(dir, parent_id, dev, depth, ctx, &names, pending, at);
@@ -1711,6 +1772,7 @@ fn walk(
         }
     }
 
+    let defer = ctx.opts.dedupe_clones && volume.defers_fiemap();
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) => {
@@ -1767,10 +1829,12 @@ fn walk(
         // a time — the only place left that still pays per file for it.
         //
         // Linux has no clone family; there the same question is which of the
-        // file's extents are shared, asked on the filesystems that can answer.
-        let (share, extents) = if ctx.opts.dedupe_clones && meta.kind == EntryKind::File {
+        // file's extents are shared, asked on the filesystems that can answer
+        // — after the listing where the gate is armed (`Ctx::map_deferred`).
+        let probe = ctx.opts.dedupe_clones && meta.kind == EntryKind::File && !defer;
+        let (share, extents) = if probe {
             ctx.progress.clones_probed.fetch_add(1, Ordering::Relaxed);
-            (clone_key(&path), ctx.map_extents(volume, &path, &meta))
+            (clone_key(&path), ctx.map_extents(&volume, &path, &meta))
         } else {
             (None, None)
         };
@@ -1783,6 +1847,12 @@ fn walk(
             meta,
             share,
             extents,
+        });
+    }
+    #[cfg(target_os = "linux")]
+    if defer {
+        ctx.map_deferred(&volume, &mut pending, |name| {
+            crate::extents::linux::open(&dir.join(name))
         });
     }
 
@@ -1804,7 +1874,7 @@ fn descend(subdirs: Vec<Subdir<'_>>, depth: usize, volume: Volume, ctx: &Ctx) {
             sub.id,
             depth + 1,
             sub.dev,
-            Some(volume),
+            Some(volume.clone()),
             ctx,
             sub.at,
         );
@@ -2072,7 +2142,7 @@ fn place<'a>(
     subdirs
 }
 
-/// How many files `clones_probed` is advanced by at once on the Linux listing.
+/// How many files `clones_probed` is advanced by at once on Linux.
 ///
 /// Per file it would be a shared atomic write in the hottest loop of the walk;
 /// per directory it would stand still for the whole of a directory of a
@@ -2110,7 +2180,7 @@ enum Fast {
 fn fast_list(
     dir: &Path,
     id: NodeId,
-    volume: Volume,
+    volume: &Volume,
     ctx: &Ctx,
     names: &mut String,
     pending: &mut Vec<Pending>,
@@ -2123,13 +2193,14 @@ fn fast_list(
         }
     };
     let probe = ctx.opts.dedupe_clones;
+    let defer = probe && volume.defers_fiemap();
     listing.with_entries(|entries, failure| {
         // `read_dir` yields the entries it read before an error, then the
         // error; the entries are kept either way.
         if let Some(e) = failure {
             ctx.note_error(id, dir, &e);
         }
-        let mut probed = 0u64;
+        let mut probed = Probed::new(&ctx.progress.clones_probed);
         for entry in entries {
             let meta = match listing.stat(entry.name) {
                 Ok(meta) => meta,
@@ -2139,15 +2210,11 @@ fn fast_list(
                 }
             };
             // The ordinary path's question about shared extents, asked on the
-            // filesystems that can answer it; see `Ctx::map_opened`.
-            let extents = if probe && meta.kind == EntryKind::File {
-                probed += 1;
-                if probed % PROBED_BATCH == 0 {
-                    ctx.progress
-                        .clones_probed
-                        .fetch_add(PROBED_BATCH, Ordering::Relaxed);
-                }
-                ctx.map_opened(volume, &meta, || listing.open_file(entry.os_name()))
+            // filesystems that can answer it — after the listing where the
+            // gate is armed (`Ctx::map_deferred`).
+            let extents = if probe && !defer && meta.kind == EntryKind::File {
+                probed.one();
+                ctx.map_file(volume, &meta, || listing.open_file(entry.os_name()))
             } else {
                 None
             };
@@ -2162,14 +2229,43 @@ fn fast_list(
                 extents,
             });
         }
-        let rest = probed % PROBED_BATCH;
-        if rest > 0 {
-            ctx.progress
-                .clones_probed
-                .fetch_add(rest, Ordering::Relaxed);
-        }
     });
+    if defer {
+        ctx.map_deferred(volume, pending, |name| listing.open_file(name));
+    }
     Fast::Listed
+}
+
+/// `clones_probed`, advanced [`PROBED_BATCH`] files at a time and by the rest
+/// when dropped.
+#[cfg(target_os = "linux")]
+struct Probed<'a> {
+    counter: &'a AtomicU64,
+    count: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl<'a> Probed<'a> {
+    fn new(counter: &'a AtomicU64) -> Self {
+        Probed { counter, count: 0 }
+    }
+
+    fn one(&mut self) {
+        self.count += 1;
+        if self.count % PROBED_BATCH == 0 {
+            self.counter.fetch_add(PROBED_BATCH, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Probed<'_> {
+    fn drop(&mut self) {
+        let rest = self.count % PROBED_BATCH;
+        if rest > 0 {
+            self.counter.fetch_add(rest, Ordering::Relaxed);
+        }
+    }
 }
 
 /// The platform's one-call directory listing (`bulk.rs`): names and
@@ -2180,7 +2276,7 @@ fn fast_list(
 fn fast_list(
     dir: &Path,
     _id: NodeId,
-    _volume: Volume,
+    _volume: &Volume,
     _ctx: &Ctx,
     names: &mut String,
     pending: &mut Vec<Pending>,
@@ -2207,7 +2303,7 @@ fn fast_list(
 fn fast_list(
     _dir: &Path,
     _id: NodeId,
-    _volume: Volume,
+    _volume: &Volume,
     _ctx: &Ctx,
     _names: &mut String,
     _pending: &mut Vec<Pending>,
@@ -2605,20 +2701,30 @@ mod listing_tests {
             std::fs::write(sub.join("inner/deeper/leaf"), vec![b'y'; 70_000]).unwrap();
         }
         std::fs::hard_link(root.join("d0/f3"), root.join("d0/f3-again")).unwrap();
-        // On btrfs and XFS a reflinked pair, so the two ways of opening a file
+        // On btrfs and XFS reflinked pairs, so the two ways of opening a file
         // for FIEMAP — by path, and relative to its directory — are compared
-        // too. Elsewhere `--reflink=auto` makes an ordinary copy.
+        // too. Elsewhere `--reflink=auto` makes an ordinary copy. The pair in
+        // the root is listed before any other directory, so on XFS with more
+        // than one thread it arms the gate and every directory after it is
+        // mapped in the deferred pass (`Ctx::map_deferred`) — on both
+        // listings, since the ordinary one is run at 6 threads too.
         #[cfg(target_os = "linux")]
         {
             let bytes: Vec<u8> = (0..1_000_000u32).map(|i| (i * 7 % 251) as u8).collect();
+            std::fs::write(root.join("top.bin"), &bytes).unwrap();
             std::fs::write(root.join("d2/original.bin"), bytes).unwrap();
-            let copied = std::process::Command::new("cp")
-                .arg("--reflink=auto")
-                .arg(root.join("d2/original.bin"))
-                .arg(root.join("d4/copy.bin"))
-                .status()
-                .unwrap();
-            assert!(copied.success());
+            for (from, to) in [
+                ("top.bin", "top-copy.bin"),
+                ("d2/original.bin", "d4/copy.bin"),
+            ] {
+                let copied = std::process::Command::new("cp")
+                    .arg("--reflink=auto")
+                    .arg(root.join(from))
+                    .arg(root.join(to))
+                    .status()
+                    .unwrap();
+                assert!(copied.success());
+            }
         }
         std::fs::create_dir(root.join("zoo")).unwrap();
         zoo(&root.join("zoo"));
@@ -2640,17 +2746,18 @@ mod listing_tests {
         std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
 
         let ordinary = answers(root, false, 1);
-        for threads in [1, 6] {
-            let (rows, counts, errors) = answers(root, true, threads);
+        for (fast_listing, threads) in [(true, 1), (true, 6), (false, 6)] {
+            let (rows, counts, errors) = answers(root, fast_listing, threads);
+            let case = format!("fast listing {fast_listing}, {threads} threads");
             // Row by row, so a failure names the entry rather than printing
             // three thousand of them; the count first, so an empty side
             // cannot pass by zipping to nothing.
-            assert_eq!(rows.len(), ordinary.0.len(), "{threads} threads");
+            assert_eq!(rows.len(), ordinary.0.len(), "{case}");
             for (fast, slow) in rows.iter().zip(&ordinary.0) {
-                assert_eq!(fast, slow, "the fast listing disagreed, {threads} threads");
+                assert_eq!(fast, slow, "{case} disagreed");
             }
-            assert_eq!(counts, ordinary.1, "statistics, {threads} threads");
-            assert_eq!(errors, ordinary.2, "errors, {threads} threads");
+            assert_eq!(counts, ordinary.1, "statistics, {case}");
+            assert_eq!(errors, ordinary.2, "errors, {case}");
         }
         if !running_as_root() {
             assert_eq!(
@@ -2686,14 +2793,18 @@ mod listing_tests {
             probe_mount,
             true,
             0,
+            false,
             Arc::default(),
         );
-        let volume = Volume {
-            dev: 0,
-            kind: FsKind::Plain,
-        };
         let (mut names, mut pending) = (String::new(), Vec::new());
-        let outcome = fast_list(&closed, 0, volume, &ctx, &mut names, &mut pending);
+        let outcome = fast_list(
+            &closed,
+            0,
+            &Volume::plain(0),
+            &ctx,
+            &mut names,
+            &mut pending,
+        );
         std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         assert!(
@@ -2702,5 +2813,80 @@ mod listing_tests {
         );
         assert_eq!(*ctx.errors.lock().unwrap(), [(closed, expected)]);
         assert_eq!(ctx.progress.errors.load(Ordering::Relaxed), 1);
+    }
+
+    /// The deferred FIEMAP pass stops at the next file once the scan is
+    /// cancelled, rather than opening the rest of a directory that may hold
+    /// a hundred thousand of them; and a file the cancel stopped is not
+    /// counted as one the filesystem would not map.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cancelled_scan_maps_no_more_deferred_files() {
+        let progress = Arc::new(ScanProgress::default());
+        let ctx = Ctx::new(
+            ScanOptions::default(),
+            Mounts::none(),
+            probe_mount,
+            true,
+            0,
+            false,
+            Arc::clone(&progress),
+        );
+        let volume = Volume {
+            dev: 7,
+            kind: FsKind::Reflink {
+                domain: 0,
+                btrfs: false,
+            },
+            gate: Some(Arc::new(crate::extents::Gate::new(1))),
+        };
+        let file = |i: u64| Pending {
+            name: Some(format!("f{i}").into()),
+            name_off: 0,
+            name_len: 0,
+            meta: RawMeta {
+                kind: EntryKind::File,
+                size: 4096,
+                alloc: 4096,
+                mtime: 0,
+                nlink: 1,
+                ino: i,
+                dev: 7,
+            },
+            share: None,
+            extents: None,
+        };
+        let mut pending: Vec<_> = (1..=3).map(file).collect();
+        let opened = std::cell::Cell::new(0);
+        let refuse = |_: &std::ffi::OsStr| {
+            opened.set(opened.get() + 1);
+            Err(std::io::Error::from_raw_os_error(libc::EACCES))
+        };
+
+        // Armed, so the pass takes a permit and reports each file finished
+        // under it: what tells a waiter this holder is slow, not stuck.
+        let gate = volume.gate.as_deref().unwrap();
+        gate.observe(&Mapped {
+            ranges: vec![(0, 4096)],
+            ..Mapped::default()
+        });
+        ctx.map_deferred(&volume, &mut pending, refuse);
+        assert_eq!(opened.get(), 3, "before the cancel, every file is asked");
+        assert_eq!(ctx.files_unmapped.load(Ordering::Relaxed), 3);
+        assert_eq!(gate.ticks(), 3, "each file is progress under the permit");
+
+        progress.cancel();
+        ctx.map_deferred(&volume, &mut pending, refuse);
+        assert_eq!(opened.get(), 3, "after it, none");
+
+        let stopped = ctx.map_file(&volume, &file(4).meta, || {
+            Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+        });
+        assert!(stopped.is_none());
+        assert_eq!(
+            ctx.files_unmapped.load(Ordering::Relaxed),
+            3,
+            "a file the cancel stopped is not unmapped"
+        );
     }
 }

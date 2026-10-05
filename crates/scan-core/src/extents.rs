@@ -329,10 +329,40 @@ pub(crate) enum FsKind {
 
 /// The filesystem a directory sits on, carried down the walk so that only a
 /// change of device costs a lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub(crate) struct Volume {
     pub dev: u64,
     pub kind: FsKind,
+    /// What its FIEMAP calls go through, where they need it (see
+    /// [`fiemap_cap`]). Carried here so the walk asks no shared table for it
+    /// per directory.
+    #[cfg(target_os = "linux")]
+    pub gate: Option<std::sync::Arc<Gate>>,
+}
+
+impl Volume {
+    /// A filesystem with nothing to ask about shared blocks.
+    pub fn plain(dev: u64) -> Self {
+        Volume {
+            dev,
+            kind: FsKind::Plain,
+            #[cfg(target_os = "linux")]
+            gate: None,
+        }
+    }
+
+    /// Whether a directory here has its files' FIEMAP calls made in a pass
+    /// after its listing, through the gate, rather than as each is listed:
+    /// only once the gate is armed. Everywhere else the pass is cost and no
+    /// gain — on XFS files that share nothing it measured 189 → 202 ms at one
+    /// thread — so btrfs, a filesystem that has shared nothing yet, and a
+    /// scan of one thread keep asking inline.
+    pub fn defers_fiemap(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return self.gate.as_ref().is_some_and(|gate| gate.is_armed());
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
 }
 
 /// Where physical addresses are unique.
@@ -357,6 +387,11 @@ pub(crate) enum DomainKey {
 pub(crate) struct Volumes {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     known: Mutex<VolumeTable>,
+    /// Whether a filesystem that needs a FIEMAP gate gets one. Off for a scan
+    /// that walks with one thread, where a gate has nobody to hold back and
+    /// costs its bookkeeping: 266 -> 279 ms on a shared XFS tree.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    gated: bool,
     /// How a filesystem is asked. A field so the tests can stand in one that
     /// never answers — there is no way to make a real `statfs` hang from a
     /// test, and the lock and deadline below exist for exactly that case.
@@ -379,10 +414,30 @@ impl Default for Detector {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct VolumeTable {
     by_dev: HashMap<u64, FsKind>,
-    domains: Vec<DomainKey>,
+    /// Indexed by `FsKind::Reflink::domain`.
+    domains: Vec<Domain>,
+}
+
+/// One address space, and the gate its FIEMAP calls go through if they need
+/// one.
+#[derive(Debug)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct Domain {
+    key: DomainKey,
+    #[cfg(target_os = "linux")]
+    gate: Option<std::sync::Arc<Gate>>,
 }
 
 impl Volumes {
+    /// `gated` as for [`Volumes::gated`]: whether the scan has more than one
+    /// thread for a gate to hold back.
+    pub fn new(gated: bool) -> Self {
+        Volumes {
+            gated,
+            ..Volumes::default()
+        }
+    }
+
     /// What the filesystem holding `dir` (whose device is `dev`) can tell us,
     /// or `None` when it did not answer within `limit`.
     ///
@@ -403,8 +458,11 @@ impl Volumes {
         dir: &std::path::Path,
         limit: Option<std::time::Duration>,
     ) -> Option<Volume> {
-        if let Some(&kind) = self.table().by_dev.get(&dev) {
-            return Some(Volume { dev, kind });
+        {
+            let table = self.table();
+            if let Some(&kind) = table.by_dev.get(&dev) {
+                return Some(table.volume(dev, kind));
+            }
         }
         let detect = self.detect.0;
         let detected = match limit {
@@ -419,10 +477,13 @@ impl Volumes {
             linux::Detected::Plain => FsKind::Plain,
             linux::Detected::Opaque => FsKind::Opaque,
             linux::Detected::Reflink { key, btrfs } => {
-                let domain = match table.domains.iter().position(|k| *k == key) {
+                let domain = match table.domains.iter().position(|d| d.key == key) {
                     Some(index) => index as u32,
                     None => {
-                        table.domains.push(key);
+                        let gate = fiemap_cap(btrfs)
+                            .filter(|_| self.gated)
+                            .map(|cap| std::sync::Arc::new(Gate::new(cap)));
+                        table.domains.push(Domain { key, gate });
                         (table.domains.len() - 1) as u32
                     }
                 };
@@ -430,7 +491,7 @@ impl Volumes {
             }
         };
         let kind = *table.by_dev.entry(dev).or_insert(kind);
-        Some(Volume { dev, kind })
+        Some(table.volume(dev, kind))
     }
 
     #[cfg(target_os = "linux")]
@@ -446,10 +507,360 @@ impl Volumes {
         _dir: &std::path::Path,
         _limit: Option<std::time::Duration>,
     ) -> Option<Volume> {
-        Some(Volume {
-            dev,
-            kind: FsKind::Plain,
-        })
+        Some(Volume::plain(dev))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl VolumeTable {
+    /// `dev` as a volume of `kind`, with its domain's gate.
+    fn volume(&self, dev: u64, kind: FsKind) -> Volume {
+        let gate = match kind {
+            FsKind::Reflink { domain, .. } => self
+                .domains
+                .get(domain as usize)
+                .and_then(|d| d.gate.clone()),
+            _ => None,
+        };
+        Volume { dev, kind, gate }
+    }
+}
+
+/// How many walk threads may ask one filesystem about extents at once, after
+/// it has reported a shared one; `None` for no limit.
+///
+/// XFS answers "is this extent shared" from the refcount btree of the
+/// allocation group the extent is in, under that group's AGF buffer lock — a
+/// sleeping semaphore, taken for every extent of every file that has ever been
+/// reflinked. Parallel FIEMAP on shared files hands it from thread to thread
+/// with a full sleep and wake-up each time: `perf` put 35% of a 6-thread walk
+/// in `try_to_wake_up` under `xfs_buf_unlock`, and the walk got slower with
+/// threads (100,000 reflinked files, 227 ms at 1 thread, 855 ms at 6). btrfs
+/// got faster with threads in every shape measured, and has no limit. Two
+/// holders on XFS were already a convoy on one group; one, held for a run of
+/// files ([`GATE_RUN`]), made 6 threads beat 1 again. The numbers are in the
+/// commit that added this.
+///
+/// `GETFSMAP` would answer sharing for a whole filesystem in one pass with no
+/// lock per file, but it wants `CAP_SYS_ADMIN` and the `rmapbt` feature and
+/// maps the whole filesystem rather than the tree scanned: a second A6 for
+/// the root case, not a fix for this one.
+#[cfg(target_os = "linux")]
+const fn fiemap_cap(btrfs: bool) -> Option<usize> {
+    if btrfs {
+        None
+    } else {
+        Some(1)
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) use gate::{Gate, GATE_PATIENCE, GATE_RUN};
+
+#[cfg(target_os = "linux")]
+mod gate {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Condvar, Mutex};
+    use std::time::Duration;
+
+    use super::Mapped;
+
+    /// How many files' FIEMAP calls one permit covers before it is handed on.
+    ///
+    /// Long enough that the hand-off is paid once per run rather than once
+    /// per file — gating each call only moved the convoy into a futex — and
+    /// short enough that a directory of a hundred thousand shared files does
+    /// not keep every other thread waiting for all of it. 256 measured within
+    /// 4% of 64, 16 up to 11% worse, a permit per call three times slower.
+    pub(crate) const GATE_RUN: usize = 64;
+
+    /// How long a thread waits for the gate, with no holder finishing a
+    /// file, before going ahead without it.
+    ///
+    /// The gate only ever makes the walk faster; it must never be what stops
+    /// it. A call that does not return — a disk failing under a filesystem
+    /// that still answers `statfs` — would otherwise hold its permit for good
+    /// and park every other walk thread that reaches the same filesystem
+    /// behind it. Measured against one file, not a run: a run of [`GATE_RUN`]
+    /// large fragmented files on a slow disk can take longer than this and is
+    /// still a holder worth waiting for.
+    pub(crate) const GATE_PATIENCE: Duration = Duration::from_secs(2);
+
+    /// A counting semaphore that stays open until a shared extent arms it.
+    ///
+    /// **Open until then** because most XFS filesystems are made with reflink
+    /// — the default since xfsprogs 5.1 — and hold few or no reflinked files,
+    /// and there FIEMAP scales with threads like anything else: a gate of one
+    /// made 100,000 never-reflinked files 52 → 141 ms at 6 threads.
+    ///
+    /// **Abandoned for good** after one wait runs out of patience with no
+    /// file finished under any permit meanwhile: something holding a permit
+    /// is not coming back, and every later run would pay the same wait. A
+    /// holder that is slow but finishing files ([`Permit::tick`]) is waited
+    /// for, because abandoning the gate under it brings the convoy back for
+    /// the rest of the scan.
+    ///
+    /// Two flags rather than one state under the mutex, so the open gate —
+    /// the common case — costs a load per run and takes no lock. Nothing is
+    /// acquired while a permit is held, and a holder waits on nothing but the
+    /// kernel, so the gate cannot be part of a cycle with the walk's thread
+    /// pool or with any other lock.
+    #[derive(Debug)]
+    pub(crate) struct Gate {
+        armed: AtomicBool,
+        abandoned: AtomicBool,
+        /// Files finished under a permit, by anyone: how a waiter tells a
+        /// slow holder from a stuck one.
+        ticks: AtomicU64,
+        busy: Mutex<usize>,
+        freed: Condvar,
+        permits: usize,
+    }
+
+    /// Returns its permit when dropped.
+    pub(crate) struct Permit<'a>(&'a Gate);
+
+    impl Gate {
+        pub fn new(permits: usize) -> Self {
+            Gate {
+                armed: AtomicBool::new(false),
+                abandoned: AtomicBool::new(false),
+                ticks: AtomicU64::new(0),
+                busy: Mutex::new(0),
+                freed: Condvar::new(),
+                permits: permits.max(1),
+            }
+        }
+
+        /// Arm the gate if this file shares anything: what makes a
+        /// filesystem one whose FIEMAP calls convoy.
+        pub fn observe(&self, mapped: &Mapped) {
+            if mapped.claims_anything() {
+                self.arm();
+            }
+        }
+
+        /// Read before written, so the threads that see sharing after the
+        /// first do not keep writing a line every other thread reads.
+        fn arm(&self) {
+            if !self.armed.load(Ordering::Relaxed) {
+                self.armed.store(true, Ordering::Relaxed);
+            }
+        }
+
+        #[cfg(test)]
+        pub fn ticks(&self) -> u64 {
+            self.ticks.load(Ordering::Relaxed)
+        }
+
+        pub fn is_armed(&self) -> bool {
+            self.armed.load(Ordering::Relaxed) && !self.abandoned.load(Ordering::Relaxed)
+        }
+
+        /// A permit, or `None` — the gate is not armed, or a whole `patience`
+        /// passed with no file finished under any permit and the gate is now
+        /// abandoned — in which case the caller goes ahead regardless; see
+        /// [`GATE_PATIENCE`].
+        ///
+        /// A cancelled scan waits here only as long as a holder takes to
+        /// notice: holders check between files. Behind a holder that has
+        /// stopped returning it waits `patience`; the walk's other waits on
+        /// such a filesystem are already unbounded.
+        pub fn enter(&self, patience: Duration) -> Option<Permit<'_>> {
+            if !self.is_armed() {
+                return None;
+            }
+            let mut busy = self.busy.lock().unwrap_or_else(|p| p.into_inner());
+            loop {
+                let seen = self.ticks.load(Ordering::Relaxed);
+                busy = self
+                    .freed
+                    .wait_timeout_while(busy, patience, |busy| {
+                        *busy >= self.permits && !self.abandoned.load(Ordering::Relaxed)
+                    })
+                    .unwrap_or_else(|p| p.into_inner())
+                    .0;
+                if self.abandoned.load(Ordering::Relaxed) {
+                    return None;
+                }
+                if *busy < self.permits {
+                    *busy += 1;
+                    return Some(Permit(self));
+                }
+                if self.ticks.load(Ordering::Relaxed) == seen {
+                    self.abandoned.store(true, Ordering::Relaxed);
+                    // Everyone else waiting stops too, rather than each
+                    // spending a patience of its own to find out.
+                    self.freed.notify_all();
+                    return None;
+                }
+            }
+        }
+    }
+
+    impl Permit<'_> {
+        /// One more file finished under this permit. A shared atomic write
+        /// per file, but only on the gated path, where the holder is alone
+        /// and each file costs a FIEMAP under the allocation group's lock.
+        pub fn tick(&self) {
+            self.0.ticks.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl Drop for Permit<'_> {
+        fn drop(&mut self) {
+            let mut busy = self.0.busy.lock().unwrap_or_else(|p| p.into_inner());
+            *busy -= 1;
+            drop(busy);
+            self.0.freed.notify_one();
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        fn sharing() -> Mapped {
+            Mapped {
+                ranges: vec![(0, 4096)],
+                ..Mapped::default()
+            }
+        }
+
+        /// Until a shared extent arms it, the gate holds nobody up, and a
+        /// file that shares nothing does not arm it. That is the whole
+        /// reason most XFS filesystems, which share nothing, walk at full
+        /// width.
+        #[test]
+        fn an_unarmed_gate_lets_everyone_through() {
+            let gate = Gate::new(1);
+            gate.observe(&Mapped::default());
+            assert!(gate.enter(Duration::from_secs(5)).is_none());
+            assert!(gate.enter(Duration::from_secs(5)).is_none(), "nor twice");
+            assert!(!gate.is_armed());
+        }
+
+        /// Armed, a gate of one admits one holder, and the next caller waits
+        /// until that permit is handed back — not until its patience runs
+        /// out.
+        #[test]
+        fn an_armed_gate_admits_one_holder_at_a_time() {
+            let gate = Arc::new(Gate::new(1));
+            gate.observe(&sharing());
+            let held = gate
+                .enter(Duration::from_secs(5))
+                .expect("the first permit");
+
+            let waiter = Arc::clone(&gate);
+            let started = Instant::now();
+            let second = std::thread::spawn(move || {
+                let permit = waiter.enter(Duration::from_secs(30));
+                (permit.is_some(), started.elapsed())
+            });
+            std::thread::sleep(Duration::from_millis(200));
+            drop(held);
+            let (got, waited) = second.join().unwrap();
+            assert!(got, "the permit came back, so the waiter got it");
+            assert!(
+                waited >= Duration::from_millis(150),
+                "it did wait: {waited:?}"
+            );
+            assert!(
+                waited < Duration::from_secs(10),
+                "for the holder, not the timeout"
+            );
+            assert!(gate.is_armed());
+        }
+
+        /// A holder that never comes back — a FIEMAP stuck on a failing disk
+        /// — costs the next caller its patience once, and nobody anything
+        /// after: the gate gives up rather than making every later run wait
+        /// again.
+        #[test]
+        fn a_holder_that_never_returns_costs_one_wait_and_then_nothing() {
+            let gate = Gate::new(1);
+            gate.arm();
+            let stuck = gate
+                .enter(Duration::from_secs(5))
+                .expect("the first permit");
+
+            let started = Instant::now();
+            assert!(gate.enter(Duration::from_millis(100)).is_none());
+            assert!(started.elapsed() >= Duration::from_millis(100));
+            assert!(!gate.is_armed(), "abandoned");
+
+            let again = Instant::now();
+            assert!(gate.enter(Duration::from_secs(30)).is_none());
+            assert!(again.elapsed() < Duration::from_secs(1), "no second wait");
+            drop(stuck);
+        }
+
+        /// A holder that is slow but still mapping files — a run of large
+        /// fragmented files on a slow disk — is waited for, however long the
+        /// run takes; only one that maps nothing for a whole `patience` is
+        /// taken for stuck.
+        #[test]
+        fn a_slow_holder_that_keeps_mapping_is_waited_for() {
+            let gate = Arc::new(Gate::new(1));
+            gate.arm();
+            let holder = Arc::clone(&gate);
+            let (taken, permit_taken) = std::sync::mpsc::channel();
+            let slow = std::thread::spawn(move || {
+                let permit = holder.enter(Duration::from_secs(5)).expect("the first");
+                taken.send(()).unwrap();
+                // Six times the waiter's patience in all, a file every
+                // quarter of it.
+                for _ in 0..24 {
+                    std::thread::sleep(Duration::from_millis(25));
+                    permit.tick();
+                }
+            });
+            permit_taken.recv().unwrap();
+
+            let started = Instant::now();
+            let permit = gate.enter(Duration::from_millis(100));
+            let waited = started.elapsed();
+            slow.join().unwrap();
+            assert!(permit.is_some(), "waited for the holder, after {waited:?}");
+            assert!(waited >= Duration::from_millis(400), "{waited:?}");
+            assert!(gate.is_armed(), "and the gate is still in use");
+        }
+
+        /// Abandoned is for good: a shared extent seen afterwards, which
+        /// would arm an open gate, leaves it open.
+        #[test]
+        fn arming_after_abandoning_leaves_the_gate_open() {
+            let gate = Gate::new(1);
+            gate.arm();
+            let stuck = gate
+                .enter(Duration::from_secs(5))
+                .expect("the first permit");
+            assert!(gate.enter(Duration::from_millis(50)).is_none());
+            gate.observe(&sharing());
+            assert!(!gate.is_armed());
+            let again = Instant::now();
+            assert!(gate.enter(Duration::from_secs(30)).is_none());
+            assert!(again.elapsed() < Duration::from_secs(1));
+            drop(stuck);
+        }
+
+        /// The count is honoured: with three permits, three holders and the
+        /// fourth waits.
+        #[test]
+        fn a_gate_admits_as_many_as_it_has_permits() {
+            let gate = Gate::new(3);
+            gate.arm();
+            let held: Vec<_> = (0..3)
+                .map(|_| gate.enter(Duration::from_secs(5)).expect("a permit"))
+                .collect();
+            assert!(
+                gate.enter(Duration::from_millis(50)).is_none(),
+                "the fourth"
+            );
+            drop(held);
+        }
     }
 }
 
@@ -1290,9 +1701,8 @@ mod linux_tests {
             })
         );
 
-        assert_eq!(
-            first.join().unwrap(),
-            None,
+        assert!(
+            first.join().unwrap().is_none(),
             "past the deadline it is unreachable"
         );
         assert!(started.elapsed() < Duration::from_secs(5));
