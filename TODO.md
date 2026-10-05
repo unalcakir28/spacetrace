@@ -1722,12 +1722,44 @@ No decision made yet, will be discussed when its turn comes.
       `own_size`/`own_alloc`, which `store::load` returns as zero by design.
       Fixed in scan-core; the desktop's age colouring of a loaded snapshot is
       fixed with the next pin bump.
+      **Credentials** *(5 October 2026)*: botocore's default chain, in its
+      order — environment, `role_arn` (with `source_profile` or
+      `credential_source`, through STS AssumeRole), web identity, SSO
+      (`sso_session` and legacy; the token cache found by SHA-1 of the
+      start URL), credentials-file keys, `credential_process`, config-file
+      keys, ECS/EKS container credentials, IMDSv2. One renewal for all
+      workers: in the advisory window one thread renews while the others
+      keep the current keys; past the mandatory deadline they wait,
+      cancellably, and share one outcome (one MFA prompt, not sixteen).
+      Checked against aws CLI v2.36.47 on 24 configurations. Hardened past
+      botocore: `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` must start with
+      `/` and the result goes through the loopback/allow-list check;
+      addresses in errors drop userinfo and query; the IMDS role name must
+      be a valid IAM name; `credential_process` stdout is capped at 1 MiB.
+      Live service checked: MinIO STS AssumeRole only; web identity, SSO,
+      ECS and IMDS against local stand-ins. No MFA prompt, no SSO OIDC
+      refresh, no assume-role cache file.
+      **Parallel listing** *(5 October 2026)*, `s3/listing.rs`: delimiter
+      discovery (≤ 3 levels) finds folders, runs of siblings become
+      `prefix` + `start-after` ranges, an idle worker takes the second half
+      of the earliest busy range, and pages reach the tree builder in key
+      order, so the tree is identical for any worker count. Fetched-ahead
+      objects are capped at 100,000; a range that runs out of room pauses
+      and resumes after its last key (waiting inside the range took 111 s
+      against 27 s). A static partition with in-order claiming was tried
+      and lost (587k keys 130 s vs 19 s at 16 workers): a range cannot be
+      split midway. AWS `sentinel-cogs` (us-west-2, link-bound past 8
+      workers): 587k keys 175 s → ~30 s at 16, 78k 22 s → 7 s. MinIO (1M
+      keys, one drive) is slower in parallel (207 s → 490 s at 16), so any
+      non-AWS `--endpoint` defaults to one stream; `--threads` overrides,
+      clamped to 64.
       - [ ] Still open: OneDrive and Google Drive (need a registered OAuth
-            client); memory and time at 10M keys (unmeasured); parallel
-            prefix listing; SSO/role/IMDS credentials; virtual-hosted
-            addressing for `--endpoint`; R2/B2/Wasabi untested live; billed
-            bytes beyond current versions (ListObjectVersions /
-            ListMultipartUploads); Ctrl-C saves nothing (no signal handler).
+            client); memory and time at 10M keys (extrapolated ~1.7 GB, not
+            measured); a flat bucket (no `/`) gets no parallelism;
+            in-region AWS, Ceph, R2, B2, Wasabi unmeasured; virtual-hosted
+            addressing for `--endpoint`; billed bytes beyond current
+            versions (ListObjectVersions / ListMultipartUploads); Ctrl-C
+            saves nothing (no signal handler).
 - [x] **C10 Package manager awareness** — done *(2 October 2026)*.
       `spacetrace pkgs [PATH]` credits every file under a root to the
       package that installed it and lists the rest as unowned, in pieces
