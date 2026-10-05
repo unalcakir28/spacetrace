@@ -925,16 +925,36 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       imported base. The save now hashes rows as it writes them
       (/Applications save 588 → 487 ms), and the base is checked in the
       pass that loads it.
-      *Measured* (M3 Max, 5 interleaved pairs, medians, full vs
-      incremental): /Applications 459 vs 241 ms; ~/Library 2067 vs 1981 ms;
-      ~/Desktop/Projects 5357 vs 3174 ms. Not the 20–50× above: base load
-      (216 / 417 / 923 ms) and rereads dominate — replay itself is ~10 ms.
+      **HistoryDone is not "now"** (found the same day, from a test that
+      failed only when the binary sat in a 316k-entry directory):
+      fseventsd numbers a record when it receives it from the kernel, so a
+      change made just before the replay can be missing at HistoryDone and
+      its folder is copied from the base — a wrong snapshot reported as
+      incremental (17 of 20 "write, then replay" rounds missed it). Each
+      rescan now writes a marker into a private 0700 temp dir **before the
+      base loads** and the replay waits for HistoryDone *and* the marker,
+      so the load hides the marker's 5–490 ms delivery. Measured across
+      volumes the order does not hold (1–3 of 20 changes on an APFS image
+      missed), so a root on another volume than the temp dir falls back
+      (`marker-volume`); `/` is the Data volume here and is unaffected. A
+      stuck `FSEventStreamStart` runs on an abandonable thread and blocks
+      further replays (`journal-stuck`) until it returns; an unknown reason
+      read from a newer database is `fallback:unknown`, not an error.
+      *Measured* (M3 Max, interleaved, medians, full vs incremental, with
+      the barrier): /Applications 406 vs 239 ms; ~/Library 2585 vs
+      2394 ms; ~/Desktop/Projects 5554 vs 4166 ms. Not the 20–50× above:
+      base load (225 / 417 / 923 ms) and rereads dominate — replay itself is
+      ~10 ms.
       - [ ] USN (Windows) and fanotify (Linux) as further `Journal`
             implementations; a Linux journal must flag `files_unmapped`
             directories first.
       - [ ] ~/Library rereads ~1,250 privacy-protected (TCC) folders every
             time, ~1.2 ms each, so it gains almost nothing.
       - [ ] Trees full of hardlinks reuse little (Projects reuses 33%).
+      - [ ] External disks and any root on another volume than the temp
+            dir always scan in full (`marker-volume`), so incremental
+            coverage there is only the fallback test. A marker on the root's
+            own volume would mean writing into the user's disk.
       - [ ] An APFS image attached `-nobrowse` gets no FSEvents history, so
             it never scans incrementally.
       - [ ] Only saved scans continue the chain; pushed snapshots carry no
