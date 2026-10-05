@@ -825,9 +825,12 @@ pub(crate) mod tests {
         settle(&root);
         let progress = ScanProgress::default();
         let started = Instant::now();
-        let got = replay_capped(&root, since, Duration::from_secs(30), 10, &progress);
+        // A budget far beyond anything the test waits for, so "at once" can
+        // be told from "at the deadline" with room for the other replays this
+        // one queues behind (one at a time per process).
+        let got = replay_capped(&root, since, Duration::from_secs(300), 10, &progress);
         assert_eq!(got.unwrap_err(), NoAnswer::TooMany);
-        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(started.elapsed() < Duration::from_secs(60));
         let all = replay_capped(&root, since, Duration::from_secs(30), 1000, &progress).unwrap();
         assert!(
             all.len() >= 50,
