@@ -463,7 +463,7 @@ const REFUSED_KEY: &str = "a `.` or `..` path segment, which would read as navig
 /// `scan s3://bucket/prefix`: list instead of walk, then everything a disk
 /// scan does — save, ncdu, the summary — on the tree that comes back.
 fn cmd_scan_s3(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
-    if let Some(flag) = a.walk.first_given() {
+    if let Some(flag) = a.walk.first_given_for_a_bucket() {
         anyhow::bail!("{flag} is about walking a filesystem; it does not apply to an S3 bucket");
     }
     let url = S3Url::parse(&a.path.to_string_lossy())?;
@@ -472,6 +472,7 @@ fn cmd_scan_s3(a: &ScanArgs, db_path: &Path, json: bool) -> Result<()> {
         region: a.s3.region.clone(),
         profile: a.s3.profile.clone(),
         no_sign_request: a.s3.no_sign_request,
+        threads: a.walk.threads,
     };
 
     let progress = Arc::new(ScanProgress::default());

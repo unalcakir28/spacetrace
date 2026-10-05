@@ -251,7 +251,9 @@ pub struct WalkArgs {
     #[arg(long)]
     pub no_clone_dedupe: bool,
 
-    /// Walk with this many threads (default: measured, not one per core)
+    /// Walk with this many threads (default: measured, not one per core).
+    /// For an s3:// path: listing requests at once (default 16 on AWS, 1 for
+    /// any other --endpoint; at most 64)
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..))]
     pub threads: Option<u16>,
 
@@ -516,16 +518,16 @@ impl WalkArgs {
         args
     }
 
-    /// The first walk flag given, for refusing it on a bucket, which has no
-    /// mounts, hardlinks, clones or threads to speak of.
-    pub fn first_given(&self) -> Option<&'static str> {
+    /// The first walk flag given that means nothing for a bucket, which has
+    /// no mounts, hardlinks or clones. `--threads` is not among them: for a
+    /// bucket it is how many listing requests run at once.
+    pub fn first_given_for_a_bucket(&self) -> Option<&'static str> {
         [
             (!self.exclude.is_empty(), "--exclude"),
             (self.one_file_system, "--one-file-system"),
             (self.depth.is_some(), "--depth"),
             (self.no_dedupe, "--no-dedupe"),
             (self.no_clone_dedupe, "--no-clone-dedupe"),
-            (self.threads.is_some(), "--threads"),
             (self.mount_timeout.is_some(), "--mount-timeout"),
             (self.no_mft, "--no-mft"),
             (self.disk.is_some(), "--disk"),

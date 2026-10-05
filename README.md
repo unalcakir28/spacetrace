@@ -258,6 +258,11 @@ The region comes from `--region`, `AWS_REGION`, the profile, then `us-east-1`
   `host:port`), not this machine: two machines listing one bucket see one target,
   and `diff --path s3://b` compares two snapshots from the same service — one
   bucket name on MinIO and on AWS is two buckets.
+- **Listed in parallel on AWS**: 16 requests at once, split by folder, and the
+  same tree one request at a time would give (587k keys: 175 s → 29 s).
+  `--threads` changes the number. Through an `--endpoint` that is not AWS the
+  listing stays one stream unless `--threads` asks for more, because on MinIO
+  parallel listing measured slower than one stream.
 
 ### Watching it happen
 

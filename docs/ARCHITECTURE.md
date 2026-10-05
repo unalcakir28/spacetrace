@@ -381,8 +381,28 @@ What a bucket snapshot means:
   unfinished multipart uploads are billed and are not in a listing; the CLI
   says so under every total.
 - **Progress and cancelling** follow the walk: files, folders and bytes move
-  once per 1000-key page, and a cancel before the next page returns
-  `ErrorKind::Interrupted` and no tree.
+  once per page the tree takes in, the folder count moves while the key space
+  is being split, and a cancel stops every request before its next page and
+  returns `ErrorKind::Interrupted` and no tree.
+
+**Listing in parallel** (`listing.rs`). One stream lists a page per round
+trip, so ten million keys are ten thousand round trips in a row. Folders are
+disjoint ranges of the key space: past one plain page — kept for a bucket
+that fits in it, thrown away otherwise, so that no listing starts in the
+middle of a folder, where S3 and MinIO read `start-after` differently —
+folders are found with `/`-delimited listings (three levels at most, until
+there are four per worker), runs of sibling folders become ranges listed by
+`prefix` + `start-after`, and an idle worker takes the second half of the
+folders the earliest busy range has not reached. **The tree cannot
+change**: workers only fetch, and the objects reach the tree builder on the
+calling thread in key order, exactly the sequence one stream gives, so
+`Tree::try_from_nested` builds the same arena however the work fell. What is fetched ahead waits in a bounded queue;
+a range far ahead stops and its worker moves to the front instead of waiting.
+The default is 16 workers on AWS, however addressed, and one stream for any
+other endpoint (`Settings::default_workers`): AWS seeks to any key, while
+MinIO walks its drive for each new listing, so ranges side by side were
+slower there than one stream. The measurements are in
+`listing.rs`, beside the constants they chose.
 
 ## Platform-specific backends
 

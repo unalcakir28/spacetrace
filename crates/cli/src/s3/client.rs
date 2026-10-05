@@ -47,11 +47,31 @@ const FIRST_BACKOFF: Duration = Duration::from_millis(500);
 /// connection that went silent, which a retry then gets past.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// What the listing asks for and where.
+/// The bucket a request goes to.
 pub struct Bucket {
     pub name: String,
+}
+
+/// What one ListObjectsV2 stream asks for.
+#[derive(Debug, Clone, Copy)]
+pub struct Query<'a> {
     /// `""` or ending in `/`.
-    pub prefix: String,
+    pub prefix: &'a str,
+    /// Group what lies below the next `/` into `CommonPrefixes`.
+    pub delimiter: bool,
+    /// Keys after this one only; sent with the first page, which is the
+    /// only one S3 reads it from.
+    pub start_after: Option<&'a str>,
+}
+
+impl<'a> Query<'a> {
+    pub fn plain(prefix: &'a str) -> Query<'a> {
+        Query {
+            prefix,
+            delimiter: false,
+            start_after: None,
+        }
+    }
 }
 
 /// Cheap to clone: the connection pool and the keys are shared.
@@ -161,10 +181,16 @@ impl Client {
         &self.region
     }
 
+    /// Keys a full page holds.
+    pub fn page_hint(&self) -> usize {
+        self.page_size.map_or(1000, |p| p as usize)
+    }
+
     /// One page, retried and redirected as needed.
     pub fn list_page(
         &mut self,
         bucket: &Bucket,
+        listing: &Query<'_>,
         token: Option<&str>,
         progress: &ScanProgress,
     ) -> Result<ListPage> {
@@ -172,14 +198,19 @@ impl Client {
             ("list-type".into(), "2".into()),
             ("encoding-type".into(), "url".into()),
         ];
-        if !bucket.prefix.is_empty() {
-            query.push(("prefix".into(), bucket.prefix.clone()));
+        if !listing.prefix.is_empty() {
+            query.push(("prefix".into(), listing.prefix.to_string()));
+        }
+        if listing.delimiter {
+            query.push(("delimiter".into(), "/".into()));
         }
         if let Some(size) = self.page_size {
             query.push(("max-keys".into(), size.to_string()));
         }
-        if let Some(token) = token {
-            query.push(("continuation-token".into(), token.to_string()));
+        match (token, listing.start_after) {
+            (Some(token), _) => query.push(("continuation-token".into(), token.to_string())),
+            (None, Some(after)) => query.push(("start-after".into(), after.to_string())),
+            (None, None) => {}
         }
 
         let mut attempt = 0;
@@ -738,6 +769,111 @@ pub(super) mod test_server {
 
     pub type Reply = (u16, String);
 
+    /// A bucket in memory behind a real socket, answering ListObjectsV2 —
+    /// `prefix`, `delimiter=/`, `start-after`, `continuation-token`,
+    /// `max-keys`, `encoding-type=url` — the way S3 does, for the tests that
+    /// need many shapes of bucket and no Docker.
+    pub fn bucket(keys: Vec<(String, u64)>) -> Served {
+        let mut keys = keys;
+        keys.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        keys.dedup_by(|a, b| a.0 == b.0);
+        serve(move |request| list_objects(&keys, &request.target))
+    }
+
+    /// One ListObjectsV2 answer over `keys`, sorted by byte.
+    pub fn list_objects(keys: &[(String, u64)], target: &str) -> Reply {
+        let query = target.split_once('?').map_or("", |(_, q)| q);
+        let param = |name: &str| -> Option<String> {
+            query.split('&').find_map(|pair| {
+                let (k, v) = pair.split_once('=')?;
+                (k == name).then(|| crate::s3::xml::url_decode(v).unwrap().into_owned())
+            })
+        };
+        let prefix = param("prefix").unwrap_or_default();
+        let delimiter = param("delimiter").is_some();
+        let max_keys: usize = param("max-keys").map_or(1000, |m| m.parse().unwrap());
+        // The token is the last name listed, folder or key, marked as which.
+        let (resume, resume_folder) = match param("continuation-token") {
+            Some(token) => (
+                Some(
+                    crate::s3::xml::url_decode(&token[1..])
+                        .unwrap()
+                        .into_owned(),
+                ),
+                token.starts_with('F'),
+            ),
+            None => (param("start-after"), false),
+        };
+        let encode = |s: &str| crate::s3::sigv4::uri_encode(s, false);
+
+        let mut body = String::new();
+        let mut listed = 0;
+        let mut last: Option<(String, bool)> = None;
+        let mut truncated = false;
+        for (key, size) in keys {
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            if let Some(resume) = &resume {
+                let past = match resume_folder {
+                    true => key > resume && !key.starts_with(resume.as_str()),
+                    false => key > resume,
+                };
+                if !past {
+                    continue;
+                }
+            }
+            let folder = delimiter
+                .then(|| {
+                    let rest = &key[prefix.len()..];
+                    rest.find('/').map(|i| format!("{prefix}{}", &rest[..=i]))
+                })
+                .flatten();
+            if let Some(folder) = &folder {
+                if last.as_ref().is_some_and(|(name, f)| *f && name == folder) {
+                    continue;
+                }
+            }
+            if listed == max_keys {
+                truncated = true;
+                break;
+            }
+            listed += 1;
+            match folder {
+                Some(folder) => {
+                    body.push_str(&format!(
+                        "<CommonPrefixes><Prefix>{}</Prefix></CommonPrefixes>",
+                        encode(&folder)
+                    ));
+                    last = Some((folder, true));
+                }
+                None => {
+                    body.push_str(&format!(
+                        "<Contents><Key>{}</Key><Size>{size}</Size>\
+                         <LastModified>2026-10-05T00:00:00Z</LastModified></Contents>",
+                        encode(key)
+                    ));
+                    last = Some((key.clone(), false));
+                }
+            }
+        }
+        let token = match (&last, truncated) {
+            (Some((name, folder)), true) => format!(
+                "<NextContinuationToken>{}{}</NextContinuationToken>",
+                if *folder { 'F' } else { 'K' },
+                encode(name)
+            ),
+            _ => String::new(),
+        };
+        (
+            200,
+            format!(
+                "<ListBucketResult><IsTruncated>{truncated}</IsTruncated>{token}{body}\
+                 <EncodingType>url</EncodingType></ListBucketResult>"
+            ),
+        )
+    }
+
     pub fn serve(handler: impl Fn(&Seen) -> Reply + Send + Sync + 'static) -> Served {
         use std::io::{BufRead, BufReader, Read, Write};
         use std::sync::atomic::Ordering;
@@ -876,11 +1012,14 @@ mod tests {
     }
 
     fn bucket(name: &str) -> Bucket {
-        Bucket {
-            name: name.into(),
-            prefix: String::new(),
-        }
+        Bucket { name: name.into() }
     }
+
+    const ALL: Query<'static> = Query {
+        prefix: "",
+        delimiter: false,
+        start_after: None,
+    };
 
     #[test]
     fn aws_is_addressed_virtual_hosted_and_others_path_style() {
@@ -1007,7 +1146,9 @@ mod tests {
         // An address nothing listens on: reaching the network at all would
         // turn into a different error after a timeout.
         let mut c = client(Some("http://127.0.0.1:9"), "us-east-1");
-        let err = c.list_page(&bucket("b"), None, &progress).unwrap_err();
+        let err = c
+            .list_page(&bucket("b"), &ALL, None, &progress)
+            .unwrap_err();
         let io = err.downcast_ref::<std::io::Error>().expect("an io::Error");
         assert_eq!(io.kind(), std::io::ErrorKind::Interrupted);
         assert_eq!(progress.files.load(Ordering::Relaxed), 0);
@@ -1042,7 +1183,7 @@ mod tests {
         ]);
         let mut c = signed_client(&endpoint);
         let page = c
-            .list_page(&bucket("b"), None, &ScanProgress::default())
+            .list_page(&bucket("b"), &ALL, None, &ScanProgress::default())
             .unwrap();
         assert_eq!(page.objects.len(), 1);
         let seen = server.join().unwrap();
@@ -1077,7 +1218,7 @@ mod tests {
             (200, "OK", ONE_KEY.into()),
         ]);
         let mut c = signed_client(&endpoint);
-        c.list_page(&bucket("b"), None, &ScanProgress::default())
+        c.list_page(&bucket("b"), &ALL, None, &ScanProgress::default())
             .unwrap();
         assert_eq!(c.region(), "eu-central-1");
         let seen = server.join().unwrap();
@@ -1100,7 +1241,7 @@ mod tests {
         let (endpoint, server) = canned(vec![(403, "Forbidden", denied.into())]);
         let mut c = signed_client(&endpoint);
         let err = c
-            .list_page(&bucket("b"), None, &ScanProgress::default())
+            .list_page(&bucket("b"), &ALL, None, &ScanProgress::default())
             .unwrap_err();
         let text = format!("{err:#}");
         assert!(
@@ -1120,10 +1261,17 @@ mod tests {
         let dropped = (0..ATTEMPTS).map(|_| (0, "", Vec::new())).collect();
         let (endpoint, server) = canned(dropped);
         let mut c = signed_client(&endpoint).with_quick_retries();
-        let mut b = bucket("b");
-        b.prefix = "private-prefix/".into();
+        let private = Query {
+            prefix: "private-prefix/",
+            ..ALL
+        };
         let err = c
-            .list_page(&b, Some("token-from-the-server"), &ScanProgress::default())
+            .list_page(
+                &bucket("b"),
+                &private,
+                Some("token-from-the-server"),
+                &ScanProgress::default(),
+            )
             .unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("did not answer after 6 attempts"), "{text}");
@@ -1140,7 +1288,7 @@ mod tests {
         let (endpoint, server) = canned(vec![(200, "OK", vec![0xff, 0xfe, b'<'])]);
         let mut c = signed_client(&endpoint).with_quick_retries();
         let err = c
-            .list_page(&bucket("b"), None, &ScanProgress::default())
+            .list_page(&bucket("b"), &ALL, None, &ScanProgress::default())
             .unwrap_err();
         assert!(format!("{err:#}").contains("not UTF-8"), "{err:#}");
         assert_eq!(server.join().unwrap().len(), 1, "one request, no retry");
@@ -1149,7 +1297,7 @@ mod tests {
         let (endpoint, server) = canned(vec![(200, "OK", huge)]);
         let mut c = signed_client(&endpoint).with_quick_retries();
         let err = c
-            .list_page(&bucket("b"), None, &ScanProgress::default())
+            .list_page(&bucket("b"), &ALL, None, &ScanProgress::default())
             .unwrap_err();
         assert!(format!("{err:#}").contains("larger than"), "{err:#}");
         assert_eq!(server.join().unwrap().len(), 1, "one request, no retry");
@@ -1166,7 +1314,7 @@ mod tests {
         let (endpoint, _server) = canned(vec![(403, "Forbidden", body.into_bytes())]);
         let mut c = signed_client(&endpoint);
         let err = c
-            .list_page(&bucket("b"), None, &ScanProgress::default())
+            .list_page(&bucket("b"), &ALL, None, &ScanProgress::default())
             .unwrap_err();
         let text = format!("{err:#}");
         assert!(!text.chars().any(|ch| ch.is_control()), "{text:?}");

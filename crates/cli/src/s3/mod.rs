@@ -29,6 +29,7 @@ mod client;
 mod config;
 mod credentials;
 mod keys;
+mod listing;
 mod sigv4;
 mod xml;
 
@@ -123,23 +124,30 @@ pub struct S3Scan {
 ///
 /// The counters on `progress` move once per page — files, bytes, folders — so
 /// the CLI's progress line and its stall warning work unchanged (invariant 8).
+/// Before any object reaches the tree, while a parallel listing looks for
+/// folders, `rows_done` counts the pages that search reads.
 /// A cancel stops it before the next request and returns
 /// `ErrorKind::Interrupted` and no tree (invariant 5).
 pub fn scan(url: &S3Url, flags: &Flags, progress: Arc<ScanProgress>) -> Result<S3Scan> {
     let settings = config::resolve(flags, &|name| std::env::var(name).ok())?;
-    scan_with(url, settings, None, progress)
+    let workers = workers(flags.threads, &settings);
+    scan_with(url, settings, None, workers, progress)
 }
 
-/// Consecutive pages with no keys and a token for more, before the listing is
-/// refused. S3 may send an empty page while it skips past what a listing does
-/// not show; a thousand in a row is not that, it is a server that will never
-/// finish.
-const MAX_EMPTY_PAGES: u64 = 1000;
+/// Listing requests at once: `--threads` if given, up to
+/// `listing::MAX_WORKERS`, else what suits the endpoint.
+fn workers(threads: Option<u16>, settings: &config::Settings) -> usize {
+    match threads {
+        Some(n) => usize::from(n).clamp(1, listing::MAX_WORKERS),
+        None => settings.default_workers(),
+    }
+}
 
 fn scan_with(
     url: &S3Url,
     settings: config::Settings,
     page_size: Option<u32>,
+    workers: usize,
     progress: Arc<ScanProgress>,
 ) -> Result<S3Scan> {
     let started = Instant::now();
@@ -148,57 +156,29 @@ fn scan_with(
     http.page_size = page_size;
     let bucket = client::Bucket {
         name: url.bucket.clone(),
-        prefix: url.prefix.clone(),
     };
 
     let root = url.root();
     let mut keys = keys::KeyTree::new(&root, &url.prefix);
-    let mut token: Option<String> = None;
-    let mut seen_tokens = std::collections::HashSet::new();
-    let mut pages = 0u64;
-    let mut empty_in_a_row = 0u64;
-    loop {
-        let page = http.list_page(&bucket, token.as_deref(), &progress)?;
-        pages += 1;
-        let (mut files, mut bytes) = (0, 0);
-        for object in &page.objects {
-            keys.insert(object)?;
-            files += u64::from(!object.key.ends_with('/'));
-            bytes += object.size;
-        }
-        client::count_page(&progress, files, bytes, keys.folders());
-
-        if !page.is_truncated {
-            break;
-        }
-        empty_in_a_row = match page.objects.is_empty() {
-            true => empty_in_a_row + 1,
-            false => 0,
-        };
-        if empty_in_a_row > MAX_EMPTY_PAGES {
-            bail!(
-                "s3://{} sent more than {MAX_EMPTY_PAGES} empty pages in a row, each promising more; \
-                 the listing would never end",
-                url.bucket
-            );
-        }
-        let next = page.next_continuation_token.with_context(|| {
-            format!(
-                "s3://{} said there is more and gave no continuation token",
-                url.bucket
-            )
-        })?;
-        // A server handing back a token it already gave would make this loop
-        // forever while the counters kept moving — the one hang the stall
-        // warning cannot see.
-        if !seen_tokens.insert(next.clone()) {
-            bail!(
-                "s3://{} repeated a continuation token; the listing would never end",
-                url.bucket
-            );
-        }
-        token = Some(next);
-    }
+    // The tree is built here, on this thread, from objects in key order —
+    // however many workers fetched them.
+    let listed = listing::list(
+        &mut http,
+        &bucket,
+        &url.prefix,
+        listing::Plan::workers(workers),
+        &progress,
+        &mut |objects| {
+            let (mut files, mut bytes) = (0, 0);
+            for object in &objects {
+                keys.insert(object)?;
+                files += u64::from(!object.key.ends_with('/'));
+                bytes += object.size;
+            }
+            client::count_page(&progress, files, bytes, keys.folders());
+            Ok(())
+        },
+    )?;
     client::check_cancelled(&progress)?;
 
     // Building the arena is one pass over every key; on a large bucket long
@@ -212,7 +192,7 @@ fn scan_with(
         stats,
         host,
         region: http.region().to_string(),
-        pages,
+        pages: listed,
         duration_ms: started.elapsed().as_millis() as u64,
     })
 }
@@ -221,6 +201,31 @@ fn scan_with(
 /// left half-written, and one failed request must not take the listing down.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+/// Every entry of the arena, in arena order: names, links, sizes, times.
+/// Two of these equal means the same tree down to the ids.
+fn arena(tree: &Tree) -> Vec<String> {
+    (0..tree.len() as u32)
+        .map(|id| {
+            let n = tree.node(id);
+            format!(
+                "{id} {:?} p{} c{}+{} {:?} s{} a{} o{} m{} f{} d{}",
+                tree.name(id),
+                n.parent,
+                n.children_start,
+                n.children_len,
+                n.kind,
+                n.size,
+                n.alloc,
+                n.own_alloc,
+                n.mtime,
+                n.files,
+                n.dirs
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -296,7 +301,7 @@ mod tests {
         ];
         let (endpoint, server) = client::test_server::canned(responses);
         let url = S3Url::parse("s3://b").unwrap();
-        let scan = scan_with(&url, anonymous(&endpoint), None, Arc::default()).unwrap();
+        let scan = scan_with(&url, anonymous(&endpoint), None, 1, Arc::default()).unwrap();
         assert_eq!(scan.pages, 4);
         assert_eq!(scan.stats.objects, 3);
         assert_eq!(server.join().unwrap().len(), 4);
@@ -311,9 +316,18 @@ mod tests {
     /// A container credentials endpoint handing out keys that live
     /// `lifetime_s` seconds, and the moment each token stops working.
     fn issuer(lifetime_s: i64) -> (Served, Arc<Mutex<HashMap<String, i64>>>) {
+        slow_issuer(lifetime_s, std::time::Duration::ZERO)
+    }
+
+    /// `issuer`, taking `delay` over every answer.
+    fn slow_issuer(
+        lifetime_s: i64,
+        delay: std::time::Duration,
+    ) -> (Served, Arc<Mutex<HashMap<String, i64>>>) {
         let valid_until = Arc::new(Mutex::new(HashMap::new()));
         let ledger = Arc::clone(&valid_until);
         let server = serve(move |_| {
+            std::thread::sleep(delay);
             let mut ledger = ledger.lock().unwrap();
             let n = ledger.len() + 1;
             let expires = crate::fmt::unix_now() + lifetime_s;
@@ -398,7 +412,7 @@ mod tests {
             false,
         );
         let url = S3Url::parse("s3://b").unwrap();
-        let scan = scan_with(&url, renewing(&container, &bucket), None, Arc::default()).unwrap();
+        let scan = scan_with(&url, renewing(&container, &bucket), None, 1, Arc::default()).unwrap();
         assert_eq!(scan.stats.objects, 15);
         assert_eq!(
             *refusals.lock().unwrap(),
@@ -422,7 +436,7 @@ mod tests {
         let (bucket, refusals) =
             bucket_checking_tokens(2, std::time::Duration::ZERO, Arc::clone(&valid_until), true);
         let url = S3Url::parse("s3://b").unwrap();
-        let scan = scan_with(&url, renewing(&container, &bucket), None, Arc::default()).unwrap();
+        let scan = scan_with(&url, renewing(&container, &bucket), None, 1, Arc::default()).unwrap();
         assert_eq!(scan.stats.objects, 2);
         assert_eq!(*refusals.lock().unwrap(), 1);
         let seen = bucket.seen();
@@ -431,23 +445,650 @@ mod tests {
         assert_eq!(container.seen().len(), 2);
     }
 
+    // ----------------------------------------- one stream or many, one tree
+
+    /// What one listing produced, for comparing one against another.
+    fn outcome(scan: &S3Scan, progress: &ScanProgress) -> (Vec<String>, KeyStats, u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            arena(&scan.tree),
+            scan.stats.clone(),
+            progress.files.load(Relaxed),
+            progress.bytes.load(Relaxed),
+        )
+    }
+
+    fn list_stand_in(
+        keys: &[(String, u64)],
+        prefix: &str,
+        page: u32,
+        workers: usize,
+    ) -> (S3Scan, Arc<ScanProgress>) {
+        let server = client::test_server::bucket(keys.to_vec());
+        let url = S3Url::parse(&format!("s3://b/{prefix}")).unwrap();
+        let progress = Arc::new(ScanProgress::default());
+        let scan = scan_with(
+            &url,
+            anonymous(&server.address),
+            Some(page),
+            workers,
+            Arc::clone(&progress),
+        )
+        .unwrap();
+        (scan, progress)
+    }
+
+    /// The keys that make a tree hard to get right — markers, an object
+    /// beside a folder of its name, empty and dot segments, names that sort
+    /// either side of `/` — inside folders big enough to be split.
+    fn awkward_bucket() -> Vec<(String, u64)> {
+        let mut keys: Vec<(String, u64)> = [
+            ("a", 1),
+            ("a/b", 2),
+            ("a.txt", 3),
+            ("a0", 4),
+            ("a//double", 5),
+            ("/lead", 6),
+            ("./dot", 7),
+            ("x/../up", 8),
+            ("marker/", 9),
+            ("heavy/", 10),
+            ("heavy/inside", 11),
+            ("sp ace/plus+sign/100%", 12),
+            ("ünï/ファイル", 13),
+        ]
+        .iter()
+        .map(|(k, s)| (k.to_string(), *s))
+        .collect();
+        for svc in 0..6 {
+            for day in 0..5 {
+                for part in 0..7 {
+                    keys.push((format!("logs/svc-{svc}/d{day}/p{part}.gz"), part + 1));
+                }
+            }
+            keys.push((format!("logs/svc-{svc}.manifest"), 100));
+        }
+        for user in 0..40 {
+            keys.push((format!("users/u{user:02}/photo.jpg"), user));
+            keys.push((format!("users/u{user:02}/docs/cv.pdf"), 2 * user));
+        }
+        for n in 0..60 {
+            keys.push((format!("flat/{n:03}"), 1));
+        }
+        keys
+    }
+
+    /// The claim the whole design rests on: however many workers, whatever
+    /// the page size, the tree is the one a single stream builds — the same arena, id for id —
+    /// and so are the totals and the counters.
+    #[test]
+    fn any_number_of_workers_builds_the_tree_one_stream_builds() {
+        let keys = awkward_bucket();
+        for prefix in ["", "logs"] {
+            let (one, progress) = list_stand_in(&keys, prefix, 1000, 1);
+            let expected = outcome(&one, &progress);
+            assert!(
+                expected.0.len() > 100,
+                "{prefix:?}: {} entries",
+                expected.0.len()
+            );
+            for page in [1000, 7, 2] {
+                for workers in [2, 3, 16] {
+                    let (scan, progress) = list_stand_in(&keys, prefix, page, workers);
+                    assert_eq!(
+                        outcome(&scan, &progress),
+                        expected,
+                        "prefix {prefix:?}, page {page}, workers {workers}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Random buckets over an alphabet that puts `.`, `/` and `0` next to
+    /// each other in byte order, which is where a split goes wrong if it is
+    /// going to.
+    #[test]
+    fn random_buckets_list_the_same_in_parallel() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = ["a", "b", "/", ".", "0", "-", "/", "c"];
+        for round in 0..40 {
+            let count = 20 + next() % 300;
+            let keys: Vec<(String, u64)> = (0..count)
+                .map(|_| {
+                    let len = 1 + next() % 12;
+                    let key: String = (0..len)
+                        .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
+                        .collect();
+                    (key, next() % 1000)
+                })
+                .collect();
+            let (one, progress) = list_stand_in(&keys, "", 1000, 1);
+            let expected = outcome(&one, &progress);
+            let page = [1, 3, 10, 1000][round % 4];
+            let workers = [2, 4, 16][round % 3];
+            let (scan, progress) = list_stand_in(&keys, "", page, workers);
+            assert_eq!(
+                outcome(&scan, &progress),
+                expected,
+                "round {round}: {count} keys, page {page}, workers {workers}"
+            );
+        }
+    }
+
+    /// A bucket that fits in one page costs one request, as it did before
+    /// there were workers; a flat one is listed as one stream after the
+    /// first page, plus the few pages discovery reads before it gives up on
+    /// expanding it.
+    #[test]
+    fn splitting_costs_nothing_where_it_cannot_pay() {
+        let small: Vec<(String, u64)> = (0..50).map(|n| (format!("d{}/k{n}", n % 5), 1)).collect();
+        let (scan, _) = list_stand_in(&small, "", 1000, 16);
+        assert_eq!(scan.pages, 1);
+
+        let flat: Vec<(String, u64)> = (0..30_000).map(|n| (format!("k{n:06}"), 1)).collect();
+        let (one, _) = list_stand_in(&flat, "", 1000, 1);
+        let (many, _) = list_stand_in(&flat, "", 1000, 16);
+        assert_eq!(one.pages, 30);
+        assert!(
+            many.pages <= one.pages + 11,
+            "{} requests for {} pages",
+            many.pages,
+            one.pages
+        );
+        assert_eq!(arena(&many.tree), arena(&one.tree));
+    }
+
+    /// Many small folders under one parent are listed as a few long ranges,
+    /// not one request each.
+    #[test]
+    fn neighbouring_folders_are_listed_as_one_range() {
+        let keys: Vec<(String, u64)> = (0..4000)
+            .map(|n| (format!("users/u{:04}/f{}", n / 2, n % 2), 1))
+            .collect();
+        let (one, _) = list_stand_in(&keys, "", 1000, 1);
+        let (many, _) = list_stand_in(&keys, "", 1000, 16);
+        assert_eq!(arena(&many.tree), arena(&one.tree));
+        assert!(
+            many.pages < 40,
+            "{} requests for 2000 folders of 2 keys",
+            many.pages
+        );
+    }
+
     /// A hostile endpoint can hand out a fresh token with every empty page
     /// forever; the repeated-token check cannot see that, and no counter
     /// moves for anyone watching. Bounded instead.
     #[test]
     fn an_endless_run_of_empty_pages_is_refused() {
-        let responses = (0..=MAX_EMPTY_PAGES)
+        let responses = (0..=listing::MAX_EMPTY_PAGES)
             .map(|i| (200, "OK", page(&[], Some(&format!("token-{i}")))))
             .collect();
         let (endpoint, server) = client::test_server::canned(responses);
         let url = S3Url::parse("s3://b").unwrap();
-        let err = scan_with(&url, anonymous(&endpoint), None, Arc::default())
+        let err = scan_with(&url, anonymous(&endpoint), None, 1, Arc::default())
             .map(|_| ())
             .unwrap_err();
         assert!(
             format!("{err:#}").contains("empty pages in a row"),
             "{err:#}"
         );
-        assert_eq!(server.join().unwrap().len(), MAX_EMPTY_PAGES as usize + 1);
+        assert_eq!(
+            server.join().unwrap().len(),
+            listing::MAX_EMPTY_PAGES as usize + 1
+        );
+    }
+
+    // ------------------------------------ cancelled, refused, held back
+
+    /// The bucket stand-in, with `hook` given each request and its number
+    /// first: an answer of its own, or `None` for the bucket's.
+    fn bucket_with(
+        keys: &[(String, u64)],
+        hook: impl Fn(usize, &client::test_server::Seen) -> Option<client::test_server::Reply>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Served {
+        let mut keys = keys.to_vec();
+        keys.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        let count = std::sync::atomic::AtomicUsize::new(0);
+        serve(move |request| {
+            let n = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            hook(n, request)
+                .unwrap_or_else(|| client::test_server::list_objects(&keys, &request.target))
+        })
+    }
+
+    fn interrupted(err: &anyhow::Error) -> bool {
+        err.downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::Interrupted)
+    }
+
+    /// Invariant 5 the way the repository tests it, with workers: cancelled
+    /// before the start, nothing is asked, no counter moves.
+    #[test]
+    fn a_listing_cancelled_before_it_starts_asks_nothing_with_workers() {
+        let server = client::test_server::bucket(awkward_bucket());
+        let progress = Arc::new(ScanProgress::default());
+        progress.cancel();
+        let url = S3Url::parse("s3://b").unwrap();
+        let err = scan_with(
+            &url,
+            anonymous(&server.address),
+            Some(7),
+            16,
+            Arc::clone(&progress),
+        )
+        .map(|_| ())
+        .unwrap_err();
+        assert!(interrupted(&err), "{err:#}");
+        assert_eq!(progress.files.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(server.seen().len(), 0);
+    }
+
+    /// Cancelled midway — on the server's count of requests, not a timer —
+    /// in discovery or in the ranges: every worker stops within the request
+    /// it had in flight, the call returns, and no tree comes back.
+    #[test]
+    fn a_listing_cancelled_midway_returns_no_tree() {
+        let keys = awkward_bucket();
+        for workers in [1, 4, 16] {
+            for at in [1, 3, 10, 30] {
+                let progress = Arc::new(ScanProgress::default());
+                let cancel = Arc::clone(&progress);
+                let server = bucket_with(&keys, move |n, _| {
+                    if n == at {
+                        cancel.cancel();
+                    }
+                    None
+                });
+                let url = S3Url::parse("s3://b").unwrap();
+                let err = scan_with(
+                    &url,
+                    anonymous(&server.address),
+                    Some(7),
+                    workers,
+                    Arc::clone(&progress),
+                )
+                .map(|_| ())
+                .unwrap_err();
+                let what = format!("{workers} workers, cancelled at request {at}");
+                assert!(interrupted(&err), "{what}: {err:#}");
+                let sent = server.seen().len();
+                assert!(sent <= at + workers, "{what}: {sent} requests");
+            }
+        }
+    }
+
+    /// A range the server refuses ends the listing with the server's word,
+    /// whichever worker met it, and leaves no other waiting for it.
+    #[test]
+    fn a_refused_range_ends_the_listing_with_the_refusal() {
+        let keys = awkward_bucket();
+        for workers in [2, 16] {
+            let server = bucket_with(&keys, |n, request| {
+                let range = n > 0 && !request.target.contains("delimiter=");
+                range.then(|| {
+                    (
+                        403,
+                        "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"
+                            .into(),
+                    )
+                })
+            });
+            let url = S3Url::parse("s3://b").unwrap();
+            let err = scan_with(
+                &url,
+                anonymous(&server.address),
+                Some(7),
+                workers,
+                Arc::default(),
+            )
+            .map(|_| ())
+            .unwrap_err();
+            assert!(
+                format!("{err:#}").contains("AccessDenied"),
+                "{workers} workers: {err:#}"
+            );
+        }
+    }
+
+    /// Invariant 8 through discovery: a counter moves with every page it
+    /// reads, so a level of slow folders is not taken for a stall, and the
+    /// folder count never runs backwards — discovery leaves it to the tree.
+    #[test]
+    fn discovery_moves_a_counter_every_page_and_none_backwards() {
+        use std::sync::atomic::Ordering::Relaxed;
+        // Forty folders: the root's listing finds them in four pages of ten,
+        // and that is enough for two workers.
+        let keys: Vec<(String, u64)> = (0..2000)
+            .map(|n| (format!("d{:02}/k{n:04}", n % 40), 1))
+            .collect();
+        let progress = Arc::new(ScanProgress::default());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let server = {
+            let (progress, seen) = (Arc::clone(&progress), Arc::clone(&seen));
+            bucket_with(&keys, move |_, request| {
+                lock(&seen).push((
+                    request.target.contains("delimiter="),
+                    progress.dirs.load(Relaxed),
+                    progress.rows_done.load(Relaxed),
+                ));
+                None
+            })
+        };
+        let url = S3Url::parse("s3://b").unwrap();
+        scan_with(
+            &url,
+            anonymous(&server.address),
+            Some(10),
+            2,
+            Arc::clone(&progress),
+        )
+        .unwrap();
+        let seen = lock(&seen);
+        let dirs: Vec<u64> = seen.iter().map(|s| s.1).collect();
+        assert!(dirs.windows(2).all(|w| w[0] <= w[1]), "{dirs:?}");
+        let discovery: Vec<u64> = seen.iter().filter(|s| s.0).map(|s| s.2).collect();
+        assert_eq!(discovery.len(), 4);
+        assert_eq!(discovery, [0, 1, 2, 3], "one more for every page read");
+    }
+
+    /// A folder discovery cannot expand ends the listing, and the workers
+    /// stop taking folders instead of expanding the rest for nothing.
+    #[test]
+    fn a_failed_expansion_stops_the_other_workers() {
+        let keys: Vec<(String, u64)> = (0..40)
+            .flat_map(|a| (0..3).map(move |b| (format!("d{a:02}/s{b}/k"), 1)))
+            .collect();
+        let server = bucket_with(&keys, |_, request| {
+            let delimited = request.target.contains("delimiter=");
+            if delimited && request.target.contains("prefix=d00") {
+                return Some((
+                    403,
+                    "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"
+                        .into(),
+                ));
+            }
+            if delimited && request.target.contains("prefix=d") {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            None
+        });
+        let url = S3Url::parse("s3://b").unwrap();
+        let err = scan_with(
+            &url,
+            anonymous(&server.address),
+            Some(10),
+            16,
+            Arc::default(),
+        )
+        .map(|_| ())
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("AccessDenied"), "{err:#}");
+        let expansions = server
+            .seen()
+            .iter()
+            .filter(|r| r.target.contains("delimiter=") && r.target.contains("prefix=d"))
+            .count();
+        assert!(
+            expansions <= 20,
+            "{expansions} of 40 folders expanded after the first failed"
+        );
+    }
+
+    /// `--threads` for a bucket is capped: past the point where more
+    /// requests at once stopped paying, each worker is one more connection
+    /// and one more thread for nothing.
+    #[test]
+    fn listing_workers_are_capped() {
+        let aws = config::Settings {
+            credentials: None,
+            region: config::DEFAULT_REGION.into(),
+            endpoint: None,
+        };
+        let minio = anonymous("http://127.0.0.1:9000");
+        assert_eq!(workers(None, &aws), listing::DEFAULT_WORKERS);
+        assert_eq!(workers(None, &minio), 1);
+        assert_eq!(workers(Some(3), &minio), 3);
+        assert_eq!(workers(Some(u16::MAX), &aws), listing::MAX_WORKERS);
+        assert_eq!(workers(Some(0), &aws), 1);
+    }
+
+    /// The cap on empty pages holds inside a range as it does in one stream.
+    #[test]
+    fn an_endless_run_of_empty_pages_is_refused_inside_a_range() {
+        let keys: Vec<(String, u64)> = (0..50)
+            .map(|n| (format!("d{}/k{n:02}", n % 10), 1))
+            .collect();
+        let range = |n: usize, request: &client::test_server::Seen| {
+            n > 0 && !request.target.contains("delimiter=")
+        };
+        let server = bucket_with(&keys, move |n, request| {
+            range(n, request).then(|| {
+                (
+                    200,
+                    format!(
+                        "<ListBucketResult><IsTruncated>true</IsTruncated>\
+                         <NextContinuationToken>e{n}</NextContinuationToken></ListBucketResult>"
+                    ),
+                )
+            })
+        });
+        let url = S3Url::parse("s3://b").unwrap();
+        let err = scan_with(&url, anonymous(&server.address), Some(5), 2, Arc::default())
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("empty pages in a row"),
+            "{err:#}"
+        );
+        let empties = server
+            .seen()
+            .iter()
+            .enumerate()
+            .filter(|(n, r)| range(*n, r))
+            .count();
+        assert!(empties > listing::MAX_EMPTY_PAGES as usize, "{empties}");
+    }
+
+    /// However slow the caller, workers fetch no more than the cap ahead of
+    /// it, and the listing still finishes with the same keys in the same
+    /// order: the paused ranges and the one being taken do not deadlock.
+    /// Watched from the caller's side, as requests made ahead of the pages it
+    /// has taken.
+    #[test]
+    fn workers_stop_fetching_ahead_of_a_slow_caller() {
+        // Forty folders, enough that discovery leaves them to the ranges.
+        let keys: Vec<(String, u64)> = (0..3000)
+            .map(|n| (format!("d{:02}/k{n:04}", n % 40), 1))
+            .collect();
+        let mut expected: Vec<String> = keys.iter().map(|(k, _)| k.clone()).collect();
+        expected.sort();
+        let run = |max_buffered| {
+            let server = client::test_server::bucket(keys.clone());
+            let mut http = client::Client::new(anonymous(&server.address)).unwrap();
+            http.page_size = Some(10);
+            let mut got = Vec::new();
+            let mut taken = 0usize;
+            let mut lead = 0usize;
+            listing::list(
+                &mut http,
+                &client::Bucket { name: "b".into() },
+                "",
+                listing::Plan {
+                    workers: 8,
+                    max_buffered,
+                },
+                &ScanProgress::default(),
+                &mut |objects| {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    taken += 1;
+                    lead = lead.max(server.seen().len().saturating_sub(taken));
+                    got.extend(objects.into_iter().map(|o| o.key));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            (got, lead)
+        };
+        let (got, lead) = run(30);
+        assert_eq!(got, expected);
+        // Twice the cap, the second cap, at ten keys a page; a page in
+        // flight for each worker and the one being taken; and discovery's
+        // requests, made before anything was taken (five here).
+        let bound = 2 * 30 / 10 + (8 + 1) + 5;
+        assert!(lead <= bound, "{lead} requests ahead with a cap of 30");
+        let (got, uncapped) = run(usize::MAX);
+        assert_eq!(got, expected);
+        assert!(
+            uncapped > bound,
+            "uncapped, the workers ran only {uncapped} ahead; the test proves nothing"
+        );
+    }
+
+    /// Keys renewed while many workers share them: one fetch per renewal,
+    /// not one per worker, and none of them lapsed on the way. The issuer is
+    /// slow so that workers arrive while a renewal is under way.
+    #[test]
+    fn keys_shared_by_workers_are_renewed_once_each_time() {
+        let keys = awkward_bucket();
+        let (container, valid_until) = slow_issuer(3, std::time::Duration::from_millis(300));
+        let refusals = Arc::new(Mutex::new(0u32));
+        let counted = Arc::clone(&refusals);
+        let bucket = bucket_with(&keys, move |_, request| {
+            let token = request.header("x-amz-security-token").unwrap_or("");
+            let alive = valid_until
+                .lock()
+                .unwrap()
+                .get(token)
+                .is_some_and(|until| request.at_ms < *until);
+            if !alive {
+                *counted.lock().unwrap() += 1;
+                return Some((
+                    400,
+                    "<Error><Code>ExpiredToken</Code><Message>expired</Message></Error>".into(),
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            None
+        });
+        let url = S3Url::parse("s3://b").unwrap();
+        let progress = Arc::new(ScanProgress::default());
+        let scan = scan_with(
+            &url,
+            renewing(&container, &bucket),
+            Some(7),
+            4,
+            Arc::clone(&progress),
+        )
+        .unwrap();
+        let (one, one_progress) = list_stand_in(&keys, "", 1000, 1);
+        assert_eq!(outcome(&scan, &progress), outcome(&one, &one_progress));
+        assert_eq!(
+            *refusals.lock().unwrap(),
+            0,
+            "no request went out with lapsed keys"
+        );
+        let tokens: std::collections::HashSet<String> = bucket
+            .seen()
+            .iter()
+            .filter_map(|r| r.header("x-amz-security-token").map(str::to_string))
+            .collect();
+        assert!(tokens.len() >= 2, "renewed midway: {tokens:?}");
+        // Keys living two to three seconds are renewed a second or more
+        // apart; workers renewing each for itself would be milliseconds apart.
+        let fetched: Vec<i64> = container.seen().iter().map(|r| r.at_ms).collect();
+        let closest = fetched.windows(2).map(|w| w[1] - w[0]).min().unwrap();
+        assert!(
+            closest >= 500,
+            "two renewals {closest} ms apart: {fetched:?}"
+        );
+    }
+
+    /// Through an endpoint the listing is one stream unless `--threads` asks
+    /// for more: on MinIO, ranges side by side are slower than one. Asked,
+    /// the same endpoint is split.
+    #[test]
+    fn an_endpoint_lists_in_one_stream_unless_asked_for_more() {
+        let keys: Vec<(String, u64)> = (0..2500)
+            .map(|n| (format!("d{:02}/k{n:04}", n % 50), 1))
+            .collect();
+        let url = S3Url::parse("s3://b").unwrap();
+        let listed = |threads: Option<u16>| {
+            let server = client::test_server::bucket(keys.clone());
+            let flags = config::Flags {
+                endpoint: Some(server.address.clone()),
+                region: Some("us-east-1".into()),
+                no_sign_request: true,
+                threads,
+                ..Default::default()
+            };
+            let scan = scan(&url, &flags, Arc::default()).unwrap();
+            let delimited = server
+                .seen()
+                .iter()
+                .filter(|r| r.target.contains("delimiter="))
+                .count();
+            (scan.pages, delimited)
+        };
+        assert_eq!(
+            listed(None),
+            (3, 0),
+            "one stream: three pages, nothing split"
+        );
+        let (pages, delimited) = listed(Some(4));
+        assert!(
+            delimited > 0,
+            "asked for 4, the bucket was split ({pages} requests)"
+        );
+    }
+
+    /// A folder with too many objects of its own is read once by discovery:
+    /// not probed again at every level below, and not read again by the
+    /// range after it, which starts after the last key read.
+    #[test]
+    fn a_folder_discovery_stops_expanding_is_read_once() {
+        let mut keys: Vec<(String, u64)> =
+            (0..12_000).map(|n| (format!("flat/k{n:05}"), 1)).collect();
+        for x in 0..10 {
+            for y in 0..10 {
+                keys.push((format!("deep/x{x}/y{y}/z"), 1));
+            }
+        }
+        let (one, one_progress) = list_stand_in(&keys, "", 1000, 1);
+        let server = client::test_server::bucket(keys);
+        let progress = Arc::new(ScanProgress::default());
+        let url = S3Url::parse("s3://b").unwrap();
+        let many = scan_with(
+            &url,
+            anonymous(&server.address),
+            None,
+            16,
+            Arc::clone(&progress),
+        )
+        .unwrap();
+        assert_eq!(outcome(&many, &progress), outcome(&one, &one_progress));
+        let seen = server.seen();
+        let probes = seen
+            .iter()
+            .filter(|r| r.target.contains("delimiter=") && r.target.contains("prefix=flat"))
+            .count();
+        assert_eq!(probes, 11, "eleven pages, read once, three levels deep");
+        let flat_keys_read: usize = seen
+            .iter()
+            .filter(|r| r.target.contains("prefix=flat") && !r.target.contains("delimiter="))
+            .count();
+        assert_eq!(
+            flat_keys_read, 1,
+            "the 1000 keys after the probe, in one page"
+        );
     }
 }

@@ -39,6 +39,8 @@ pub struct Flags {
     pub region: Option<String>,
     pub profile: Option<String>,
     pub no_sign_request: bool,
+    /// Concurrent listing requests; `--threads`.
+    pub threads: Option<u16>,
 }
 
 /// Everything needed to address and sign a request.
@@ -51,6 +53,24 @@ pub struct Settings {
     pub endpoint: Option<Endpoint>,
 }
 
+impl Settings {
+    /// Listing requests at once when `--threads` does not say:
+    /// `DEFAULT_WORKERS` on AWS, one stream on any other service.
+    ///
+    /// AWS starts a listing at any key in one seek, so ranges side by side
+    /// add up. MinIO walks its drive for every listing it has not cached, so
+    /// ranges side by side repeat that walk: on one million keys one stream
+    /// took 207 s, 4 workers 387 s and 16 workers 490 s (MinIO in Docker on
+    /// an Apple M3 Max, one drive, medians of two interleaved rounds). Other
+    /// services are unmeasured, and keep the one stream they had before.
+    pub fn default_workers(&self) -> usize {
+        match self.endpoint.as_ref().is_none_or(Endpoint::is_aws) {
+            true => super::listing::DEFAULT_WORKERS,
+            false => 1,
+        }
+    }
+}
+
 /// An S3-compatible service, addressed path-style.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
@@ -61,6 +81,17 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    /// AWS itself, addressed through an endpoint: `s3.<region>.amazonaws.com`,
+    /// a FIPS or dual-stack name, a VPC interface endpoint, or China's
+    /// `amazonaws.com.cn`.
+    pub fn is_aws(&self) -> bool {
+        let host = match self.authority.rsplit_once(':') {
+            Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => host,
+            _ => self.authority.as_str(),
+        };
+        host.ends_with(".amazonaws.com") || host.ends_with(".amazonaws.com.cn")
+    }
+
     pub fn parse(raw: &str) -> Result<Endpoint> {
         let url = reqwest::Url::parse(raw)
             .with_context(|| format!("--endpoint is not a URL: {raw:?}"))?;
@@ -1626,5 +1657,34 @@ mod tests {
         );
         assert_eq!(ini.section("profile spaced").unwrap().get("nested"), None);
         assert_eq!(ini.section("dup").unwrap().get("a").as_deref(), Some("2"));
+    }
+
+    /// AWS lists in parallel by default, however it is addressed; any other
+    /// service lists in one stream.
+    #[test]
+    fn only_aws_lists_in_parallel_by_default() {
+        let with = |endpoint: Option<&str>| Settings {
+            credentials: None,
+            region: DEFAULT_REGION.into(),
+            endpoint: endpoint.map(|e| Endpoint::parse(e).unwrap()),
+        };
+        let parallel = crate::s3::listing::DEFAULT_WORKERS;
+        assert_eq!(with(None).default_workers(), parallel);
+        for aws in [
+            "https://s3.eu-west-1.amazonaws.com",
+            "https://s3-fips.us-east-1.amazonaws.com",
+            "https://bucket.vpce-0a1b2c3d-4e5f6a7b.s3.us-east-1.vpce.amazonaws.com",
+            "https://s3.cn-north-1.amazonaws.com.cn:443",
+        ] {
+            assert_eq!(with(Some(aws)).default_workers(), parallel, "{aws}");
+        }
+        for other in [
+            "http://127.0.0.1:9000",
+            "https://storage.example.com",
+            "https://amazonaws.com.evil.example",
+            "https://notamazonaws.com",
+        ] {
+            assert_eq!(with(Some(other)).default_workers(), 1, "{other}");
+        }
     }
 }

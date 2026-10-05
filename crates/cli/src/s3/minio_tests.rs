@@ -26,6 +26,7 @@ use spacetrace_store::{Integrity, Store};
 
 use super::client::{Bucket, Client};
 use super::config::{Endpoint, Settings, DEFAULT_REGION};
+use super::listing::DEFAULT_WORKERS;
 use super::sigv4::Credentials;
 use super::{scan_with, S3Url};
 
@@ -87,10 +88,7 @@ impl TestBucket {
             nanos % 1_000_000_000
         );
         let client = Client::new(server.signed()).unwrap();
-        let bucket = Bucket {
-            name,
-            prefix: String::new(),
-        };
+        let bucket = Bucket { name };
         let made = client.send("PUT", &bucket, &[], Vec::new()).unwrap();
         assert_eq!(made.status, 200, "creating the bucket: {}", made.body);
         TestBucket {
@@ -158,10 +156,17 @@ fn a_real_bucket_lists_into_a_tree_that_survives_the_store() {
     }
 
     let progress = Arc::new(ScanProgress::default());
-    let scan = scan_with(&bucket.url(), server.signed(), None, Arc::clone(&progress)).unwrap();
+    let scan = scan_with(
+        &bucket.url(),
+        server.signed(),
+        None,
+        1,
+        Arc::clone(&progress),
+    )
+    .unwrap();
     let tree = &scan.tree;
 
-    assert_eq!(scan.pages, 3, "2509 keys at 1000 a page");
+    assert_eq!(scan.pages, 3, "2509 keys at 1000 a page, one stream");
     assert_eq!(scan.stats.objects, 2509);
     assert_eq!(scan.stats.bytes, expected_bytes);
     assert_eq!(scan.stats.folder_markers, 1);
@@ -225,12 +230,36 @@ fn a_real_bucket_lists_into_a_tree_that_survives_the_store() {
         &bucket.url(),
         server.signed(),
         Some(7),
+        1,
         Arc::new(ScanProgress::default()),
     )
     .unwrap();
     assert_eq!(small.pages, 2509_u64.div_ceil(7));
     assert_eq!(small.tree.total_alloc(), expected_bytes);
     assert_eq!(small.tree.len(), tree.len());
+
+    // And listed by many workers at once, the same tree id for id, the same
+    // totals, the same counters — on MinIO's own reading of `start-after`.
+    for (page, workers) in [(None, DEFAULT_WORKERS), (Some(7), 3), (Some(100), 16)] {
+        let progress = Arc::new(ScanProgress::default());
+        let parallel = scan_with(
+            &bucket.url(),
+            server.signed(),
+            page,
+            workers,
+            Arc::clone(&progress),
+        )
+        .unwrap();
+        let what = format!("page {page:?}, {workers} workers");
+        assert_eq!(super::arena(&parallel.tree), super::arena(tree), "{what}");
+        assert_eq!(parallel.stats, scan.stats, "{what}");
+        assert_eq!(progress.files.load(Ordering::Relaxed), 2508, "{what}");
+        assert_eq!(
+            progress.bytes.load(Ordering::Relaxed),
+            expected_bytes,
+            "{what}"
+        );
+    }
 }
 
 #[test]
@@ -245,6 +274,7 @@ fn a_prefix_lists_one_folder_and_nothing_beside_it() {
         &url,
         server.signed(),
         None,
+        DEFAULT_WORKERS,
         Arc::new(ScanProgress::default()),
     )
     .unwrap();
@@ -326,6 +356,7 @@ fn a_profile_role_assumed_through_sts_lists_the_bucket() {
         &bucket.url(),
         settings,
         None,
+        DEFAULT_WORKERS,
         Arc::new(ScanProgress::default()),
     )
     .unwrap();
@@ -342,6 +373,7 @@ fn a_profile_role_assumed_through_sts_lists_the_bucket() {
         &bucket.url(),
         server.settings(Some(tokenless)),
         None,
+        DEFAULT_WORKERS,
         Arc::new(ScanProgress::default()),
     )
     .map(|_| ())
@@ -362,6 +394,7 @@ fn refusals_are_reported_in_the_servers_words_without_secrets() {
         &bucket.url(),
         server.settings(None),
         None,
+        DEFAULT_WORKERS,
         Arc::new(ScanProgress::default()),
     )
     .map(|_| ())
@@ -378,6 +411,7 @@ fn refusals_are_reported_in_the_servers_words_without_secrets() {
         &bucket.url(),
         server.settings(Some(wrong)),
         None,
+        DEFAULT_WORKERS,
         Arc::new(ScanProgress::default()),
     )
     .map(|_| ())
@@ -397,6 +431,7 @@ fn refusals_are_reported_in_the_servers_words_without_secrets() {
             &missing,
             server.signed(),
             None,
+            DEFAULT_WORKERS,
             Arc::new(ScanProgress::default())
         )
         .map(|_| ())

@@ -36,6 +36,9 @@ pub struct Object {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListPage {
     pub objects: Vec<Object>,
+    /// `CommonPrefixes`, for a listing with a delimiter: each one a folder,
+    /// ending in the delimiter.
+    pub prefixes: Vec<String>,
     pub is_truncated: bool,
     pub next_continuation_token: Option<String>,
 }
@@ -91,6 +94,19 @@ fn read_list(body: &str, decode: bool) -> Result<Read> {
     let mut bad_key = None;
     let mut root_seen = false;
     let mut truncation_said = false;
+    // A key or a folder name, decoded when asked to be.
+    let mut name = |text: &str| -> String {
+        if !decode {
+            return text.to_string();
+        }
+        match url_decode(text) {
+            Ok(decoded) => decoded.into_owned(),
+            Err(e) => {
+                bad_key.get_or_insert((text.to_string(), e));
+                text.to_string()
+            }
+        }
+    };
 
     walk(body, |path, text| {
         match path {
@@ -127,18 +143,8 @@ fn read_list(body: &str, decode: bool) -> Result<Read> {
                     last_modified: fields.last_modified.unwrap_or(0),
                 });
             }
-            ["ListBucketResult", "Contents", "Key"] => {
-                current.key = Some(match decode {
-                    false => text.to_string(),
-                    true => match url_decode(text) {
-                        Ok(key) => key.into_owned(),
-                        Err(e) => {
-                            bad_key.get_or_insert((text.to_string(), e));
-                            text.to_string()
-                        }
-                    },
-                });
-            }
+            ["ListBucketResult", "Contents", "Key"] => current.key = Some(name(text)),
+            ["ListBucketResult", "CommonPrefixes", "Prefix"] => page.prefixes.push(name(text)),
             ["ListBucketResult", "Contents", "Size"] => {
                 current.size = Some(
                     text.trim()
