@@ -13,20 +13,20 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.1"
+version = "0.10.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
 repository = "https://github.com/unalcakir28/spacetrace"
 
 [workspace.dependencies]
-spacetrace-scan-core = { path = "crates/scan-core", version = "0.9.1" }
-spacetrace-store = { path = "crates/store", version = "0.9.1" }
-spacetrace-diff = { path = "crates/diff", version = "0.9.1" }
-spacetrace-dupes = { path = "crates/dupes", version = "0.9.1" }
-spacetrace-treemap = { path = "crates/treemap", version = "0.9.1" }
-spacetrace-changelog = { path = "crates/changelog", version = "0.9.1" }
-spacetrace-buildinfo = { path = "crates/buildinfo", version = "0.9.1" }
+spacetrace-scan-core = { path = "crates/scan-core", version = "0.10.0" }
+spacetrace-store = { path = "crates/store", version = "0.10.0" }
+spacetrace-diff = { path = "crates/diff", version = "0.10.0" }
+spacetrace-dupes = { path = "crates/dupes", version = "0.10.0" }
+spacetrace-treemap = { path = "crates/treemap", version = "0.10.0" }
+spacetrace-changelog = { path = "crates/changelog", version = "0.10.0" }
+spacetrace-buildinfo = { path = "crates/buildinfo", version = "0.10.0" }
 
 # External versions are exact (`=x.y.z`) and live only here; crates take them
 # with `foo.workspace = true`. A range lets a fresh lock pick up a release
