@@ -534,6 +534,9 @@ struct Ctx {
     unseen_sharing: AtomicBool,
     errors: Mutex<Vec<(PathBuf, String)>>,
     progress: Arc<ScanProgress>,
+    /// Every hardlinked name met, for [`scan_with_hardlinks`]; `None` for a
+    /// scan that did not ask.
+    links: Option<Mutex<Vec<LinkedName>>>,
 }
 
 impl Ctx {
@@ -1033,14 +1036,58 @@ pub fn scan(
     opts: ScanOptions,
     progress: Arc<ScanProgress>,
 ) -> std::io::Result<(Tree, ScanStats)> {
-    // The table is read here rather than in `ScanOptions::default` so that
-    // building options never makes a syscall, and so a scan that has switched
-    // the protection off does not pay for a table it will not consult.
-    let mounts = match opts.mount_timeout {
+    let mounts = mounts_for(&opts);
+    scan_with(root, opts, progress, mounts, probe_mount, Source::Volume)
+}
+
+/// One name of a hardlinked file, as a walk met it: the node it is in the
+/// tree, and the file it names.
+///
+/// The tree keeps no inode — eight bytes on every node for the few that need
+/// one — so a caller that follows hardlinks beyond one scan gets them here,
+/// from the same `stat` that charged them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkedName {
+    pub node: NodeId,
+    pub dev: u64,
+    pub ino: u64,
+}
+
+/// [`scan`], also naming every hardlinked file it met, charged or not.
+///
+/// For `spacetrace watch`, which lists one folder at a time between full
+/// scans and has to settle a hardlink across listings the way one walk
+/// settles it: counted once (invariant 3). Empty with `dedupe_hardlinks` off,
+/// when nothing is settled.
+///
+/// A separate entry point rather than an option, so that `ScanOptions` and
+/// `ScanStats` keep their shape for everyone who builds them by hand. A scan
+/// that does not ask pays one branch per directory.
+pub fn scan_with_hardlinks(
+    root: impl AsRef<Path>,
+    opts: ScanOptions,
+    progress: Arc<ScanProgress>,
+) -> std::io::Result<(Tree, ScanStats, Vec<LinkedName>)> {
+    let mounts = mounts_for(&opts);
+    scan_recording(
+        root,
+        opts,
+        progress,
+        mounts,
+        probe_mount,
+        Source::Volume,
+        true,
+    )
+}
+
+/// The table is read here rather than in `ScanOptions::default` so that
+/// building options never makes a syscall, and so a scan that has switched
+/// the protection off does not pay for a table it will not consult.
+fn mounts_for(opts: &ScanOptions) -> Mounts {
+    match opts.mount_timeout {
         Some(_) => Mounts::read(),
         None => Mounts::none(),
-    };
-    scan_with(root, opts, progress, mounts, probe_mount, Source::Volume)
+    }
 }
 
 /// Where the entries below a directory root come from.
@@ -1081,12 +1128,28 @@ pub(crate) fn scan_with(
     probe: Probe,
     source: Source,
 ) -> std::io::Result<(Tree, ScanStats)> {
+    let (tree, stats, _) = scan_recording(root, opts, progress, mounts, probe, source, false)?;
+    Ok((tree, stats))
+}
+
+/// [`scan_with`], also returning every hardlinked name it met when `record`
+/// is set: [`scan_with_hardlinks`]'s.
+fn scan_recording(
+    root: impl AsRef<Path>,
+    opts: ScanOptions,
+    progress: Arc<ScanProgress>,
+    mounts: Mounts,
+    probe: Probe,
+    source: Source,
+    record: bool,
+) -> std::io::Result<(Tree, ScanStats, Vec<LinkedName>)> {
     let started = std::time::Instant::now();
     let root = root.as_ref();
     let root_path = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
     // Built before `opts` moves into the context below.
     let pool = walk_pool(opts.threads)?;
+    let dedupes_hardlinks = opts.dedupe_hardlinks;
 
     let root_md = std::fs::symlink_metadata(&root_path)?;
     let (root_meta, root_failure) = RawMeta::for_path(
@@ -1137,6 +1200,7 @@ pub(crate) fn scan_with(
         unseen_sharing: AtomicBool::new(false),
         errors: Mutex::new(Vec::new()),
         progress: Arc::clone(&progress),
+        links: (record && dedupes_hardlinks).then(|| Mutex::new(Vec::new())),
     };
     if let Some(e) = root_failure {
         ctx.note_error(&root_path, &e);
@@ -1191,7 +1255,11 @@ pub(crate) fn scan_with(
         // and a failure here must not fail the scan.
         capacity: crate::capacity::capacity_of(tree.root_path()),
     };
-    Ok((tree, stats))
+    let links = ctx
+        .links
+        .map(|links| links.into_inner().unwrap_or_else(|p| p.into_inner()))
+        .unwrap_or_default();
+    Ok((tree, stats, links))
 }
 
 /// What a cancelled scan returns instead of a tree (invariant 5).
@@ -1516,6 +1584,11 @@ fn place(
     let mut deferred: Vec<(NodeId, u64, Box<Mapped>)> = Vec::new();
     // Clone-family members, charged or not, by index in this block as above.
     let mut members = Families::default();
+    // Hardlinked names and what they name, by index in this block as above.
+    // Asked once here, so a scan that did not ask pays one branch per
+    // directory and none per entry.
+    let record = ctx.links.is_some();
+    let mut linked: Vec<(NodeId, u64, u64)> = Vec::new();
 
     for (index, entry) in pending.into_iter().enumerate() {
         let Pending {
@@ -1574,6 +1647,9 @@ fn place(
             if ctx.opts.dedupe_clones && matches!(charge, Charge::Full | Charge::Cloned) {
                 members.push(&meta, clone_id, index as NodeId, charge == Charge::Full);
             }
+        }
+        if record && meta.is_hardlinked() {
+            linked.push((index as NodeId, meta.dev, meta.ino));
         }
 
         // Kept separate from the caller's own limit, and checked first: this one
@@ -1648,6 +1724,16 @@ fn place(
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         families.append_block(members, start);
+    }
+    if let Some(links) = ctx.links.as_ref().filter(|_| !linked.is_empty()) {
+        let mut links = links
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        links.extend(linked.into_iter().map(|(index, dev, ino)| LinkedName {
+            node: start + index,
+            dev,
+            ino,
+        }));
     }
 
     for sub in &mut subdirs {

@@ -24,6 +24,7 @@
 //! each frame is one write. The default signal leaves the last frame standing,
 //! which is the picture worth keeping.
 
+mod links;
 mod model;
 
 use std::collections::HashSet;
@@ -37,11 +38,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use notify::event::ModifyKind;
 use notify::{EventKind, RecursiveMode, Watcher, WatcherKind};
-use spacetrace_scan_core::{capacity_of, scan, ScanOptions, ScanStats, Tree};
+use spacetrace_scan_core::{capacity_of, ScanOptions, ScanProgress};
 
 use crate::args::WatchArgs;
 use crate::fmt;
-use model::{DirId, Model, Mover, MoverKind, Refusal, ROOT};
+use model::{DirId, Model, Mover, MoverKind, Refusal, Scanned, ROOT};
 
 /// How often a full rescan checks the model when nothing asked for one, at
 /// the least. Scaled up for a root that takes long to scan; see `verify_every`.
@@ -85,10 +86,14 @@ pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
     };
 
     let started_scan = Instant::now();
-    let (tree, stats) = crate::scan_with_progress(&root, opts.clone(), !json)?;
-    let model = Model::new(&tree, &stats, opts, events.per_dir);
-    let files = stats.files;
-    drop(tree);
+    let progress = Arc::new(ScanProgress::default());
+    let ticker = crate::Ticker::start(Arc::clone(&progress), !json);
+    let first = Scanned::of(&root, opts.clone(), progress)
+        .with_context(|| format!("cannot scan: {}", root.display()))?;
+    drop(ticker);
+    let model = Model::new(&first, opts, events.per_dir);
+    let files = first.stats.files;
+    drop(first);
 
     let mut session = Session {
         model,
@@ -388,13 +393,24 @@ impl Session {
             event.kind,
             EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
         );
+        // A new hardlink changes its original's link count, and the original
+        // has to be listed for the ledger to know both names (`links.rs`).
+        // FSEvents names the folder the original is in, as that folder's
+        // metadata, so that folder is listed too. inotify does not report it
+        // at all; the doubt below ends in a full rescan instead.
+        let metadata = matches!(event.kind, EventKind::Modify(ModifyKind::Metadata(_)));
         for path in &event.paths {
-            if replaced {
-                if let Some(id) = self.model.dir_at(path).filter(|&id| id != ROOT) {
-                    self.pending.subtrees.insert(id);
-                }
+            let Some((holder, at)) = self.model.event_dirs(path) else {
+                continue;
+            };
+            self.pending.dirty.insert(holder);
+            let Some(id) = at else {
+                continue;
+            };
+            if replaced && id != ROOT {
+                self.pending.subtrees.insert(id);
             }
-            if let Some(id) = self.model.locate(path, false) {
+            if metadata {
                 self.pending.dirty.insert(id);
             }
         }
@@ -404,10 +420,11 @@ impl Session {
     /// Full rescans asked for by a refusal or a loss get at most a tenth of
     /// the time; until the next one may run, the frame says one is waiting.
     ///
-    /// A tenth, not more, because a build tree asks constantly: cargo's
-    /// output is hardlinked, and on a 1.26M-entry root with builds running
-    /// beside it a gap of four scans spent a quarter of a core on rescans
-    /// (about 10 s of CPU each, measured) and spiked RSS to 1.1 GB.
+    /// A tenth, not more, because whatever asks may ask constantly. A build
+    /// tree did, before hardlinks were settled by the ledger: cargo's output
+    /// is hardlinked, and on a 1.26M-entry root with builds running beside it
+    /// a gap of four scans spent a quarter of a core on rescans (about 10 s of
+    /// CPU each, measured) and spiked RSS to 1.1 GB.
     fn resync_gap(&self) -> Duration {
         self.interval.max(self.last_full * 10)
     }
@@ -444,6 +461,7 @@ impl Session {
             }
         }
 
+        self.doubt_links();
         self.model.aggregate();
         self.model.roll_marks(Instant::now());
         for (id, path) in self.model.take_new_dirs() {
@@ -471,6 +489,23 @@ impl Session {
         Ok(())
     }
 
+    /// A hardlinked file with names no listing has met is counted under none
+    /// of them (`links.rs`). The usual reason is a folder whose event is still
+    /// to come — on FSEvents a link names both folders — so it gets until the
+    /// end of the next tick; after that, only a full scan finds the names.
+    fn doubt_links(&mut self) {
+        let Some(rel) = self.model.doubted_link() else {
+            return;
+        };
+        if self.pending.resync.is_some() {
+            return;
+        }
+        self.pending.resync = Some(format!(
+            "a hardlinked file in {} has names no listing has met: only a full scan finds them",
+            shown(&rel)
+        ));
+    }
+
     /// Lost subtrees first, then every directory an event named, shallowest
     /// first — so a directory that went away is found missing by its parent
     /// before anything tries to list it.
@@ -485,11 +520,7 @@ impl Session {
             }
             let rel = self.model.rel_path(id);
             match self.model.rescan(id) {
-                Ok(update) => {
-                    if let Some(refusal) = update.refused {
-                        self.pending.resync = Some(refusal_text(&refusal, self.model.root()));
-                        continue;
-                    }
+                Ok(()) => {
                     rescanned.push(id);
                     // Watched again from the top: on inotify a replaced
                     // folder's watches went with the folder it replaced.
@@ -570,11 +601,10 @@ impl Session {
 
         let started = Instant::now();
         let root = self.model.root().to_path_buf();
-        let (tree, stats): (Tree, ScanStats) =
-            scan(&root, self.model.options().clone(), Arc::default())
-                .with_context(|| format!("cannot scan: {}", root.display()))?;
-        self.model.resync(&tree, &stats);
-        drop(tree);
+        let scanned = Scanned::of(&root, self.model.options().clone(), Arc::default())
+            .with_context(|| format!("cannot scan: {}", root.display()))?;
+        self.model.resync(&scanned);
+        drop(scanned);
         self.last_full = started.elapsed();
         self.last_full_end = Instant::now();
         self.last_verified = Some(self.last_full_end);
@@ -1069,17 +1099,6 @@ fn shown(rel: &str) -> String {
 
 fn refusal_text(refusal: &Refusal, root: &Path) -> String {
     match refusal {
-        Refusal::Hardlinks(at) => {
-            // The path is the hardlinked file when the listing met it, or the
-            // folder that held one last time; both read right after "at".
-            let rel = at.strip_prefix(root).unwrap_or(at).to_string_lossy();
-            let at = if rel.is_empty() {
-                "the root".into()
-            } else {
-                rel
-            };
-            format!("hardlinked files at {at}: only a full scan counts a hardlink once")
-        }
         Refusal::Unnamed(at) => {
             let rel = at.strip_prefix(root).unwrap_or(at).to_string_lossy();
             format!(

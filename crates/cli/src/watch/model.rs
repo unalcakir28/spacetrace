@@ -17,11 +17,12 @@
 //!
 //! **Except where one listing cannot know the answer.** Hardlink deduplication
 //! is a property of a whole walk: which name carries the bytes depends on every
-//! other name the walk met, and `Node` keeps no inode to ask with. A partial
-//! rescan that meets a hardlinked file (`nlink > 1`), before or after, can
-//! therefore not be trusted, and the caller is told to rescan the whole root
-//! instead. Clones (macOS) are the same problem with no `nlink` to give them
-//! away, so the watch counts every clone at its own size — `--no-clone-dedupe`
+//! other name the walk met. So hardlinked names (`nlink > 1`) are left out of
+//! the per-folder figures and settled in a ledger beside them (`links.rs`),
+//! keyed by the `(dev, ino)` every scan here reports for them: each file once,
+//! charged to one of its names, as one walk would. Clones (macOS) are the same
+//! problem with no `nlink` to give them away and no identity a listing hands
+//! over, so the watch counts every clone at its own size — `--no-clone-dedupe`
 //! semantics, said in the output — rather than charge some and not others.
 
 use std::collections::{HashMap, HashSet};
@@ -31,9 +32,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use spacetrace_scan_core::{
-    scan, with_deadline, EntryKind, FileIdentity, Mounts, NodeId, RawMeta, ScanOptions, ScanStats,
-    Tree,
+    scan_with_hardlinks, with_deadline, EntryKind, FileIdentity, LinkedName, Mounts, NodeId,
+    RawMeta, ScanOptions, ScanProgress, ScanStats, Tree,
 };
+
+use super::links::{Inode, Ledger, Seen};
 
 pub(crate) type DirId = u32;
 
@@ -58,9 +61,6 @@ const PRESENT: u8 = 1;
 /// Existed when the watch began. Without it a directory that was empty then
 /// and a directory that did not exist look the same.
 const BASELINE: u8 = 2;
-/// Its last listing held a hardlinked file, so its accounting may depend on a
-/// name outside it.
-const SHARED: u8 = 4;
 
 struct Dir {
     /// The name as the filesystem has it, not as the tree prints it. The tree
@@ -75,7 +75,8 @@ struct Dir {
     children: Vec<DirId>,
     depth: u16,
     flags: u8,
-    /// What its last listing charged, tracked subdirectories excluded.
+    /// What its last listing charged, tracked subdirectories and hardlinked
+    /// names excluded — those are the ledger's.
     direct_size: u64,
     direct_alloc: u64,
     /// The directory's own blocks, which `alloc` counts and `size` does not.
@@ -109,8 +110,6 @@ impl Dir {
 /// Why a partial update was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Refusal {
-    /// A hardlinked file was met, at the path given.
-    Hardlinks(PathBuf),
     /// A folder whose name the tree only keeps lossily, and which more than
     /// one real name fits, so it cannot be listed on its own. Only a full scan,
     /// which walks the real names, counts it.
@@ -188,6 +187,81 @@ pub(crate) struct Model {
     /// otherwise build a path for every folder for nobody (83k of them on a
     /// 1.25M-entry tree).
     announce: bool,
+    /// Every hardlinked file, and the folder charged for it.
+    ledger: Ledger,
+}
+
+/// A scan as the model takes it in: the tree, what the walk reported, and
+/// which file each hardlinked name in it is.
+pub(crate) struct Scanned {
+    pub tree: Tree,
+    pub stats: ScanStats,
+    /// Every hardlinked name in it with the file it names, by node. Empty
+    /// without hardlink deduplication: then a hardlink is just a file, and
+    /// settles nothing.
+    links: Vec<LinkedName>,
+}
+
+impl Scanned {
+    pub(crate) fn new(tree: Tree, stats: ScanStats, mut links: Vec<LinkedName>) -> Scanned {
+        // Sorted rather than hashed: looked up once per hardlinked name, and
+        // a backup tree has hundreds of thousands of them.
+        links.sort_unstable_by_key(|l| l.node);
+        Scanned { tree, stats, links }
+    }
+
+    /// Scan `path` the way every scan in the watch is taken: with the identity
+    /// of each hardlinked name.
+    pub(crate) fn of(
+        path: &Path,
+        opts: ScanOptions,
+        progress: Arc<ScanProgress>,
+    ) -> std::io::Result<Scanned> {
+        let (tree, stats, links) = scan_with_hardlinks(path, opts, progress)?;
+        Ok(Scanned::new(tree, stats, links))
+    }
+
+    /// The file a hardlinked name names.
+    fn inode(&self, node: NodeId) -> Option<Inode> {
+        let at = self.links.binary_search_by_key(&node, |l| l.node).ok()?;
+        Some((self.links[at].dev, self.links[at].ino))
+    }
+
+    /// What `c` comes to for the folder whose listing holds it: added to
+    /// `direct`, except for hardlinked names, which go to `linked` for the
+    /// ledger to settle.
+    ///
+    /// Everything below `c` too, for a folder the model does not track on its
+    /// own (one no single real name fits); every other child either has no
+    /// children in the tree or is tracked.
+    fn charge(&self, c: NodeId, direct: &mut (u64, u64), linked: &mut Vec<Seen>) {
+        // Nearly every child is a plain file: no walk, no allocation.
+        let n = self.tree.node(c);
+        if n.children_len == 0 && !hardlinked(&self.tree, c) {
+            direct.0 += n.own_size;
+            direct.1 += n.own_alloc;
+            return;
+        }
+        let mut stack = vec![c];
+        while let Some(x) = stack.pop() {
+            let n = self.tree.node(x);
+            let inode = hardlinked(&self.tree, x).then(|| self.inode(x)).flatten();
+            if let Some(inode) = inode {
+                // Only the name the scan charged carries the figures; the
+                // others stand at 0, and the ledger takes the largest.
+                linked.push(Seen {
+                    inode,
+                    nlink: n.nlink,
+                    size: n.size,
+                    alloc: n.alloc,
+                });
+                continue;
+            }
+            direct.0 += n.own_size;
+            direct.1 += n.own_alloc;
+            stack.extend(self.tree.children(x));
+        }
+    }
 }
 
 /// The walk options the watch runs every scan with.
@@ -296,6 +370,34 @@ impl<'a> Names<'a> {
     }
 }
 
+/// A folder's place in `(depth, path)` order: its depth below the root, then
+/// its path one component at a time. Built only for a hardlinked file whose
+/// charge has to move, which is the one time the order is asked.
+fn dir_order(dirs: &[Dir], mut dir: DirId) -> (u16, Vec<&OsStr>) {
+    let depth = dirs[dir as usize].depth;
+    let mut parts = Vec::with_capacity(usize::from(depth));
+    while dir != ROOT {
+        let d = &dirs[dir as usize];
+        parts.push(&*d.name);
+        dir = d.parent;
+    }
+    parts.reverse();
+    (depth, parts)
+}
+
+/// What a model does with one entry of a scan, for the folder whose listing
+/// holds it.
+enum Child {
+    /// Counted in the folder's own figures, or the ledger's.
+    Charge,
+    /// A folder the scanner enters but no single real name fits, so it cannot
+    /// be listed on its own (`Refusal::Unnamed`).
+    Unnamed,
+    /// A folder with a record of its own: its real name and path, and the
+    /// record it already has under that name, present or not.
+    Track(OsString, PathBuf, Option<DirId>),
+}
+
 fn hardlinked(tree: &Tree, id: NodeId) -> bool {
     let n = tree.node(id);
     n.kind == EntryKind::File && n.nlink > 1
@@ -303,8 +405,8 @@ fn hardlinked(tree: &Tree, id: NodeId) -> bool {
 
 impl Model {
     /// The model of a finished scan of the root, which becomes the baseline.
-    pub(crate) fn new(tree: &Tree, stats: &ScanStats, opts: ScanOptions, announce: bool) -> Model {
-        let root = tree.root_path().to_path_buf();
+    pub(crate) fn new(scanned: &Scanned, opts: ScanOptions, announce: bool) -> Model {
+        let root = scanned.tree.root_path().to_path_buf();
         let root_dev = device_of(&root).unwrap_or(0);
         let now = Instant::now();
         let mut model = Model {
@@ -332,8 +434,9 @@ impl Model {
             mark_times: [now; 2],
             new_dirs: Vec::new(),
             announce,
+            ledger: Ledger::default(),
         };
-        model.absorb(tree, stats, ROOT);
+        model.take_in(scanned, ROOT, true);
         model.aggregate();
         for d in &mut model.dirs {
             d.base_size = d.size;
@@ -413,11 +516,16 @@ impl Model {
         parts.join("/")
     }
 
-    /// The tracked folder at exactly `path`, if there is one.
-    pub(crate) fn dir_at(&self, path: &Path) -> Option<DirId> {
+    /// Where an event about `path` lands, in one walk: the tracked folder
+    /// whose listing holds it ([`Model::locate`] without `itself`), and the
+    /// tracked folder at exactly `path` if it is one.
+    pub(crate) fn event_dirs(&self, path: &Path) -> Option<(DirId, Option<DirId>)> {
         let id = self.locate(path, true)?;
         let rel = path.strip_prefix(&self.root).ok()?;
-        (rel.components().count() == self.depth(id)).then_some(id)
+        if rel.components().count() != self.depth(id) {
+            return Some((id, None));
+        }
+        Some((self.parent(id).unwrap_or(ROOT), Some(id)))
     }
 
     /// Every tracked folder at or below `id`, with its path, built on the way
@@ -553,15 +661,13 @@ impl Model {
         ids
     }
 
-    /// Whether the scanner would descend into this directory of a listing.
+    /// Whether the scanner would descend into this directory of a listing,
+    /// which [`descends`] allows.
     ///
     /// `listed` says the scan this came from did descend into it, which settles
     /// the filesystem boundary without asking: only an empty directory, or one
     /// a shallow listing never enters, has to be asked for its device.
-    fn tracks(&self, depth: usize, name: &str, path: &Path, known: bool, listed: bool) -> bool {
-        if !descends(&self.opts, depth, name) {
-            return false;
-        }
+    fn tracks(&self, path: &Path, known: bool, listed: bool) -> bool {
         if !self.opts.one_filesystem || known || listed {
             return true;
         }
@@ -577,39 +683,76 @@ impl Model {
         device_through(&self.opts, &self.mounts, path).is_some_and(|dev| dev == self.root_dev)
     }
 
+    /// What to do with entry `c` of `tree`, in the listing of `m` at `path`;
+    /// `depth` is the entry's below the root. The one rule both a subtree
+    /// scan and a relisting take entries in by.
+    fn classify(
+        &self,
+        tree: &Tree,
+        c: NodeId,
+        m: DirId,
+        depth: usize,
+        path: &Path,
+        names: &mut Names,
+    ) -> Child {
+        let n = tree.node(c);
+        let name = tree.name(c);
+        if !n.is_dir() || !descends(&self.opts, depth, name) {
+            return Child::Charge;
+        }
+        let Some(real) = names.real(name) else {
+            return Child::Unnamed;
+        };
+        let child_path = path.join(&real);
+        let known = self.child(m, &real);
+        // A folder the scan entered is on the root's filesystem; only one it
+        // did not enter, empty or past a shallow listing, has to be asked.
+        let listed = n.children_len > 0;
+        if !self.tracks(&child_path, known.is_some(), listed) {
+            return Child::Charge;
+        }
+        Child::Track(real, child_path, known)
+    }
+
+    /// Write a scan of `at`'s whole subtree into the model, and settle the
+    /// ledger over it. `whole` is a scan of the whole root (see
+    /// `Ledger::settle`).
+    fn take_in(&mut self, scanned: &Scanned, at: DirId, whole: bool) {
+        self.absorb(scanned, at);
+        let dirs = &self.dirs;
+        self.ledger.settle(whole, |dir| dir_order(dirs, dir));
+    }
+
     /// Write a scan of `at`'s whole subtree into the model.
     ///
     /// The scan is the authority: every tracked directory it holds is set to
-    /// what it says, and every one it does not hold is gone.
-    fn absorb(&mut self, tree: &Tree, stats: &ScanStats, at: DirId) {
+    /// what it says, and every one it does not hold is gone. The ledger is
+    /// left unsettled, for the caller to settle once everything that came with
+    /// the same change is in.
+    fn absorb(&mut self, scanned: &Scanned, at: DirId) {
+        let tree = &scanned.tree;
         self.forget_errors_under(at);
         let mut stack = vec![(tree.root(), at, self.path(at))];
         while let Some((t, m, path)) = stack.pop() {
             let depth = self.depth(m) + 1;
             let mut direct = (0u64, 0u64);
-            let mut shared = false;
+            let mut linked = Vec::new();
             let mut names = Names::new(&path);
             let mut wanted = Vec::new();
             let mut nodes = Vec::new();
             for c in tree.children(t) {
-                let n = tree.node(c);
-                let name = tree.name(c);
-                // A folder no single real name fits is counted here, whole,
-                // from what the scan found — right for this scan; a listing
-                // of `m` that meets it again refuses (`Refusal::Unnamed`).
-                let real = n.is_dir().then(|| names.real(name)).flatten();
-                if let Some(real) = real {
-                    let child_path = path.join(&real);
-                    let known = self.child(m, &real).is_some();
-                    if self.tracks(depth, name, &child_path, known, n.children_len > 0) {
+                match self.classify(tree, c, m, depth, &path, &mut names) {
+                    Child::Track(real, child_path, _) => {
                         wanted.push((real, child_path));
                         nodes.push(c);
-                        continue;
+                    }
+                    // A folder no single real name fits is counted here,
+                    // whole, from what the scan found — right for this scan;
+                    // a listing of `m` that meets it again refuses.
+                    Child::Charge | Child::Unnamed => {
+                        scanned.charge(c, &mut direct, &mut linked);
                     }
                 }
-                direct.0 += n.size;
-                direct.1 += n.alloc;
-                shared |= self.opts.dedupe_hardlinks && hardlinked(tree, c);
             }
             let paths: Vec<PathBuf> = wanted.iter().map(|w| w.1.clone()).collect();
             let ids = self.adopt(m, wanted);
@@ -620,10 +763,10 @@ impl Model {
             d.own_alloc = tree.node(t).own_alloc;
             d.direct_size = direct.0;
             d.direct_alloc = direct.1;
-            d.set(SHARED, shared);
+            self.ledger.replace(m, linked);
             self.drop_unseen(m, &ids.into_iter().collect());
         }
-        self.record_errors(stats, at);
+        self.record_errors(&scanned.stats, at);
     }
 
     /// Mark every tracked child of `m` that is not in `seen` as gone.
@@ -647,29 +790,13 @@ impl Model {
                 continue;
             }
             d.set(PRESENT, false);
-            d.set(SHARED, false);
             d.direct_size = 0;
             d.direct_alloc = 0;
             d.own_alloc = 0;
             d.errors = 0;
             stack.extend(d.children.iter().copied());
+            self.ledger.forget(id);
         }
-    }
-
-    /// Whether anything tracked at or below `id` last held a hardlinked file.
-    fn subtree_shares(&self, id: DirId) -> bool {
-        let mut stack = vec![id];
-        while let Some(id) = stack.pop() {
-            let d = &self.dirs[id as usize];
-            if !d.has(PRESENT) {
-                continue;
-            }
-            if d.has(SHARED) {
-                return true;
-            }
-            stack.extend(d.children.iter().copied());
-        }
-        false
     }
 
     fn shallow_options(&self) -> ScanOptions {
@@ -700,49 +827,40 @@ impl Model {
     /// List one directory again and take what changed in it.
     ///
     /// Directories that appeared in it are scanned whole before anything is
-    /// written, so that a refusal — a hardlinked file anywhere in what is
-    /// about to change — leaves the model untouched.
+    /// written, so that a refusal — a folder in it that only a full scan can
+    /// name — leaves the model untouched.
     pub(crate) fn relist(&mut self, id: DirId) -> std::io::Result<Update> {
         let path = self.path(id);
         let depth = self.depth(id) + 1;
-        let (listing, stats) = scan(&path, self.shallow_options(), Arc::default())?;
-        let top = listing.root();
+        let listing = Scanned::of(&path, self.shallow_options(), Arc::default())?;
+        let tree = &listing.tree;
+        let top = tree.root();
 
         // One pass over the listing, deciding everything and writing nothing:
         // a refusal must leave the model as it was.
-        let mut refused = self.dirs[id as usize]
-            .has(SHARED)
-            .then(|| Refusal::Hardlinks(path.clone()));
+        let mut refused = None;
         let mut names = Names::new(&path);
         let mut direct = (0u64, 0u64);
+        let mut linked = Vec::new();
         let mut seen: HashSet<DirId> = HashSet::new();
         let mut own_allocs = Vec::new();
         let mut fresh = Vec::new();
-        for c in listing.children(top) {
-            let n = listing.node(c);
-            let name = listing.name(c);
-            if self.opts.dedupe_hardlinks && hardlinked(&listing, c) {
-                refused.get_or_insert_with(|| Refusal::Hardlinks(path.join(name)));
-            }
-            let real = match n.is_dir() && descends(&self.opts, depth, name) {
-                true => names.real(name),
-                false => None,
-            };
-            let Some(real) = real else {
-                if n.is_dir() && descends(&self.opts, depth, name) {
-                    refused.get_or_insert_with(|| Refusal::Unnamed(path.join(name)));
-                }
-                direct.0 += n.size;
-                direct.1 += n.alloc;
-                continue;
-            };
-            let child_path = path.join(&real);
-            let known = self.child(id, &real);
-            if !self.tracks(depth, name, &child_path, known.is_some(), false) {
-                direct.0 += n.size;
-                direct.1 += n.alloc;
-                continue;
-            }
+        for c in tree.children(top) {
+            let n = tree.node(c);
+            let (real, child_path, known) =
+                match self.classify(tree, c, id, depth, &path, &mut names) {
+                    Child::Track(real, child_path, known) => (real, child_path, known),
+                    Child::Unnamed => {
+                        let name = tree.name(c);
+                        refused.get_or_insert_with(|| Refusal::Unnamed(path.join(name)));
+                        listing.charge(c, &mut direct, &mut linked);
+                        continue;
+                    }
+                    Child::Charge => {
+                        listing.charge(c, &mut direct, &mut linked);
+                        continue;
+                    }
+                };
             if let Some(k) = known.filter(|&k| self.dirs[k as usize].has(PRESENT)) {
                 seen.insert(k);
                 // The parent's listing is where a folder's own blocks are read.
@@ -750,16 +868,16 @@ impl Model {
                 continue;
             }
             // Gone between the listing and this scan: a later event says so.
-            let Ok((tree, stats)) = scan(&child_path, self.deep_options(depth), Arc::default())
+            let Ok(subtree) = Scanned::of(&child_path, self.deep_options(depth), Arc::default())
             else {
                 continue;
             };
-            if self.opts.dedupe_hardlinks {
-                if let Some(at) = tree.iter().find(|&n| hardlinked(&tree, n)) {
-                    refused.get_or_insert_with(|| Refusal::Hardlinks(tree.path(at)));
-                }
-            }
-            fresh.push((real, child_path, tree, stats));
+            fresh.push((real, child_path, subtree));
+        }
+        if let Some(refusal) = refused {
+            return Ok(Update {
+                refused: Some(refusal),
+            });
         }
         let vanished: Vec<DirId> = self.dirs[id as usize]
             .children
@@ -767,73 +885,84 @@ impl Model {
             .copied()
             .filter(|c| self.dirs[*c as usize].has(PRESENT) && !seen.contains(c))
             .collect();
-        if refused.is_none() {
-            if let Some(&v) = vanished.iter().find(|&&v| self.subtree_shares(v)) {
-                refused = Some(Refusal::Hardlinks(self.path(v)));
-            }
-        }
-        if let Some(refusal) = refused {
-            return Ok(Update {
-                refused: Some(refusal),
-            });
-        }
 
-        // Accepted: this folder's own entries, then each new subtree.
+        // Accepted: this folder's own entries, then each new subtree, and the
+        // ledger settled once over all of it.
         for (k, own_alloc) in own_allocs {
             self.dirs[k as usize].own_alloc = own_alloc;
         }
         let d = &mut self.dirs[id as usize];
-        d.own_alloc = listing.node(top).own_alloc;
+        d.own_alloc = tree.node(top).own_alloc;
         d.direct_size = direct.0;
         d.direct_alloc = direct.1;
-        d.set(SHARED, false);
+        self.ledger.replace(id, linked);
         for v in vanished {
             self.mark_gone(v);
         }
         self.forget_own_errors(id, &path);
-        self.dirs[id as usize].errors = u32::try_from(stats.errors).unwrap_or(u32::MAX);
-        self.keep_samples(&stats);
+        self.dirs[id as usize].errors = u32::try_from(listing.stats.errors).unwrap_or(u32::MAX);
+        self.keep_samples(&listing.stats);
         let wanted = fresh.iter().map(|f| (f.0.clone(), f.1.clone())).collect();
         let ids = self.adopt(id, wanted);
-        for (k, (_, _, tree, stats)) in ids.into_iter().zip(fresh) {
-            self.absorb(&tree, &stats, k);
+        for (k, (_, _, subtree)) in ids.into_iter().zip(fresh) {
+            self.absorb(&subtree, k);
         }
+        let dirs = &self.dirs;
+        self.ledger.settle(false, |dir| dir_order(dirs, dir));
         Ok(Update::default())
     }
 
     /// Scan one record's whole subtree again — what the event stream asks for
     /// when it says it lost events below a path.
-    pub(crate) fn rescan(&mut self, id: DirId) -> std::io::Result<Update> {
+    ///
+    /// Never refused: a hardlinked name in it is settled against the ones
+    /// outside by the ledger, and a folder no single real name fits is counted
+    /// whole, from this scan.
+    pub(crate) fn rescan(&mut self, id: DirId) -> std::io::Result<()> {
         let path = self.path(id);
-        let (tree, stats) = scan(&path, self.deep_options(self.depth(id)), Arc::default())?;
-        let shares = self.opts.dedupe_hardlinks
-            && (self.subtree_shares(id) || tree.iter().any(|n| hardlinked(&tree, n)));
-        if shares {
-            return Ok(Update {
-                refused: Some(Refusal::Hardlinks(path)),
-            });
-        }
-        self.absorb(&tree, &stats, id);
-        Ok(Update::default())
+        let scanned = Scanned::of(&path, self.deep_options(self.depth(id)), Arc::default())?;
+        self.take_in(&scanned, id, false);
+        Ok(())
     }
 
     /// Take a fresh scan of the root as the truth about now.
     ///
-    /// The baseline stays what it was; everything else is replaced. Always
-    /// right, whatever the events missed — this is the fallback every other
-    /// path in the watch ends in.
-    pub(crate) fn resync(&mut self, tree: &Tree, stats: &ScanStats) {
+    /// The baseline stays what it was; everything else is replaced, the
+    /// ledger included — a name it kept that the scan did not meet is gone.
+    /// Always right, whatever the events missed — this is the fallback every
+    /// other path in the watch ends in.
+    pub(crate) fn resync(&mut self, scanned: &Scanned) {
         // Read again with every full scan, which reads it too: a share
         // mounted since the start is a boundary like any other.
         self.mounts = read_mounts(&self.opts);
-        self.absorb(tree, stats, ROOT);
+        self.take_in(scanned, ROOT, true);
     }
 
-    /// Subtree totals, from what each directory's own listing charged.
+    /// End a tick for the ledger: the folder, below the root, of a hardlinked
+    /// file counted under none of its names for two ticks in a row — its
+    /// other names are not coming, and only a full scan finds them (see
+    /// `links.rs`).
+    pub(crate) fn doubted_link(&mut self) -> Option<String> {
+        let dirs = &self.dirs;
+        let dir = self.ledger.doubts(|dir| dir_order(dirs, dir))?;
+        Some(self.rel_path(dir))
+    }
+
+    /// Whether a hardlinked file is counted under none of its names.
+    #[cfg(test)]
+    fn unsure_link(&self) -> bool {
+        self.ledger.doubtful()
+    }
+
+    /// Subtree totals, from what each directory's own listing charged and
+    /// the hardlinked files the ledger charges it for.
     pub(crate) fn aggregate(&mut self) {
-        for d in &mut self.dirs {
-            d.size = d.direct_size;
-            d.alloc = d.own_alloc + d.direct_alloc;
+        debug_assert!(!self.ledger.unsettled(), "aggregated mid-batch");
+        let charged = self.ledger.charged();
+        for (i, d) in self.dirs.iter_mut().enumerate() {
+            let (size, alloc) = charged.get(i).copied().unwrap_or_default();
+            d.size = d.direct_size + size;
+            d.alloc = d.own_alloc + d.direct_alloc + alloc;
         }
         for i in (1..self.dirs.len()).rev() {
             let (size, alloc, parent) = {
@@ -1042,6 +1171,7 @@ impl Model {
                 (new != DirId::MAX).then_some((new, path))
             })
             .collect();
+        self.ledger.remap(&remap);
         Some(remap)
     }
 
@@ -1120,6 +1250,14 @@ impl Model {
     fn records(&self) -> usize {
         self.dirs.len()
     }
+
+    /// Every file the ledger counts, with the folder charged for it.
+    fn charged_dirs(&self) -> HashMap<Inode, PathBuf> {
+        self.ledger
+            .charges()
+            .map(|(inode, dir)| (inode, self.path(dir)))
+            .collect()
+    }
 }
 
 /// The model without any event in sight: every test here drives it by hand —
@@ -1133,6 +1271,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spacetrace_scan_core::scan;
     use std::fs;
 
     fn opts() -> ScanOptions {
@@ -1143,9 +1282,61 @@ mod tests {
         scan(root, opts.clone(), Arc::default()).unwrap().0
     }
 
+    fn scanned(root: &Path, opts: &ScanOptions) -> Scanned {
+        Scanned::of(root, opts.clone(), Arc::default()).unwrap()
+    }
+
     fn start(root: &Path, opts: ScanOptions) -> (Model, Tree) {
-        let (tree, stats) = scan(root, opts.clone(), Arc::default()).unwrap();
-        (Model::new(&tree, &stats, opts, true), tree)
+        let first = scanned(root, &opts);
+        let model = Model::new(&first, opts, true);
+        (model, first.tree)
+    }
+
+    /// A fresh scan of the disk that charges each hardlinked file to the
+    /// folder the model charges it to.
+    ///
+    /// Which name a scan charges is undefined (invariant 3), so a scan of its
+    /// own can disagree with the model folder by folder while both are right.
+    /// This one cannot: every name counted in full, then every hardlinked name
+    /// taken out again but one in the folder the model charges. Its total must
+    /// still be a real scan's — which it is only if the model counts each file
+    /// exactly once, in a folder that holds a name of it.
+    fn fresh_as_charged(model: &Model, opts: &ScanOptions) -> Tree {
+        let real = scanned(model.root(), opts);
+        if !opts.dedupe_hardlinks {
+            return real.tree;
+        }
+        let inode_at: HashMap<PathBuf, Inode> = real
+            .links
+            .iter()
+            .map(|l| (real.tree.path(l.node), (l.dev, l.ino)))
+            .collect();
+        let mut every_name = opts.clone();
+        every_name.dedupe_hardlinks = false;
+        let mut tree = fresh(model.root(), &every_name);
+        let mut charged = model.charged_dirs();
+        let names: Vec<NodeId> = tree.iter().filter(|&n| hardlinked(&tree, n)).collect();
+        for n in names {
+            let path = tree.path(n);
+            let inode = inode_at[&path];
+            if charged.get(&inode).map(PathBuf::as_path) == path.parent() {
+                charged.remove(&inode);
+                continue;
+            }
+            tree.remove_subtree(n);
+        }
+        // What is left lost its other names since its folder was listed: one
+        // link, an ordinary file to the scan, counted where it is.
+        for dir in charged.values() {
+            assert!(dir.is_dir(), "charged to {dir:?}, which is gone");
+        }
+        assert_eq!(tree.total_size(), real.tree.total_size(), "each file once");
+        assert_eq!(
+            tree.total_alloc(),
+            real.tree.total_alloc(),
+            "each file once"
+        );
+        tree
     }
 
     fn write(path: &Path, bytes: usize) {
@@ -1159,14 +1350,14 @@ mod tests {
     fn touched(model: &mut Model, path: &Path) {
         let id = model.locate(path, false).expect("inside the root");
         let update = model.relist(id).unwrap();
-        assert_eq!(update.refused, None, "no hardlink in this test");
+        assert_eq!(update.refused, None, "nothing here needs a full scan");
         model.aggregate();
     }
 
     /// Every directory the model tracks agrees with a fresh scan, and so does
-    /// the total.
+    /// the total — the scan charging hardlinks where the model does.
     fn assert_agrees_with_a_fresh_scan(model: &Model, opts: &ScanOptions) {
-        let tree = fresh(model.root(), opts);
+        let tree = fresh_as_charged(model, opts);
         assert_eq!(model.totals().size, tree.total_size(), "logical total");
         assert_eq!(model.totals().alloc, tree.total_alloc(), "on-disk total");
         for (path, size, alloc) in model.dir_sizes() {
@@ -1307,48 +1498,295 @@ mod tests {
     }
 
     /// Invariant 3 across time: a second name for bytes already counted adds
-    /// nothing. A listing of one directory cannot know that — the first name
-    /// is somewhere else — so it must refuse, and the full rescan it hands
-    /// over to counts the inode once.
+    /// nothing. A link names two folders and both are listed — the backends
+    /// report both — in either order; whichever comes first, no total counts
+    /// the file twice, and once both are in the file is counted once, charged
+    /// to the same name either way. From then on the charge stays with that
+    /// name until it goes.
+    /// The folder a lasting doubt names is the first of the file's known
+    /// folders in `(depth, path)` order, so the message names the same folder
+    /// whichever was listed first.
     #[test]
-    fn a_new_hardlink_is_refused_and_the_full_rescan_counts_it_once() {
+    fn a_lasting_doubt_names_the_first_folder_holding_the_file() {
+        for first in ["b/x/l", "c/l"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = &dir.path().canonicalize().unwrap();
+            write(&root.join("a/big"), 1_000);
+            fs::create_dir_all(root.join("b/x")).unwrap();
+            fs::create_dir_all(root.join("c")).unwrap();
+            let (mut model, _) = start(root, opts());
+
+            // Two new names, both listed; the original's folder is not.
+            fs::hard_link(root.join("a/big"), root.join("b/x/l")).unwrap();
+            fs::hard_link(root.join("a/big"), root.join("c/l")).unwrap();
+            let second = if first == "c/l" { "b/x/l" } else { "c/l" };
+            touched(&mut model, &root.join(first));
+            touched(&mut model, &root.join(second));
+            assert!(model.unsure_link(), "{first} first");
+
+            assert_eq!(model.doubted_link(), None);
+            assert_eq!(model.doubted_link().as_deref(), Some("c"), "{first} first");
+        }
+    }
+
+    #[test]
+    fn a_new_hardlink_adds_nothing_in_either_order_and_its_charge_stays_put() {
+        for first in ["b/link", "a/big"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = &dir.path().canonicalize().unwrap();
+            write(&root.join("a/big"), 400_000);
+            fs::create_dir_all(root.join("b")).unwrap();
+            let (mut model, _) = start(root, opts());
+            let size_of = |model: &Model, name: &str| {
+                let sizes = model.dir_sizes();
+                sizes.iter().find(|s| s.0 == name).unwrap().1
+            };
+
+            fs::hard_link(root.join("a/big"), root.join("b/link")).unwrap();
+            touched(&mut model, &root.join(first));
+            assert!(model.totals().delta() <= 0, "never twice ({first} first)");
+            assert!(model.unsure_link(), "{first} first");
+            // A tick's grace for the other folder's event; then a full scan.
+            assert_eq!(model.doubted_link(), None);
+            assert!(model.doubted_link().is_some(), "{first} first");
+            let second = if first == "a/big" { "b/link" } else { "a/big" };
+            touched(&mut model, &root.join(second));
+            assert!(!model.unsure_link(), "{first} first");
+            assert_eq!(model.doubted_link(), None);
+            assert_eq!(model.totals().delta(), 0, "one inode, counted once");
+            assert_eq!(size_of(&model, "a"), 400_000, "{first} first");
+            assert_agrees_with_a_fresh_scan(&model, &opts());
+
+            // Listing the folder that holds the charge changes nothing either.
+            touched(&mut model, &root.join("a/big"));
+            touched(&mut model, &root.join("b/link"));
+            assert_eq!(size_of(&model, "a"), 400_000);
+            assert!(rows(&model).is_empty(), "{:?}", rows(&model));
+
+            fs::remove_file(root.join("a/big")).unwrap();
+            touched(&mut model, &root.join("a/big"));
+            assert_eq!(model.totals().delta(), 0, "the bytes are still on disk");
+            assert_eq!(
+                rows(&model),
+                [
+                    ("a".to_string(), MoverKind::Shrunk, -400_000),
+                    ("b".to_string(), MoverKind::Grown, 400_000),
+                ]
+            );
+            assert_agrees_with_a_fresh_scan(&model, &opts());
+
+            fs::remove_file(root.join("b/link")).unwrap();
+            touched(&mut model, &root.join("b/link"));
+            assert_eq!(model.totals().delta(), -400_000, "the last name went");
+            assert_agrees_with_a_fresh_scan(&model, &opts());
+        }
+    }
+
+    /// The folder charged for each hardlinked file.
+    fn charges(model: &Model) -> HashMap<Inode, PathBuf> {
+        model.charged_dirs()
+    }
+
+    fn link(from: &Path, to: &Path) {
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::hard_link(from, to).unwrap();
+    }
+
+    /// `diff`'s rows between two trees, in the model's words.
+    fn diff_rows(old: &Tree, new: &Tree) -> (Vec<(String, MoverKind, i64)>, i64) {
+        let report = spacetrace_diff::diff(
+            old,
+            new,
+            &spacetrace_diff::DiffOptions {
+                min_delta: 1,
+                ..Default::default()
+            },
+        );
+        let rows = report
+            .changes
+            .iter()
+            .map(|c| {
+                let kind = match c.kind {
+                    spacetrace_diff::ChangeKind::Grown => MoverKind::Grown,
+                    spacetrace_diff::ChangeKind::Shrunk => MoverKind::Shrunk,
+                    spacetrace_diff::ChangeKind::Added => MoverKind::Added,
+                    spacetrace_diff::ChangeKind::Removed => MoverKind::Removed,
+                };
+                (c.path.clone(), kind, c.delta())
+            })
+            .collect();
+        (rows, report.delta())
+    }
+
+    /// A cargo build, as the disk sees it: object files written into `deps`
+    /// and hardlinked into an incremental session folder, the previous
+    /// session deleted, the binary written again and its uplifted name
+    /// linked to it anew. Build after build, every relisting stays a
+    /// relisting — no refusal, so no full rescan — and after every build the
+    /// model is what a fresh scan says, folder by folder and in total, and
+    /// its rows are `diff`'s. A pair nothing touched keeps its charge
+    /// throughout, so no frame moves bytes between folders that did not
+    /// change.
+    #[cfg(unix)]
+    #[test]
+    fn a_build_tree_full_of_hardlinks_is_followed_without_a_full_rescan() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = &dir.path().canonicalize().unwrap();
+        let debug = root.join("proj/target/debug");
+        let deps = debug.join("deps");
+        let session = |n: u32| debug.join(format!("incremental/app-x/s-{n}"));
+        write(&root.join("proj/src/main.rs"), 2_000);
+        write(&root.join("other/notes"), 1_000);
+        write(&root.join("other/pair1"), 7_000);
+        link(&root.join("other/pair1"), &root.join("other/pair2"));
+        write(&deps.join("libdep-h.rlib"), 80_000);
+        link(&deps.join("libdep-h.rlib"), &debug.join("libdep.rlib"));
+        let build = |n: u32, sizes: [usize; 3]| {
+            let [binary, a, b] = sizes;
+            // A fresh inode for every output, as rustc writes them.
+            for (name, size) in [("app-h", binary), ("app-h.a.o", a), ("app-h.b.o", b)] {
+                let _ = fs::remove_file(deps.join(name));
+                write(&deps.join(name), size);
+            }
+            link(&deps.join("app-h.a.o"), &session(n).join("a.o"));
+            link(&deps.join("app-h.b.o"), &session(n).join("b.o"));
+            if n > 1 {
+                fs::remove_dir_all(session(n - 1)).unwrap();
+            }
+            let _ = fs::remove_file(debug.join("app"));
+            link(&deps.join("app-h"), &debug.join("app"));
+        };
+        build(1, [300_000, 50_000, 40_000]);
+        let (mut model, _) = start(root, opts());
+        // The baseline as the model charges it, which a scan of its own may
+        // not (invariant 3); the disk has not changed yet.
+        let first = fresh_as_charged(&model, &opts());
+        let inode_of = |path: PathBuf| {
+            use std::os::unix::fs::MetadataExt;
+            let md = fs::symlink_metadata(path).unwrap();
+            (md.dev(), md.ino())
+        };
+        let before = charges(&model);
+        let untouched: Vec<_> = [root.join("other/pair1"), deps.join("libdep-h.rlib")]
+            .into_iter()
+            .map(|path| {
+                let inode = inode_of(path);
+                (inode, before[&inode].clone())
+            })
+            .collect();
+
+        for (n, sizes) in [
+            (2, [320_000, 55_000, 40_000]),
+            (3, [310_000, 20_000, 90_000]),
+            (4, [500_000, 1_000, 1_000]),
+        ] {
+            build(n, sizes);
+            // What the events name, deepest folder last, as a tick lists them.
+            for path in [debug.join("app"), deps.join("app-h"), session(n)] {
+                touched(&mut model, &path);
+            }
+            assert_agrees_with_a_fresh_scan(&model, &opts());
+            let (expected, delta) = diff_rows(&first, &fresh_as_charged(&model, &opts()));
+            assert!(!expected.is_empty(), "build {n} changed something");
+            assert_eq!(rows(&model), expected, "build {n}");
+            assert_eq!(model.totals().delta(), delta, "build {n}");
+            let now = charges(&model);
+            for (inode, path) in &untouched {
+                assert_eq!(now.get(inode), Some(path), "build {n} moved a charge");
+            }
+        }
+        // Three names of the latest objects at most: deps, one session, and
+        // nothing left over from the sessions that were deleted.
+        assert_eq!(model.ledger.names(), 2 + 2 + 2 + 2 + 2, "every name, once");
+    }
+
+    /// A charge stays with the folder that has it: a new name in a folder that
+    /// comes first in path order does not take it, and neither does a full
+    /// rescan whose own walk charged the other folder. Only when the folder
+    /// loses its last name of the file does the charge move.
+    #[test]
+    fn a_charge_stays_with_its_folder_until_the_folder_has_no_name_of_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = &dir.path().canonicalize().unwrap();
+        write(&root.join("z/f"), 50_000);
+        link(&root.join("z/f"), &root.join("z/g"));
+        let (mut model, _) = start(root, opts());
+        let charged = |model: &Model| charges(model).into_values().collect::<Vec<_>>();
+        assert_eq!(charged(&model), [root.join("z")]);
+
+        link(&root.join("z/f"), &root.join("a/h"));
+        touched(&mut model, &root.join("a"));
+        touched(&mut model, &root.join("z/f"));
+        assert_eq!(charged(&model), [root.join("z")]);
+        model.resync(&scanned(root, &opts()));
+        assert_eq!(charged(&model), [root.join("z")], "after a full rescan");
+        model.aggregate();
+        assert!(rows(&model).is_empty(), "{:?}", rows(&model));
+        assert_agrees_with_a_fresh_scan(&model, &opts());
+
+        fs::remove_file(root.join("z/f")).unwrap();
+        touched(&mut model, &root.join("z/f"));
+        assert_eq!(charged(&model), [root.join("z")], "z still has g");
+        fs::remove_file(root.join("z/g")).unwrap();
+        touched(&mut model, &root.join("z/g"));
+        assert_eq!(charged(&model), [root.join("a")]);
+        assert_eq!(model.totals().delta(), 0);
+        assert_agrees_with_a_fresh_scan(&model, &opts());
+    }
+
+    /// A subtree rescan settles a hardlink one of whose names is outside it,
+    /// where it once had to hand over to a full rescan.
+    #[test]
+    fn a_subtree_rescan_settles_hardlinks_across_its_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = &dir.path().canonicalize().unwrap();
+        write(&root.join("elsewhere/f"), 60_000);
+        link(&root.join("elsewhere/f"), &root.join("lost/x/f"));
+        let (mut model, _) = start(root, opts());
+        let before = charges(&model);
+
+        write(&root.join("elsewhere/g"), 9_000);
+        link(&root.join("elsewhere/g"), &root.join("lost/y/g"));
+        link(&root.join("elsewhere/f"), &root.join("lost/y/f2"));
+        let lost = model.locate(&root.join("lost"), true).unwrap();
+        model.rescan(lost).unwrap();
+        // `g` is new, and its name outside the rescan is in an event of its
+        // own; until that is listed, `g` counts under neither name.
+        assert!(model.unsure_link());
+        touched(&mut model, &root.join("elsewhere/g"));
+
+        assert_eq!(model.totals().delta(), 9_000);
+        assert_agrees_with_a_fresh_scan(&model, &opts());
+        let f = before.keys().next().unwrap();
+        assert_eq!(charges(&model)[f], before[f], "f keeps its charge");
+    }
+
+    /// The events missed a name: the ledger drops a file whose known names
+    /// all went, while one it never heard of holds it still. That is exactly
+    /// what the periodic full rescan is for, and it puts the ledger right.
+    #[test]
+    fn a_full_rescan_puts_right_a_ledger_that_missed_a_name() {
         let dir = tempfile::tempdir().unwrap();
         let root = &dir.path().canonicalize().unwrap();
         write(&root.join("a/big"), 400_000);
+        link(&root.join("a/big"), &root.join("c/keep"));
         fs::create_dir_all(root.join("b")).unwrap();
         let (mut model, _) = start(root, opts());
-        let before = model.totals();
 
+        // The link's event is lost; the deletes' are not.
         fs::hard_link(root.join("a/big"), root.join("b/link")).unwrap();
-        let b = model.locate(&root.join("b/link"), false).unwrap();
-        let update = model.relist(b).unwrap();
+        fs::remove_file(root.join("a/big")).unwrap();
+        fs::remove_file(root.join("c/keep")).unwrap();
+        touched(&mut model, &root.join("a/big"));
+        touched(&mut model, &root.join("c/keep"));
+        assert_eq!(model.totals().delta(), -400_000, "wrong, as it must be");
 
-        assert!(
-            matches!(&update.refused, Some(Refusal::Hardlinks(p)) if p.ends_with("b/link")),
-            "{:?}",
-            update.refused
-        );
+        model.resync(&scanned(root, &opts()));
         model.aggregate();
-        assert_eq!(
-            model.totals(),
-            before,
-            "a refusal must leave the model as it was"
-        );
-
-        let (tree, stats) = scan(root, opts(), Arc::default()).unwrap();
-        model.resync(&tree, &stats);
-        model.aggregate();
-        assert_eq!(model.totals().delta(), 0, "one inode, counted once");
-        // Which name carries the bytes is up to the walk (invariant 3), so two
-        // scans may disagree folder by folder; the pair may not.
-        let sizes = model.dir_sizes();
-        let of = |name: &str| sizes.iter().find(|s| s.0 == name).unwrap().1;
-        assert_eq!(of("a") + of("b"), 400_000);
-
-        // And from now on `a` holds a hardlinked file too, so its next listing
-        // is refused as well: the old name's charge may move.
-        let a = model.locate(&root.join("a/big"), false).unwrap();
-        assert!(model.relist(a).unwrap().refused.is_some());
+        assert_eq!(model.totals().delta(), 0);
+        assert_agrees_with_a_fresh_scan(&model, &opts());
     }
 
     #[test]
@@ -1471,8 +1909,7 @@ mod tests {
         model.aggregate();
         assert_eq!(model.totals().delta(), 0, "nothing told the model yet");
 
-        let (tree, stats) = scan(root, opts(), Arc::default()).unwrap();
-        model.resync(&tree, &stats);
+        model.resync(&scanned(root, &opts()));
         model.aggregate();
 
         assert_eq!(model.totals().delta(), 8_000 + 4_000 - 1_000 + 2_000);
@@ -1501,7 +1938,7 @@ mod tests {
         write(&root.join("lost/x/f"), 5_000);
         write(&root.join("lost/y/z/g"), 3_000);
         let lost = model.locate(&root.join("lost"), true).unwrap();
-        assert!(model.rescan(lost).unwrap().refused.is_none());
+        model.rescan(lost).unwrap();
         model.aggregate();
 
         assert_eq!(model.totals().delta(), 7_000);
@@ -1543,30 +1980,10 @@ mod tests {
             touched(&mut model, &root.join(path));
         }
 
-        let report = spacetrace_diff::diff(
-            &first,
-            &fresh(root, &opts()),
-            &spacetrace_diff::DiffOptions {
-                min_delta: 1,
-                ..Default::default()
-            },
-        );
-        let expected: Vec<_> = report
-            .changes
-            .iter()
-            .map(|c| {
-                let kind = match c.kind {
-                    spacetrace_diff::ChangeKind::Grown => MoverKind::Grown,
-                    spacetrace_diff::ChangeKind::Shrunk => MoverKind::Shrunk,
-                    spacetrace_diff::ChangeKind::Added => MoverKind::Added,
-                    spacetrace_diff::ChangeKind::Removed => MoverKind::Removed,
-                };
-                (c.path.clone(), kind, c.delta())
-            })
-            .collect();
+        let (expected, delta) = diff_rows(&first, &fresh(root, &opts()));
         assert!(expected.len() >= 4, "the fixture must spread: {expected:?}");
         assert_eq!(rows(&model), expected);
-        assert_eq!(model.totals().delta(), report.delta());
+        assert_eq!(model.totals().delta(), delta);
     }
 
     #[test]
@@ -1581,6 +1998,12 @@ mod tests {
             fs::create_dir_all(root.join(format!("churn/t{i}"))).unwrap();
         }
         touched(&mut model, &root.join("churn"));
+        // A hardlink charged in a folder made after the churn, whose record
+        // compaction moves: the ledger has to move with it.
+        write(&root.join("late/x/f"), 3_000);
+        link(&root.join("late/x/f"), &root.join("keep/deep/er/l"));
+        touched(&mut model, &root.join("late"));
+        touched(&mut model, &root.join("keep/deep"));
         fs::remove_dir_all(root.join("churn")).unwrap();
         fs::remove_dir_all(root.join("gone-later")).unwrap();
         write(&root.join("keep/f"), 600);
@@ -1603,9 +2026,17 @@ mod tests {
             .1
             .iter()
             .any(|r| r.0 == "gone-later" && r.1 == MoverKind::Removed));
-        // And the records that moved still resolve by path.
+        // And the records that moved still resolve by path, the hardlink's
+        // included.
+        assert_agrees_with_a_fresh_scan(&model, &opts());
+        write(&root.join("late/x/f"), 5_000);
+        touched(&mut model, &root.join("late/x/f"));
         touched(&mut model, &root.join("keep/f"));
         assert_agrees_with_a_fresh_scan(&model, &opts());
+        assert!(model
+            .charged_dirs()
+            .values()
+            .any(|dir| *dir == root.join("late/x")));
     }
 
     #[test]

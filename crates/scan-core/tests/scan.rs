@@ -162,6 +162,69 @@ fn hardlinked_files_are_counted_once() {
     assert_eq!(stats.hardlinks_deduped, 0);
 }
 
+/// `scan_with_hardlinks` names every name of every hardlinked file — the one
+/// charged and the ones that are not — with the identity `lstat` gives it,
+/// names nothing else, and changes nothing about the scan itself.
+#[cfg(unix)]
+#[test]
+fn every_hardlinked_name_is_reported_with_its_identity() {
+    use spacetrace_scan_core::scan_with_hardlinks;
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = &dir.path().canonicalize().unwrap();
+    fs::write(root.join("original"), vec![0u8; 8192]).unwrap();
+    fs::create_dir_all(root.join("elsewhere/deeper")).unwrap();
+    fs::hard_link(root.join("original"), root.join("elsewhere/linked")).unwrap();
+    fs::hard_link(root.join("original"), root.join("elsewhere/deeper/third")).unwrap();
+    fs::write(root.join("elsewhere/pair1"), vec![1u8; 300]).unwrap();
+    fs::hard_link(root.join("elsewhere/pair1"), root.join("elsewhere/pair2")).unwrap();
+    fs::write(root.join("plain"), vec![2u8; 100]).unwrap();
+
+    let (tree, stats, links) =
+        scan_with_hardlinks(root, ScanOptions::default(), Arc::default()).unwrap();
+
+    let mut reported: Vec<_> = links
+        .iter()
+        .map(|l| {
+            let node = tree.node(l.node);
+            assert_eq!(node.kind, EntryKind::File);
+            assert!(node.nlink > 1, "{:?}", tree.path(l.node));
+            (tree.path(l.node), l.dev, l.ino)
+        })
+        .collect();
+    reported.sort();
+    let mut expected: Vec<_> = [
+        "original",
+        "elsewhere/linked",
+        "elsewhere/deeper/third",
+        "elsewhere/pair1",
+        "elsewhere/pair2",
+    ]
+    .iter()
+    .map(|rel| {
+        let md = fs::symlink_metadata(root.join(rel)).unwrap();
+        (root.join(rel), md.dev(), md.ino())
+    })
+    .collect();
+    expected.sort();
+    assert_eq!(reported, expected);
+
+    // The scan is the same scan.
+    let (plain_tree, plain_stats) = run(root, ScanOptions::default());
+    assert_eq!(tree.total_size(), plain_tree.total_size());
+    assert_eq!(tree.total_size(), 8192 + 300 + 100, "each file once");
+    assert_eq!(stats.hardlinks_deduped, plain_stats.hardlinks_deduped);
+
+    // Nothing is settled without deduplication, so nothing is named.
+    let opts = ScanOptions {
+        dedupe_hardlinks: false,
+        ..Default::default()
+    };
+    let (_, _, links) = scan_with_hardlinks(root, opts, Arc::default()).unwrap();
+    assert!(links.is_empty(), "{links:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinks_are_not_followed() {

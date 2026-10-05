@@ -33,8 +33,8 @@ pub use meta::{EntryKind, FileIdentity, RawMeta};
 pub use mounts::Mounts;
 pub use partial::PartialTree;
 pub use scan::{
-    probe_mount, scan, Phase, ScanOptions, ScanProgress, ScanStats, StallWatch, MAX_CAPACITY_HINT,
-    MOUNT_TIMEOUT, STALL_GRACE,
+    probe_mount, scan, scan_with_hardlinks, LinkedName, Phase, ScanOptions, ScanProgress,
+    ScanStats, StallWatch, MAX_CAPACITY_HINT, MOUNT_TIMEOUT, STALL_GRACE,
 };
 pub use timeout::with_deadline;
 pub use tree::{

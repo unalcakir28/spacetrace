@@ -268,16 +268,15 @@ a terminal, appended as lines into a pipe, one JSON object per refresh with
 `--json`. Filesystem events (FSEvents, inotify, ReadDirectoryChangesW) only say
 *where* to look; every number comes from listing that folder again with the
 scanner, so hardlinks, symlinks and `--exclude`/`-x`/`--depth` mean exactly
-what they mean for `scan`. A change involving a hardlinked file, and any events
-the system reports as dropped, trigger a full rescan, and the screen says so;
-a cheap full rescan also runs every minute or so to catch losses nobody
-reported. Clones are counted at their full size (`--no-clone-dedupe`). The
-`filesystem … free` line is the filesystem's own count, to compare against.
-
-Build output is often hardlinked (cargo's `target/`, pnpm's store), so a build
-running inside the watched folder keeps asking for full rescans. They are
-capped at a tenth of the time, but on a large root that is still real CPU;
-`--exclude target` when the build is not what you are looking for.
+what they mean for `scan`. A hardlinked file is counted once across listings
+too: the watch remembers which folders hold a name of it, so a build that
+links its output (cargo's `target/`, pnpm) is followed folder by folder. Any
+events the system reports as dropped, and a hardlink whose other names no
+listing has met, trigger a full rescan, capped at a tenth of the time, and the
+screen says so; a cheap full rescan also runs every minute or so to catch
+losses nobody reported. Clones are counted at their full size
+(`--no-clone-dedupe`). The `filesystem … free` line is the filesystem's own
+count, to compare against.
 
 On Linux each watched folder takes one inotify watch. If
 `fs.inotify.max_user_watches` is too low, `watch` stops and says so, with the

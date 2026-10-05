@@ -232,6 +232,86 @@ fn a_hardlink_to_an_existing_file_adds_nothing() {
     assert!(wrong.is_empty(), "a frame counted the link: {wrong:?}");
 }
 
+/// Logical bytes under `root`, each file once however many names it has —
+/// what a scan counts (invariant 3), read here without the scanner.
+#[cfg(unix)]
+fn disk_total(root: &Path) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    let mut seen = std::collections::HashSet::new();
+    let mut total = 0;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let entry = entry.unwrap();
+            let md = entry.metadata().unwrap();
+            if md.is_dir() {
+                stack.push(entry.path());
+            } else if seen.insert((md.dev(), md.ino())) {
+                total += md.len() as i64;
+            }
+        }
+    }
+    total
+}
+
+/// A build tree is where hardlinks are made by the hundred: cargo links each
+/// object file into an incremental session folder and the binary to its
+/// uplifted name. Each of those once sent the watch into a full rescan; now
+/// every frame keeps up through listings alone, and the total is the disk's,
+/// each file once.
+#[cfg(unix)]
+#[test]
+fn a_build_tree_full_of_hardlinks_is_followed_without_a_full_rescan() {
+    let (_dir, root) = root();
+    let debug = root.join("proj/target/debug");
+    let deps = debug.join("deps");
+    let build = |n: u32, size: usize| {
+        let session = debug.join(format!("incremental/app/s-{n}"));
+        std::fs::create_dir_all(&session).unwrap();
+        for name in ["app-h", "app-h.a.o", "app-h.b.o"] {
+            let _ = std::fs::remove_file(deps.join(name));
+            write(&deps.join(name), size + name.len());
+        }
+        for (from, to) in [("app-h.a.o", "a.o"), ("app-h.b.o", "b.o")] {
+            std::fs::hard_link(deps.join(from), session.join(to)).unwrap();
+        }
+        if n > 1 {
+            let old = debug.join(format!("incremental/app/s-{}", n - 1));
+            std::fs::remove_dir_all(old).unwrap();
+        }
+        let _ = std::fs::remove_file(debug.join("app"));
+        std::fs::hard_link(deps.join("app-h"), debug.join("app")).unwrap();
+    };
+    write(&root.join("proj/src/main.rs"), 1_000);
+    build(1, 100_000);
+    let start = disk_total(&root);
+    let mut watch = Watch::start(&root, &[]);
+
+    for (n, size) in [(2, 300_000), (3, 50_000), (4, 700_000)] {
+        build(n, size);
+        let expected = disk_total(&root) - start;
+        watch.until_seen_by_events(&format!("build {n}, {expected:+} bytes"), |f| {
+            delta(f) == expected
+        });
+    }
+    let rescans: Vec<_> = watch
+        .seen
+        .iter()
+        .filter(|f| {
+            !f["pending_rescan"].is_null()
+                || f["notes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|n| n.as_str().unwrap().starts_with("rescanned everything"))
+        })
+        .collect();
+    assert!(
+        rescans.is_empty(),
+        "a full rescan was asked for: {rescans:?}"
+    );
+}
+
 #[test]
 fn an_excluded_folder_never_shows_its_growth() {
     let (_dir, root) = root();
