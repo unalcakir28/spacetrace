@@ -56,7 +56,7 @@ fn server() -> Option<Server> {
 impl Server {
     fn settings(&self, credentials: Option<Credentials>) -> Settings {
         Settings {
-            credentials,
+            credentials: credentials.map(Into::into),
             region: DEFAULT_REGION.into(),
             endpoint: Some(self.endpoint.clone()),
         }
@@ -250,6 +250,105 @@ fn a_prefix_lists_one_folder_and_nothing_beside_it() {
     .unwrap();
     assert_eq!(scan.tree.total_size(), 12);
     assert!(scan.tree.find("2024/b.jpg").is_some());
+}
+
+/// A role assumed through the server's own STS, end to end: the profile files
+/// in a home of their own, the chain picking `role_arn` + `source_profile`,
+/// a signed AssumeRole, and a listing signed with the temporary keys. MinIO
+/// refuses a temporary key without its session token, so a listing that
+/// works is the proof that `x-amz-security-token` went out.
+#[test]
+fn a_profile_role_assumed_through_sts_lists_the_bucket() {
+    let Some(server) = server() else { return };
+    let mut bucket = TestBucket::create(&server, "role");
+    bucket.put("a/b.txt", 5);
+    bucket.put("c.txt", 7);
+
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join(".aws")).unwrap();
+    std::fs::write(
+        home.path().join(".aws").join("credentials"),
+        format!(
+            "[base]\naws_access_key_id = {}\naws_secret_access_key = {}\n",
+            server.credentials.access_key_id, server.credentials.secret_access_key
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        home.path().join(".aws").join("config"),
+        "[profile reader]\nrole_arn = arn:aws:iam::123456789012:role/reader\n\
+         source_profile = base\nrole_session_name = spacetrace-test\nduration_seconds = 900\n",
+    )
+    .unwrap();
+    let endpoint = format!("{}://{}", server.endpoint.scheme, server.endpoint.authority);
+    let env: std::collections::HashMap<&str, String> = [
+        ("HOME", home.path().display().to_string()),
+        ("AWS_ENDPOINT_URL", endpoint),
+        ("AWS_EC2_METADATA_DISABLED", "true".to_string()),
+    ]
+    .into_iter()
+    .collect();
+    let flags = super::config::Flags {
+        profile: Some("reader".into()),
+        ..Default::default()
+    };
+    let settings = super::config::resolve(&flags, &|k| env.get(k).cloned()).unwrap();
+    assert!(
+        matches!(
+            settings.credentials,
+            Some(super::credentials::Provider::AssumeRole(_))
+        ),
+        "{:?}",
+        settings.credentials
+    );
+    let fetched = settings
+        .credentials
+        .as_ref()
+        .unwrap()
+        .fetch(&ScanProgress::default())
+        .unwrap();
+    assert_ne!(
+        fetched.credentials.access_key_id, server.credentials.access_key_id,
+        "temporary keys, not the source's"
+    );
+    let token = fetched
+        .credentials
+        .session_token
+        .clone()
+        .expect("a session token");
+    let lifetime = fetched.expires.unwrap() - crate::fmt::unix_now();
+    assert!(
+        (800..=900).contains(&lifetime),
+        "duration_seconds was asked for: {lifetime}"
+    );
+
+    let scan = scan_with(
+        &bucket.url(),
+        settings,
+        None,
+        Arc::new(ScanProgress::default()),
+    )
+    .unwrap();
+    assert_eq!(scan.stats.objects, 2);
+    assert_eq!(scan.tree.total_size(), 12);
+
+    // And without the token the same temporary key is refused, so the
+    // listing above did carry it.
+    let tokenless = Credentials {
+        session_token: None,
+        ..fetched.credentials.clone()
+    };
+    let refused = scan_with(
+        &bucket.url(),
+        server.settings(Some(tokenless)),
+        None,
+        Arc::new(ScanProgress::default()),
+    )
+    .map(|_| ())
+    .unwrap_err();
+    let text = format!("{refused:#}");
+    assert!(text.contains("refused the listing"), "{text}");
+    assert!(!text.contains(&token), "{text}");
 }
 
 /// Refusals must say what went wrong in S3's words, and must not echo a

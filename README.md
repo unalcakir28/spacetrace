@@ -229,13 +229,18 @@ spacetrace diff --path s3://my-bucket/backups                  # what grew
 ```
 
 The saved snapshot is an ordinary one: `ls --scan`, `diff`, `age --scan` and
-`export` work on it unchanged. Credentials and region are found the way the
-`aws` CLI finds them — `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/
-`AWS_SESSION_TOKEN`, then `~/.aws/credentials` and `~/.aws/config` with
-`AWS_PROFILE` or `--profile`, region from `--region`, `AWS_REGION`, the profile,
-then `us-east-1` (a wrong guess is corrected once, from AWS' own answer). Only
-static keys are read; for SSO or an assumed role, export keys first with
-`aws configure export-credentials`.
+`export` work on it unchanged. Credentials are found the way the `aws` CLI
+finds them, in its order: `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/
+`AWS_SESSION_TOKEN`; then the profile (`AWS_PROFILE` or `--profile`) in
+`~/.aws/config` and `~/.aws/credentials` — an assumed role (`role_arn` with
+`source_profile` or `credential_source`), a web identity token
+(`AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`), IAM Identity Center (after
+`aws sso login`), keys, `credential_process`; then ECS/EKS container
+credentials and EC2 instance metadata. Temporary keys are renewed before they
+expire, so a long listing outlives them. A role that needs an MFA code is not
+prompted for: export its keys first with `aws configure export-credentials`.
+The region comes from `--region`, `AWS_REGION`, the profile, then `us-east-1`
+(a wrong guess is corrected once, from AWS' own answer).
 
 - Keys are split on `/` into folders, and a key ending in `/` (a "folder
   marker") is drawn as its folder. The path after the bucket is a folder:

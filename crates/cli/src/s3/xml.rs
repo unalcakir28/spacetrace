@@ -14,9 +14,12 @@
 //!
 //! Keys are requested with `encoding-type=url`, because a key may contain
 //! characters XML 1.0 cannot carry at all (U+0001 is a legal key byte and an
-//! illegal XML character). Whether the server honoured that is read from the
-//! response's own `<EncodingType>` — MinIO writes it *after* the keys — and
-//! only then are the keys decoded.
+//! illegal XML character). Keys are decoded as they close; whether the
+//! server honoured the request is only known from the response's own
+//! `<EncodingType>`, which MinIO writes *after* the keys, so a response that
+//! turns out not to carry it is read again with the keys taken literally.
+
+use std::borrow::Cow;
 
 use anyhow::{bail, Context, Result};
 
@@ -58,12 +61,34 @@ struct Fields {
 
 /// Parse a ListObjectsV2 response body.
 pub fn parse_list(body: &str) -> Result<ListPage> {
+    let read = read_list(body, true)?;
+    if !read.url_encoded {
+        // The server ignored `encoding-type=url`: the keys are as they are.
+        return Ok(read_list(body, false)?.page);
+    }
+    match read.bad_key {
+        Some((key, e)) => Err(e).with_context(|| format!("cannot decode the key {key:?}")),
+        None => Ok(read.page),
+    }
+}
+
+/// One reading of a listing.
+struct Read {
+    page: ListPage,
+    /// The response said `<EncodingType>url</EncodingType>`.
+    url_encoded: bool,
+    /// The first key that would not decode, kept until the end says whether
+    /// it should have.
+    bad_key: Option<(String, anyhow::Error)>,
+}
+
+fn read_list(body: &str, decode: bool) -> Result<Read> {
     let mut page = ListPage::default();
     // Fields land here as each one closes and become an entry when its
     // `<Contents>` closes; a page is pushed whole, never half an object.
     let mut current = Fields::default();
-    let mut raw: Vec<Fields> = Vec::new();
-    let mut encoding_url = false;
+    let mut url_encoded = false;
+    let mut bad_key = None;
     let mut root_seen = false;
     let mut truncation_said = false;
 
@@ -85,10 +110,35 @@ pub fn parse_list(body: &str) -> Result<ListPage> {
                 page.next_continuation_token = Some(text.to_string());
             }
             ["ListBucketResult", "EncodingType"] => {
-                encoding_url = text.trim().eq_ignore_ascii_case("url");
+                url_encoded = text.trim().eq_ignore_ascii_case("url");
             }
-            ["ListBucketResult", "Contents"] => raw.push(std::mem::take(&mut current)),
-            ["ListBucketResult", "Contents", "Key"] => current.key = Some(text.to_string()),
+            ["ListBucketResult", "Contents"] => {
+                let fields = std::mem::take(&mut current);
+                let key = fields.key.context("an object in the listing has no Key")?;
+                let size = fields
+                    .size
+                    .with_context(|| format!("the object {key:?} has no Size"))?;
+                page.objects.push(Object {
+                    key,
+                    size,
+                    // Absent rather than malformed: a time is not worth
+                    // failing a listing over, and 0 is what the tree already
+                    // means by "unknown".
+                    last_modified: fields.last_modified.unwrap_or(0),
+                });
+            }
+            ["ListBucketResult", "Contents", "Key"] => {
+                current.key = Some(match decode {
+                    false => text.to_string(),
+                    true => match url_decode(text) {
+                        Ok(key) => key.into_owned(),
+                        Err(e) => {
+                            bad_key.get_or_insert((text.to_string(), e));
+                            text.to_string()
+                        }
+                    },
+                });
+            }
             ["ListBucketResult", "Contents", "Size"] => {
                 current.size = Some(
                     text.trim()
@@ -120,26 +170,11 @@ pub fn parse_list(body: &str) -> Result<ListPage> {
     if !truncation_said {
         bail!("the listing does not say whether it is complete (no <IsTruncated>)");
     }
-
-    page.objects.reserve(raw.len());
-    for fields in raw {
-        let key = fields.key.context("an object in the listing has no Key")?;
-        let key = match encoding_url {
-            true => url_decode(&key).with_context(|| format!("cannot decode the key {key:?}"))?,
-            false => key,
-        };
-        let size = fields
-            .size
-            .with_context(|| format!("the object {key:?} has no Size"))?;
-        page.objects.push(Object {
-            key,
-            size,
-            // Absent rather than malformed: a time is not worth failing a
-            // listing over, and 0 is what the tree already means by "unknown".
-            last_modified: fields.last_modified.unwrap_or(0),
-        });
-    }
-    Ok(page)
+    Ok(Read {
+        page,
+        url_encoded,
+        bad_key,
+    })
 }
 
 /// Parse an `<Error>` body. `None` when the body is not one — an HTML page
@@ -161,6 +196,73 @@ pub fn parse_error(body: &str) -> Option<ErrorBody> {
         Ok(())
     });
     (parsed.is_ok() && root_seen).then_some(error)
+}
+
+/// The keys in an STS `AssumeRole` or `AssumeRoleWithWebIdentity` answer.
+#[derive(Default)]
+pub struct StsCredentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: String,
+    /// `Expiration` as Unix seconds.
+    pub expiration: i64,
+}
+
+/// Read `<XResponse><XResult><Credentials>…` out of an STS answer.
+///
+/// The errors say which field is missing and never quote the body: what is
+/// in it is a secret key.
+pub fn parse_sts_credentials(body: &str) -> Result<StsCredentials> {
+    let mut out = StsCredentials::default();
+    let mut expiration = None;
+    let parsed = walk(body, |path, text| {
+        let [response, result, "Credentials", field] = path else {
+            return Ok(());
+        };
+        if !response.ends_with("Response") || !result.ends_with("Result") {
+            return Ok(());
+        }
+        match *field {
+            "AccessKeyId" => out.access_key_id = text.trim().to_string(),
+            "SecretAccessKey" => out.secret_access_key = text.trim().to_string(),
+            "SessionToken" => out.session_token = text.trim().to_string(),
+            "Expiration" => expiration = parse_rfc3339(text.trim()),
+            _ => {}
+        }
+        Ok(())
+    });
+    // The walker's own message can quote a few characters of the text it
+    // stopped at, and the text here is credentials.
+    if parsed.is_err() {
+        bail!("the response is not well-formed XML");
+    }
+    for (name, value) in [
+        ("AccessKeyId", &out.access_key_id),
+        ("SecretAccessKey", &out.secret_access_key),
+        ("SessionToken", &out.session_token),
+    ] {
+        if value.is_empty() {
+            bail!("the response carries no {name}");
+        }
+    }
+    out.expiration = expiration.context("the response carries no readable Expiration")?;
+    Ok(out)
+}
+
+/// The `<ErrorResponse><Error>` body STS answers a refusal with.
+pub fn parse_sts_error(body: &str) -> Option<ErrorBody> {
+    let mut error = ErrorBody::default();
+    let mut root_seen = false;
+    let parsed = walk(body, |path, text| {
+        match path {
+            ["ErrorResponse"] => root_seen = true,
+            ["ErrorResponse", "Error", "Code"] => error.code = text.trim().to_string(),
+            ["ErrorResponse", "Error", "Message"] => error.message = text.trim().to_string(),
+            _ => {}
+        }
+        Ok(())
+    });
+    (parsed.is_ok() && root_seen && !error.code.is_empty()).then_some(error)
 }
 
 /// A ListObjectsV2 page is four levels deep (`ListBucketResult`, `Contents`,
@@ -337,8 +439,12 @@ fn decode_entities(raw: &str, out: &mut String) -> Result<()> {
 /// Form decoding, `+` as a space: that is what S3 writes (a key `a b` comes
 /// back as `a+b`, a key `a+b` as `a%2Bb` — both checked against MinIO, see the
 /// fixtures), and it is what botocore's own decoder does (`unquote_plus` in
-/// `botocore.handlers.decode_list_object_v2`).
-pub fn url_decode(s: &str) -> Result<String> {
+/// `botocore.handlers.decode_list_object_v2`). Most keys have nothing to
+/// decode, and come back borrowed.
+pub fn url_decode(s: &str) -> Result<Cow<'_, str>> {
+    if !s.contains(['%', '+']) {
+        return Ok(Cow::Borrowed(s));
+    }
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -363,7 +469,9 @@ pub fn url_decode(s: &str) -> Result<String> {
             }
         }
     }
-    String::from_utf8(out).context("the decoded key is not UTF-8")
+    String::from_utf8(out)
+        .map(Cow::Owned)
+        .context("the decoded key is not UTF-8")
 }
 
 /// `2026-10-02T12:51:28.817Z` → Unix seconds. RFC 3339, which is what S3 and
@@ -740,6 +848,71 @@ mod tests {
         assert_eq!(parse_error("<html><body>Bad gateway</body></html>"), None);
         assert_eq!(parse_error(""), None);
         assert_eq!(parse_error("<Error><Code>x</Code>"), None, "truncated");
+    }
+
+    // -------------------------------------------------------------- STS
+    //
+    // The AssumeRole answer is MinIO's, captured with curl on 5 October 2026
+    // (keys, token and time replaced); the web identity one follows the STS
+    // API reference's example, which wraps it in a result element of another
+    // name.
+
+    const MINIO_ASSUME_ROLE: &str = include_str!("testdata/minio-assume-role.xml");
+
+    #[test]
+    fn an_assume_role_answer_yields_its_keys() {
+        let keys = parse_sts_credentials(MINIO_ASSUME_ROLE).unwrap();
+        assert_eq!(keys.access_key_id, "EXAMPLEACCESSKEYID00");
+        assert_eq!(
+            keys.secret_access_key,
+            "example/secret+key/0000000000000000000000"
+        );
+        assert!(keys.session_token.starts_with("eyJhbGciOi"));
+        // 2026-10-05T08:45:57Z
+        assert_eq!(keys.expiration, 1_791_189_957);
+
+        let web = "<AssumeRoleWithWebIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\">\
+             <AssumeRoleWithWebIdentityResult><SubjectFromWebIdentityToken>x</SubjectFromWebIdentityToken>\
+             <Credentials><SessionToken>tok</SessionToken><SecretAccessKey>sec</SecretAccessKey>\
+             <Expiration>2014-10-24T23:00:23Z</Expiration><AccessKeyId>AKID</AccessKeyId></Credentials>\
+             </AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>";
+        let keys = parse_sts_credentials(web).unwrap();
+        assert_eq!(
+            (keys.access_key_id.as_str(), keys.session_token.as_str()),
+            ("AKID", "tok")
+        );
+    }
+
+    /// A broken answer is reported without a word of it: the words are keys.
+    #[test]
+    fn a_broken_sts_answer_is_refused_without_quoting_it() {
+        let cut = &MINIO_ASSUME_ROLE[..MINIO_ASSUME_ROLE.find("</SecretAccessKey>").unwrap()];
+        let text = format!("{:#}", parse_sts_credentials(cut).err().unwrap());
+        assert!(!text.contains("example/secret"), "{text}");
+
+        let entity = MINIO_ASSUME_ROLE.replace("example/secret", "&secretname;");
+        let text = format!("{:#}", parse_sts_credentials(&entity).err().unwrap());
+        assert!(!text.contains("secretname"), "{text}");
+
+        let no_token =
+            "<AssumeRoleResponse><AssumeRoleResult><Credentials><AccessKeyId>A</AccessKeyId>\
+             <SecretAccessKey>S</SecretAccessKey><Expiration>2014-10-24T23:00:23Z</Expiration>\
+             </Credentials></AssumeRoleResult></AssumeRoleResponse>";
+        let text = format!("{:#}", parse_sts_credentials(no_token).err().unwrap());
+        assert!(text.contains("no SessionToken"), "{text}");
+    }
+
+    #[test]
+    fn an_sts_error_is_read() {
+        let error = parse_sts_error(
+            "<ErrorResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><Error><Type>Sender</Type>\
+             <Code>AccessDenied</Code><Message>not authorized to perform: sts:AssumeRole</Message></Error>\
+             <RequestId>r</RequestId></ErrorResponse>",
+        )
+        .unwrap();
+        assert_eq!(error.code, "AccessDenied");
+        assert!(error.message.contains("sts:AssumeRole"));
+        assert_eq!(parse_sts_error("<Error><Code>x</Code></Error>"), None);
     }
 
     #[test]

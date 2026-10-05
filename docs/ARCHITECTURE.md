@@ -343,6 +343,22 @@ XML reader are written by hand (`sha2` was already in the workspace), and are
 tested against AWS' published signing vectors, responses captured from MinIO
 and AWS, and a live MinIO when `SPACETRACE_TEST_S3_ENDPOINT` points at one.
 
+**Credentials follow botocore's default chain** (`config.rs` decides,
+`credentials.rs` fetches): environment keys, a profile's assumed role, a web
+identity token, IAM Identity Center, keys in either file, `credential_process`,
+then the container and EC2 metadata services. STS calls go through the same
+signer; the SSO token is found in `~/.aws/sso/cache` under the SHA-1 of the
+session name or start URL, with SHA-1 written by hand too. Temporary keys are
+renewed in botocore's two windows (advisory 15 minutes before expiry,
+mandatory 10), shrunk to half and a quarter of the lifetime for keys shorter
+than an hour. In the advisory window one request renews while the others go
+on with the current keys; only past the mandatory deadline do they wait. An
+`ExpiredToken` answer renews them once and retries. An
+expired SSO token is an error naming `aws sso login`, never a fall-through to
+the next source, which would list as somebody else. The precedence was checked
+against the aws CLI v2 itself on 24 configurations (`export-credentials` and a
+listing, both pointed at one stand-in server): all agree.
+
 What a bucket snapshot means:
 
 - **Identity.** `host` is the service — `s3.amazonaws.com` for AWS, whatever

@@ -14,17 +14,24 @@
 //! * **Cancellation.** Checked before every page and during every backoff, and
 //!   a cancelled listing returns `ErrorKind::Interrupted` and no tree
 //!   (invariant 5).
+//! * **Expiring keys.** Every request asks `Keys` for what to sign with, which
+//!   renews temporary credentials before they run out; should S3 say
+//!   `ExpiredToken` anyway — a clock that disagrees with AWS' — they are
+//!   dropped and the request is sent once more with fresh ones.
 
 use std::io::Read;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use spacetrace_scan_core::ScanProgress;
 
 use super::config::{Endpoint, Settings};
-use super::sigv4::{self, Scope, EMPTY_SHA256};
+use super::credentials::Keys;
+use super::sigv4::{self, Credentials, Scope, EMPTY_SHA256};
 use super::xml::{self, ListPage};
+use crate::fmt::for_terminal;
 
 /// A page is at most 1000 keys of at most 1024 bytes, URL-encoded: about
 /// 10 MB in the worst case. Anything past this is not a listing.
@@ -47,9 +54,13 @@ pub struct Bucket {
     pub prefix: String,
 }
 
+/// Cheap to clone: the connection pool and the keys are shared.
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::blocking::Client,
     settings: Settings,
+    /// `None` signs nothing.
+    keys: Option<Arc<Keys>>,
     /// Changes at most once, when AWS names the bucket's real region.
     region: String,
     redirected: bool,
@@ -73,23 +84,72 @@ pub fn identity(settings: &Settings) -> String {
     }
 }
 
+/// The HTTP client every S3, STS, SSO and metadata request goes through.
+///
+/// Redirects are never followed. S3 never redirects a listing anywhere useful
+/// by itself: a 301 has no Location, and a 307 would be followed with a
+/// signature for the wrong host — region handling in `list_page` does it
+/// properly. A credentials service that redirects is not one to follow with a
+/// token either.
+///
+/// `connect` bounds the connection on its own, so a host that never answers
+/// fails as a connect error, told apart from one that answered slowly — the
+/// instance metadata fallback turns on that — and `total` bounds the whole
+/// request. `local` is for the metadata services, link-local or loopback,
+/// which must never be asked through a proxy.
+pub(super) fn http_client(
+    connect: Duration,
+    total: Duration,
+    local: bool,
+) -> Result<reqwest::blocking::Client> {
+    let mut builder = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(connect)
+        .timeout(total)
+        .user_agent(concat!("spacetrace/", env!("CARGO_PKG_VERSION")));
+    if local {
+        builder = builder.no_proxy();
+    }
+    builder.build().context("building the HTTP client")
+}
+
+/// Why a body could not be read whole.
+pub(super) enum BodyError {
+    /// The connection broke off.
+    Cut(std::io::Error),
+    TooLarge,
+    NotUtf8,
+}
+
+/// A response body, refused past `max` bytes rather than buffered.
+pub(super) fn read_capped(
+    response: reqwest::blocking::Response,
+    max: u64,
+) -> Result<String, BodyError> {
+    let mut raw = Vec::new();
+    response
+        .take(max + 1)
+        .read_to_end(&mut raw)
+        .map_err(BodyError::Cut)?;
+    if raw.len() as u64 > max {
+        return Err(BodyError::TooLarge);
+    }
+    String::from_utf8(raw).map_err(|_| BodyError::NotUtf8)
+}
+
 impl Client {
     pub fn new(settings: Settings) -> Result<Client> {
-        let http = reqwest::blocking::Client::builder()
-            // S3 never redirects a listing anywhere useful by itself: a 301
-            // has no Location, and a 307 would be followed with a signature
-            // for the wrong host. Region handling below does it properly.
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(REQUEST_TIMEOUT)
-            .user_agent(concat!("spacetrace/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .context("building the HTTP client")?;
+        let http = http_client(REQUEST_TIMEOUT, REQUEST_TIMEOUT, false)?;
         if let Some(warning) = cleartext_warning(&settings) {
             eprintln!("{warning}");
         }
         Ok(Client {
             http,
             region: settings.region.clone(),
+            keys: settings
+                .credentials
+                .clone()
+                .map(|provider| Arc::new(Keys::new(provider))),
             settings,
             redirected: false,
             page_size: None,
@@ -123,10 +183,19 @@ impl Client {
         }
 
         let mut attempt = 0;
+        let mut renewed = false;
         loop {
             check_cancelled(progress)?;
             attempt += 1;
-            let outcome = self.send("GET", bucket, &query, Vec::new());
+            let credentials = self.credentials(progress)?;
+            let outcome = self.send_signed(
+                "GET",
+                bucket,
+                None,
+                &query,
+                Vec::new(),
+                credentials.as_ref(),
+            );
             let failure = match outcome {
                 Ok(Response {
                     status: 200, body, ..
@@ -152,7 +221,7 @@ impl Client {
                             )
                         });
                     }
-                    backoff(self.first_backoff, attempt, progress)?;
+                    backoff(self.first_backoff, attempt, Some(progress))?;
                     continue;
                 }
             };
@@ -168,16 +237,26 @@ impl Client {
                 attempt = 0;
                 continue;
             }
+            let expired = error.as_ref().is_some_and(|e| e.code == "ExpiredToken");
+            if expired && !renewed {
+                if let (Some(keys), Some(used)) = (&self.keys, &credentials) {
+                    if keys.expire(used) {
+                        renewed = true;
+                        continue;
+                    }
+                }
+            }
             if is_retryable(failure.status, error.as_ref()) && attempt < ATTEMPTS {
-                backoff(self.first_backoff, attempt, progress)?;
+                backoff(self.first_backoff, attempt, Some(progress))?;
                 continue;
             }
             return Err(self.failure(bucket, &failure, error));
         }
     }
 
-    /// A request against the bucket. `pub(super)` for the integration test,
-    /// which fills a bucket through it.
+    /// A request against the bucket, for the integration test, which fills a
+    /// bucket through it with the signer the listing uses.
+    #[cfg(test)]
     pub(super) fn send(
         &self,
         method: &str,
@@ -188,6 +267,7 @@ impl Client {
         self.send_key(method, bucket, None, query, body)
     }
 
+    #[cfg(test)]
     pub(super) fn send_key(
         &self,
         method: &str,
@@ -195,6 +275,28 @@ impl Client {
         key: Option<&str>,
         query: &[(String, String)],
         body: Vec<u8>,
+    ) -> Result<Response> {
+        let credentials = self.credentials(&ScanProgress::default())?;
+        self.send_signed(method, bucket, key, query, body, credentials.as_ref())
+    }
+
+    /// The keys to sign the next request with, renewed if they are about to
+    /// expire; `None` for unsigned requests.
+    fn credentials(&self, progress: &ScanProgress) -> Result<Option<Credentials>> {
+        self.keys
+            .as_ref()
+            .map(|keys| keys.get(progress))
+            .transpose()
+    }
+
+    fn send_signed(
+        &self,
+        method: &str,
+        bucket: &Bucket,
+        key: Option<&str>,
+        query: &[(String, String)],
+        body: Vec<u8>,
+        credentials: Option<&Credentials>,
     ) -> Result<Response> {
         let (scheme, host, mut path) = self.address(bucket);
         if let Some(key) = key {
@@ -230,25 +332,13 @@ impl Client {
             other => bail!("unsupported method {other}"),
         };
 
-        if let Some(credentials) = &self.settings.credentials {
+        if let Some(credentials) = credentials {
             let payload = match body.is_empty() {
                 true => EMPTY_SHA256.to_string(),
                 false => sigv4::sha256_hex(&body),
             };
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            let amz_date = sigv4::amz_date(now);
-            let mut headers = vec![
-                ("host".to_string(), host.clone()),
-                ("x-amz-content-sha256".to_string(), payload.clone()),
-                ("x-amz-date".to_string(), amz_date.clone()),
-            ];
-            if let Some(token) = &credentials.session_token {
-                headers.push(("x-amz-security-token".to_string(), token.clone()));
-            }
-            let authorization = sigv4::authorization(
+            let amz_date = sigv4::amz_date(crate::fmt::unix_now());
+            let headers = sigv4::signed_headers(
                 credentials,
                 &Scope {
                     amz_date: &amz_date,
@@ -259,16 +349,16 @@ impl Client {
                     method,
                     path: &path,
                     query,
-                    headers: &headers,
+                    headers: &[
+                        ("host".to_string(), host.clone()),
+                        ("x-amz-content-sha256".to_string(), payload.clone()),
+                    ],
                     payload_sha256: &payload,
                 },
             );
-            // `host` is not set by hand: reqwest writes it from the URL, and
-            // the value signed above is built from the same URL parts.
-            for (name, value) in headers.into_iter().filter(|(n, _)| n != "host") {
+            for (name, value) in headers {
                 request = request.header(name, value);
             }
-            request = request.header(reqwest::header::AUTHORIZATION, authorization);
         }
         if !body.is_empty() {
             request = request.body(body);
@@ -286,23 +376,22 @@ impl Client {
             .get("x-amz-bucket-region")
             .and_then(|v| v.to_str().ok())
             .map(str::to_string);
-        let mut raw = Vec::new();
-        response
-            .take(MAX_BODY_BYTES + 1)
-            .read_to_end(&mut raw)
-            .map_err(without_url)
-            .context("reading the response")?;
-        // Both refusals are final. They are the server's answer rather than a
-        // dropped connection, and retrying would fetch the same answer again —
-        // up to six times 64 MiB of it.
-        if raw.len() as u64 > MAX_BODY_BYTES {
-            return Err(Final(format!(
-                "the response is larger than {MAX_BODY_BYTES} bytes; refusing to buffer it"
-            ))
-            .into());
-        }
-        let body =
-            String::from_utf8(raw).map_err(|_| Final("the response is not UTF-8".to_string()))?;
+        // Too large and not UTF-8 are final. They are the server's answer
+        // rather than a dropped connection, and retrying would fetch the same
+        // answer again — up to six times 64 MiB of it.
+        let body = match read_capped(response, MAX_BODY_BYTES) {
+            Ok(body) => body,
+            Err(BodyError::Cut(e)) => return Err(without_url(e)).context("reading the response"),
+            Err(BodyError::TooLarge) => {
+                return Err(Final(format!(
+                    "the response is larger than {MAX_BODY_BYTES} bytes; refusing to buffer it"
+                ))
+                .into())
+            }
+            Err(BodyError::NotUtf8) => {
+                return Err(Final("the response is not UTF-8".to_string()).into())
+            }
+        };
         Ok(Response {
             status,
             body,
@@ -465,23 +554,6 @@ fn cleartext_warning(settings: &Settings) -> Option<String> {
     })
 }
 
-/// Server text made safe to print: control characters escaped, so none is
-/// interpreted by the terminal, and at most `limit` characters of it.
-fn for_terminal(text: &str, limit: usize) -> String {
-    let mut out = String::new();
-    for (i, c) in text.chars().enumerate() {
-        if i == limit {
-            out.push('…');
-            break;
-        }
-        match c.is_control() {
-            true => out.extend(c.escape_default()),
-            false => out.push(c),
-        }
-    }
-    out
-}
-
 fn is_retryable(status: u16, error: Option<&xml::ErrorBody>) -> bool {
     let code = error.map(|e| e.code.as_str()).unwrap_or("");
     matches!(status, 500 | 502 | 503 | 504)
@@ -491,15 +563,26 @@ fn is_retryable(status: u16, error: Option<&xml::ErrorBody>) -> bool {
         )
 }
 
-/// Sleep before attempt `attempt + 1`, in short slices so a cancel is noticed.
-fn backoff(first: Duration, attempt: u32, progress: &ScanProgress) -> Result<()> {
+/// Sleep before attempt `attempt + 1` — `first`, doubling after — in short
+/// slices, so a cancel is noticed within 50 ms. `None` when nothing can
+/// cancel the caller.
+pub(super) fn backoff(
+    first: Duration,
+    attempt: u32,
+    progress: Option<&ScanProgress>,
+) -> Result<()> {
     let delay = first * 2u32.saturating_pow(attempt.saturating_sub(1));
     let until = std::time::Instant::now() + delay;
-    while std::time::Instant::now() < until {
-        check_cancelled(progress)?;
-        std::thread::sleep(Duration::from_millis(50).min(delay));
+    loop {
+        if let Some(progress) = progress {
+            check_cancelled(progress)?;
+        }
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Ok(());
+        }
+        std::thread::sleep(left.min(Duration::from_millis(50)));
     }
-    Ok(())
 }
 
 pub fn check_cancelled(progress: &ScanProgress) -> Result<()> {
@@ -602,6 +685,134 @@ pub(super) mod test_server {
             seen
         });
         (address, handle)
+    }
+
+    /// One request as a stand-in server received it.
+    #[derive(Debug, Clone)]
+    pub struct Seen {
+        pub method: String,
+        /// The request target: path and query, as sent.
+        pub target: String,
+        /// Names in lower case.
+        pub headers: Vec<(String, String)>,
+        pub body: String,
+        /// When it arrived, in Unix milliseconds.
+        pub at_ms: i64,
+    }
+
+    impl Seen {
+        pub fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.as_str())
+        }
+    }
+
+    /// A stand-in for a service: every request goes to `handler`, on a
+    /// thread of its own, so concurrent clients are served concurrently. Stops
+    /// when dropped.
+    pub struct Served {
+        pub address: String,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<Seen>>>,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Served {
+        pub fn seen(&self) -> Vec<Seen> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    impl Drop for Served {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            // Wake the accept loop so it sees the flag.
+            let _ = std::net::TcpStream::connect(self.address.trim_start_matches("http://"));
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    pub type Reply = (u16, String);
+
+    pub fn serve(handler: impl Fn(&Seen) -> Reply + Send + Sync + 'static) -> Served {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::sync::atomic::Ordering;
+        use std::sync::{Arc, Mutex};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let handler = Arc::new(handler);
+        let thread = {
+            let (seen, stop) = (Arc::clone(&seen), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok(mut stream) = stream else { continue };
+                    let (seen, handler) = (Arc::clone(&seen), Arc::clone(&handler));
+                    std::thread::spawn(move || {
+                        let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        let mut parts = line.split_whitespace();
+                        let method = parts.next().unwrap_or("").to_string();
+                        let target = parts.next().unwrap_or("").to_string();
+                        let mut headers = Vec::new();
+                        loop {
+                            let mut line = String::new();
+                            if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                                break;
+                            }
+                            if let Some((name, value)) = line.split_once(':') {
+                                headers.push((
+                                    name.trim().to_ascii_lowercase(),
+                                    value.trim().to_string(),
+                                ));
+                            }
+                        }
+                        let length = headers
+                            .iter()
+                            .find(|(n, _)| n == "content-length")
+                            .and_then(|(_, v)| v.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let mut body = vec![0; length];
+                        let _ = reader.read_exact(&mut body);
+                        let request = Seen {
+                            method,
+                            target,
+                            headers,
+                            body: String::from_utf8_lossy(&body).into_owned(),
+                            at_ms: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as i64,
+                        };
+                        seen.lock().unwrap().push(request.clone());
+                        let (status, body) = handler(&request);
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(body.as_bytes());
+                    });
+                }
+            })
+        };
+        Served {
+            address,
+            seen,
+            stop,
+            thread: Some(thread),
+        }
     }
 }
 
@@ -807,11 +1018,14 @@ mod tests {
 
     fn signed_client(endpoint: &str) -> Client {
         Client::new(Settings {
-            credentials: Some(sigv4::Credentials {
-                access_key_id: "AKIDTEST".into(),
-                secret_access_key: "secret-never-shown".into(),
-                session_token: Some("token-for-the-header".into()),
-            }),
+            credentials: Some(
+                sigv4::Credentials {
+                    access_key_id: "AKIDTEST".into(),
+                    secret_access_key: "secret-never-shown".into(),
+                    session_token: Some("token-for-the-header".into()),
+                }
+                .into(),
+            ),
             region: "us-east-1".into(),
             endpoint: Some(Endpoint::parse(endpoint).unwrap()),
         })
@@ -967,10 +1181,13 @@ mod tests {
     #[test]
     fn credentials_over_plain_http_to_another_machine_are_warned_about() {
         let settings = |endpoint: &str, signed: bool| Settings {
-            credentials: signed.then(|| sigv4::Credentials {
-                access_key_id: "AKID".into(),
-                secret_access_key: "s".into(),
-                session_token: None,
+            credentials: signed.then(|| {
+                sigv4::Credentials {
+                    access_key_id: "AKID".into(),
+                    secret_access_key: "s".into(),
+                    session_token: None,
+                }
+                .into()
             }),
             region: "us-east-1".into(),
             endpoint: Some(Endpoint::parse(endpoint).unwrap()),

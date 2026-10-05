@@ -27,6 +27,7 @@
 
 mod client;
 mod config;
+mod credentials;
 mod keys;
 mod sigv4;
 mod xml;
@@ -35,7 +36,7 @@ mod xml;
 mod minio_tests;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
@@ -216,6 +217,12 @@ fn scan_with(
     })
 }
 
+/// A lock that outlives a panic on another thread: what it guards is never
+/// left half-written, and one failed request must not take the listing down.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +300,135 @@ mod tests {
         assert_eq!(scan.pages, 4);
         assert_eq!(scan.stats.objects, 3);
         assert_eq!(server.join().unwrap().len(), 4);
+    }
+
+    // ------------------------------------------- keys that expire midway
+
+    use client::test_server::{serve, Served};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// A container credentials endpoint handing out keys that live
+    /// `lifetime_s` seconds, and the moment each token stops working.
+    fn issuer(lifetime_s: i64) -> (Served, Arc<Mutex<HashMap<String, i64>>>) {
+        let valid_until = Arc::new(Mutex::new(HashMap::new()));
+        let ledger = Arc::clone(&valid_until);
+        let server = serve(move |_| {
+            let mut ledger = ledger.lock().unwrap();
+            let n = ledger.len() + 1;
+            let expires = crate::fmt::unix_now() + lifetime_s;
+            ledger.insert(format!("token-{n}"), expires * 1000);
+            let stamp = crate::fmt::rfc3339(expires);
+            (
+                200,
+                format!(
+                    "{{\"AccessKeyId\":\"ID{n}\",\"SecretAccessKey\":\"s{n}\",\"Token\":\"token-{n}\",\
+                     \"Expiration\":\"{stamp}\"}}"
+                ),
+            )
+        });
+        (server, valid_until)
+    }
+
+    /// An S3 stand-in serving `pages` pages, `delay` apart, that answers
+    /// `ExpiredToken` for a token past its time — and for the first request
+    /// when `reject_first`, the way AWS does when its clock and ours differ.
+    fn bucket_checking_tokens(
+        pages: usize,
+        delay: std::time::Duration,
+        valid_until: Arc<Mutex<HashMap<String, i64>>>,
+        reject_first: bool,
+    ) -> (Served, Arc<Mutex<u32>>) {
+        let refusals = Arc::new(Mutex::new(0u32));
+        let counted = Arc::clone(&refusals);
+        let first = std::sync::atomic::AtomicBool::new(reject_first);
+        let server = serve(move |request| {
+            let token = request.header("x-amz-security-token").unwrap_or("");
+            let alive = valid_until
+                .lock()
+                .unwrap()
+                .get(token)
+                .is_some_and(|until| request.at_ms < *until);
+            if !alive || first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                *counted.lock().unwrap() += 1;
+                return (
+                    400,
+                    "<Error><Code>ExpiredToken</Code><Message>The provided token has expired.</Message></Error>"
+                        .into(),
+                );
+            }
+            std::thread::sleep(delay);
+            let at: usize = request
+                .target
+                .split("continuation-token=p")
+                .nth(1)
+                .and_then(|rest| rest.split('&').next())
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+            let key = format!("k{at:03}");
+            let next = (at + 1 < pages).then(|| format!("p{}", at + 1));
+            (
+                200,
+                String::from_utf8(page(&[key.as_str()], next.as_deref())).unwrap(),
+            )
+        });
+        (server, refusals)
+    }
+
+    fn renewing(container: &Served, bucket: &Served) -> config::Settings {
+        config::Settings {
+            credentials: Some(credentials::Provider::Container(credentials::Container {
+                url: format!("{}/creds", container.address),
+                token: None,
+            })),
+            region: config::DEFAULT_REGION.into(),
+            endpoint: Some(config::Endpoint::parse(&bucket.address).unwrap()),
+        }
+    }
+
+    /// Keys that live four seconds, a listing that takes about five: the keys
+    /// are renewed before they lapse, so S3 never has to refuse one.
+    #[test]
+    fn keys_that_expire_during_a_listing_are_renewed_before_they_lapse() {
+        let (container, valid_until) = issuer(4);
+        let (bucket, refusals) = bucket_checking_tokens(
+            15,
+            std::time::Duration::from_millis(300),
+            Arc::clone(&valid_until),
+            false,
+        );
+        let url = S3Url::parse("s3://b").unwrap();
+        let scan = scan_with(&url, renewing(&container, &bucket), None, Arc::default()).unwrap();
+        assert_eq!(scan.stats.objects, 15);
+        assert_eq!(
+            *refusals.lock().unwrap(),
+            0,
+            "no request went out with lapsed keys"
+        );
+        let tokens: std::collections::HashSet<String> = bucket
+            .seen()
+            .iter()
+            .filter_map(|r| r.header("x-amz-security-token").map(str::to_string))
+            .collect();
+        assert!(tokens.len() >= 2, "renewed midway: {tokens:?}");
+        assert_eq!(container.seen().len(), tokens.len());
+    }
+
+    /// S3's word outranks our clock: `ExpiredToken` drops the keys and the
+    /// page is asked for once more, with fresh ones.
+    #[test]
+    fn an_expired_token_answer_fetches_fresh_keys_and_retries() {
+        let (container, valid_until) = issuer(3600);
+        let (bucket, refusals) =
+            bucket_checking_tokens(2, std::time::Duration::ZERO, Arc::clone(&valid_until), true);
+        let url = S3Url::parse("s3://b").unwrap();
+        let scan = scan_with(&url, renewing(&container, &bucket), None, Arc::default()).unwrap();
+        assert_eq!(scan.stats.objects, 2);
+        assert_eq!(*refusals.lock().unwrap(), 1);
+        let seen = bucket.seen();
+        assert_eq!(seen[0].header("x-amz-security-token"), Some("token-1"));
+        assert_eq!(seen[1].header("x-amz-security-token"), Some("token-2"));
+        assert_eq!(container.seen().len(), 2);
     }
 
     /// A hostile endpoint can hand out a fresh token with every empty page

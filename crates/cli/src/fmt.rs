@@ -45,14 +45,52 @@ pub fn duration(ms: u64) -> String {
 /// Deliberately naive: no timezone database, no chrono dependency. Snapshots
 /// are compared by id and by relative age, so this is a label, not arithmetic.
 pub fn timestamp(unix: i64) -> String {
-    let days = unix.div_euclid(86_400);
+    let (y, m, d, hh, mm, _) = civil(unix);
+    format!("{y:04}-{m:02}-{d:02} {hh:02}:{mm:02}")
+}
+
+/// Unix seconds as RFC 3339 in UTC, `2026-10-05T08:45:57Z`: what AWS writes
+/// for an expiry. The tests' stand-in servers write it.
+#[cfg(test)]
+pub(crate) fn rfc3339(unix: i64) -> String {
+    let (y, m, d, hh, mm, ss) = civil(unix);
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+/// Unix seconds as UTC date and time of day.
+pub(crate) fn civil(unix: i64) -> (i64, u32, u32, i64, i64, i64) {
+    let (y, m, d) = civil_from_days(unix.div_euclid(86_400));
     let secs = unix.rem_euclid(86_400);
-    let (y, m, d) = civil_from_days(days);
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
-        secs / 3600,
-        (secs % 3600) / 60
-    )
+    (y, m, d, secs / 3600, (secs % 3600) / 60, secs % 60)
+}
+
+/// Now, in Unix milliseconds; 0 for a clock set before 1970.
+pub(crate) fn unix_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
+/// Now, in Unix seconds.
+pub(crate) fn unix_now() -> i64 {
+    unix_now_ms() / 1000
+}
+
+/// Text from a server made safe to print: control characters escaped, so the
+/// terminal interprets none of them, and at most `limit` characters.
+pub(crate) fn for_terminal(text: &str, limit: usize) -> String {
+    let mut out = String::new();
+    for (i, c) in text.chars().enumerate() {
+        if i == limit {
+            out.push('…');
+            break;
+        }
+        match c.is_control() {
+            true => out.extend(c.escape_default()),
+            false => out.push(c),
+        }
+    }
+    out
 }
 
 /// Howard Hinnant's days-from-civil, inverted. Valid for any Gregorian date.
@@ -126,6 +164,7 @@ mod tests {
         assert_eq!(timestamp(0), "1970-01-01 00:00");
         // 2026-09-06T17:00:00Z
         assert_eq!(timestamp(1_788_714_000), "2026-09-06 17:00");
+        assert_eq!(rfc3339(1_788_714_007), "2026-09-06T17:00:07Z");
     }
 
     /// The two directions must invert each other over a span that crosses
