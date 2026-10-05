@@ -765,7 +765,7 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
 - [ ] **B6 Linux `getdents64` + `statx` fast path.**
       *Competitor:* `dut`, in warm cache, 6.87× over `du`, 2.8–3.75× over
       dust/dua/gdu.
-- [ ] **B7 Incremental rescan via USN Journal (Windows)** — for an agent
+- [~] **B7 Incremental rescan** — macOS done *(5 October 2026)*; USN Journal (Windows) and Linux open. For an agent
       that scans nightly, scanning everything every time is wasteful.
       Strategically the biggest speed gain. *Competitor:* **SpaceObServer**
       — our closest architectural competitor, and ahead right at this
@@ -867,6 +867,42 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       a full scan of the same filesystem state must have the same
       `content_hash`**, which is the only assertion strong enough to be
       worth having here.
+
+      **macOS done** *(5 October 2026)*, built in that order. `scan --save`
+      and scheduled agent scans start from the root's last snapshot, list
+      only the directories on the path to what FSEvents reported, and copy
+      every other subtree through `push_block`. Option (2) as planned:
+      `SHARED`, `ERRORS`, `MOUNT`, `MOUNT_POINT` flags in `Node`'s padding.
+      FSEvents does report the source side of a straddling family — the
+      folder of a new hardlink's original, the file of a new clone — so
+      the copied side is reread; a test on a fresh APFS image holds it.
+      **No `scans` column after all**: the cursor, the sparse flags (5 B
+      per flagged directory, 104 KB on 1.4M entries) and a digest binding
+      both to `content_hash` live in a `rescan_state` side table created
+      inside the save transaction. Schema stays v3, because a v4 database
+      is refused by every older desktop, and exports carry none of it.
+      Fallbacks, each recorded on the snapshot: no cursor, another volume,
+      journal past its budget (max(last full walk, 500 ms)), a loss flag,
+      more than 100,000 changes, a cursor older than two days (no API
+      dates the retained history: `FSEventsGetLastEventIdForDeviceBeforeTime`
+      returned 0 for every time asked), other options, a damaged or
+      imported base. The save now hashes rows as it writes them
+      (/Applications save 588 → 487 ms), and the base is checked in the
+      pass that loads it.
+      *Measured* (M3 Max, 5 interleaved pairs, medians, full vs
+      incremental): /Applications 459 vs 241 ms; ~/Library 2067 vs 1981 ms;
+      ~/Desktop/Projects 5357 vs 3174 ms. Not the 20–50× above: base load
+      (216 / 417 / 923 ms) and rereads dominate — replay itself is ~10 ms.
+      - [ ] USN (Windows) and fanotify (Linux) as further `Journal`
+            implementations; a Linux journal must flag `files_unmapped`
+            directories first.
+      - [ ] ~/Library rereads ~1,250 privacy-protected (TCC) folders every
+            time, ~1.2 ms each, so it gains almost nothing.
+      - [ ] Trees full of hardlinks reuse little (Projects reuses 33%).
+      - [ ] An APFS image attached `-nobrowse` gets no FSEvents history, so
+            it never scans incrementally.
+      - [ ] Only saved scans continue the chain; pushed snapshots carry no
+            state. Base load is now the largest cost.
 
 ### C. Feature gaps
 
@@ -1311,7 +1347,9 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       **208 ms**, commit 18 ms. Since both passes are the same order of
       magnitude, there are two separate phases: `Phase::Saving` and
       `Phase::Checksumming`. With a single phase, the bar would reach the
-      end and start over.
+      end and start over. *(Since 5 October 2026, B7, the digest is
+      computed while the rows are written and `Checksumming` is never
+      entered.)*
 
       `rows_done`/`rows_total` were added to `ScanProgress` and entered
       `StallWatch`'s counter array — that array's own read from

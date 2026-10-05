@@ -261,7 +261,18 @@ scans(id, host, root, started_at, duration_ms, total_size, total_alloc,
 
 entries(scan_id, id, parent_id, name, kind, size, alloc, mtime, nlink,
         files, dirs, children_start, children_len)   -- WITHOUT ROWID
+
+rescan_state(scan_id, journal, rescan, flags, digest)  -- only if saved
 ```
+
+`rescan_state` is what an incremental rescan (B7, macOS) starts from: the
+journal cursor, the reason a scan was full or incremental, and the
+directories that may not be copied unread (sparse, 5 bytes each). It is
+created inside the first save that writes it, never on open, so opening a
+database takes no write lock; it is not part of the schema version, so an
+older reader still opens the file, and `export_snapshot` leaves it behind.
+Its own digest binds it to the scan's `content_hash`: damage means a full
+scan, never a wrong copy.
 
 `host` + `root` defines a **target**; comparison and `prune` operate on this
 pair. `PRAGMA user_version` holds the schema version; a database written by

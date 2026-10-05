@@ -112,6 +112,36 @@
             "it": "Su macOS lo spazio di una famiglia di cloni APFS viene ora attribuito allo stesso membro a ogni scansione: quello meno profondo e, a parità, quello con il percorso che viene prima. Prima andava al membro che un thread di scansione raggiungeva per primo; il totale era giusto, ma con cloni in cartelle diverse i byte passavano dall'uno all'altro da una scansione all'altra senza che nulla cambiasse sul disco, e un `diff` di due snapshot di un disco invariato mostrava una cartella crescere e un'altra ridursi. Un `diff` contro uno snapshot più vecchio può mostrare un tale spostamento un'ultima volta. Il tempo di scansione non cambia.",
             "tr": "macOS'ta bir APFS klon ailesinin kapladığı yer artık her taramada aynı üyeye yazılıyor: en sığdakine, eşitlikte yolu önce gelene. Şimdiye kadar bir tarama thread'inin ilk ulaştığı üyeye gidiyordu; toplam doğruydu, ama klonlar farklı klasörlerdeyken diskte hiçbir şey değişmeden baytlar bir taramadan ötekine aralarında yer değiştiriyordu ve değişmemiş bir diskin iki snapshot'ının `diff`'i bir klasörü büyüyor, ötekini küçülüyor gösteriyordu. Daha eski bir snapshot'a karşı `diff` böyle bir kaymayı son bir kez gösterebilir. Tarama süresi değişmedi."
           }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "Unter macOS beginnen `spacetrace scan --save` und die geplanten Scans des Agenten beim letzten Snapshot und lesen nur die Ordner neu, die laut FSEvents geändert wurden: /Applications in 241 ms statt 459 ms. Das Ergebnis ist dasselbe wie bei einem vollständigen Scan, oder es ist einer: Jeder Zweifel (kein Cursor, anderes Volume, langsames oder verlorenes Journal, zu viele Änderungen, eine Basis älter als zwei Tage, andere Optionen, beschädigte oder importierte Basis) bedeutet einen vollständigen Scan, und der Snapshot hält den Grund fest. `--full` und `incremental = false` pro Wurzel erzwingen einen vollständigen Scan.",
+            "en": "On macOS, `spacetrace scan --save` and the agent's scheduled scans start from the last snapshot and reread only the folders FSEvents says changed: /Applications in 241 ms instead of 459 ms. The result is the same as a full scan or it is a full scan: any doubt (no cursor, another volume, a slow or lost journal, too many changes, a base older than two days, other options, a damaged or imported base) means a full scan, and the snapshot records why. `--full` and per-root `incremental = false` force a full scan.",
+            "fr": "Sous macOS, `spacetrace scan --save` et les analyses planifiées de l'agent partent du dernier instantané et ne relisent que les dossiers que FSEvents signale comme modifiés : /Applications en 241 ms au lieu de 459 ms. Le résultat est celui d'une analyse complète, ou c'en est une : au moindre doute (pas de curseur, autre volume, journal lent ou perdu, trop de changements, base de plus de deux jours, autres options, base endommagée ou importée), l'analyse est complète et l'instantané en note la raison. `--full` et `incremental = false` par racine imposent une analyse complète.",
+            "it": "Su macOS, `spacetrace scan --save` e le scansioni pianificate dell'agente partono dall'ultimo snapshot e rileggono solo le cartelle che FSEvents indica come cambiate: /Applications in 241 ms invece di 459 ms. Il risultato è quello di una scansione completa, oppure è una scansione completa: ogni dubbio (nessun cursore, altro volume, journal lento o perso, troppe modifiche, base più vecchia di due giorni, opzioni diverse, base danneggiata o importata) significa una scansione completa, e lo snapshot ne registra il motivo. `--full` e `incremental = false` per radice forzano una scansione completa.",
+            "tr": "macOS'ta `spacetrace scan --save` ve ajanın zamanlanmış taramaları son snapshot'tan başlıyor ve yalnızca FSEvents'in değişti dediği klasörleri yeniden okuyor: /Applications 459 ms yerine 241 ms'de. Sonuç tam taramayla aynı, ya da tam tarama yapılıyor: herhangi bir şüphe (imleç yok, başka birim, yavaş ya da kayıp günlük, çok fazla değişiklik, iki günden eski taban, farklı seçenekler, bozuk ya da içe aktarılmış taban) tam tarama demek ve snapshot nedenini kaydediyor. `--full` ve kök başına `incremental = false` tam taramayı zorluyor."
+          }
+        },
+        {
+          "kind": "added",
+          "text": {
+            "de": "`scan --json` meldet `rescan` (`full`, `incremental` oder `fallback:<reason>`) und ein `incremental`-Objekt (Replay- und Basis-Ladezeit, neu gelesene Ordner, wiederverwendete Einträge).",
+            "en": "`scan --json` reports `rescan` (`full`, `incremental` or `fallback:<reason>`) and an `incremental` object (replay and base-load time, folders reread, entries reused).",
+            "fr": "`scan --json` indique `rescan` (`full`, `incremental` ou `fallback:<reason>`) et un objet `incremental` (temps de relecture et de chargement de la base, dossiers relus, entrées réutilisées).",
+            "it": "`scan --json` riporta `rescan` (`full`, `incremental` o `fallback:<reason>`) e un oggetto `incremental` (tempo di replay e di caricamento della base, cartelle rilette, voci riutilizzate).",
+            "tr": "`scan --json`, `rescan` alanını (`full`, `incremental` ya da `fallback:<reason>`) ve bir `incremental` nesnesini (günlük ve taban yükleme süresi, yeniden okunan klasörler, yeniden kullanılan girdiler) bildiriyor."
+          }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Das Speichern eines Snapshots dauert etwa 17 % kürzer: Der Inhalts-Hash wird beim Schreiben der Zeilen berechnet, nicht in einem zweiten Durchlauf. `/status` des Agenten meldet keine `checksumming`-Phase mehr.",
+            "en": "Saving a snapshot takes about 17% less time: the content hash is computed while the rows are written, not in a second pass. The agent's `/status` no longer reports a `checksumming` phase.",
+            "fr": "L'enregistrement d'un instantané prend environ 17 % de temps en moins : l'empreinte du contenu est calculée pendant l'écriture des lignes, et non lors d'une seconde passe. Le `/status` de l'agent n'indique plus de phase `checksumming`.",
+            "it": "Salvare uno snapshot richiede circa il 17% di tempo in meno: l'hash del contenuto viene calcolato mentre le righe vengono scritte, non in un secondo passaggio. Il `/status` dell'agente non riporta più la fase `checksumming`.",
+            "tr": "Snapshot kaydetmek yaklaşık %17 daha kısa sürüyor: içerik özeti ikinci bir geçişte değil, satırlar yazılırken hesaplanıyor. Ajanın `/status` yanıtı artık `checksumming` aşamasını bildirmiyor."
+          }
         }
       ],
       "releases": [
@@ -731,6 +761,16 @@
             "fr": "Sur la carte, l'étiquette d'un dossier et celle de son premier sous-dossier se superposaient : toutes deux allaient dans le même coin, à un pixel d'écart, si bien qu'un `dist/` contenant un gros `cache/` se lisait « dist/ache/ ». Une étiquette qui en masquerait une autre descend désormais juste en dessous, à l'intérieur de sa propre tuile, et est omise s'il n'y a plus de place ; deux étiquettes ne se chevauchent plus.",
             "it": "Sulla mappa, l'etichetta di una cartella e quella della sua prima sottocartella venivano disegnate una sopra l'altra: finivano nello stesso angolo, a un pixel di distanza, così un `dist/` con dentro un grande `cache/` si leggeva \"dist/ache/\". Ora un'etichetta che ne coprirebbe un'altra scende subito sotto, all'interno del proprio tassello, e viene omessa se lì non c'è più spazio; due etichette non si sovrappongono più.",
             "tr": "Haritada bir klasörün etiketi ile ilk alt klasörünün etiketi üst üste çiziliyordu: ikisi de aynı köşeye, bir piksel arayla yerleşiyordu; bu yüzden içinde büyük bir `cache/` olan bir `dist/` \"dist/ache/\" diye okunuyordu. Artık başka bir etiketi örtecek bir etiket, kendi karosunun içinde onun altına iniyor; orada yer kalmadıysa hiç çizilmiyor. İki etiket artık üst üste binmiyor."
+          }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Das Speichern eines Scans im Verlauf dauert etwa 17 % kürzer: Die Prüfsumme wird beim Schreiben der Zeilen berechnet, nicht in einem zweiten Durchlauf.",
+            "en": "Saving a scan to the history takes about 17% less time: its checksum is computed while the rows are written, not in a second pass.",
+            "fr": "L'enregistrement d'une analyse dans l'historique prend environ 17 % de temps en moins : sa somme de contrôle est calculée pendant l'écriture des lignes, et non lors d'une seconde passe.",
+            "it": "Salvare una scansione nella cronologia richiede circa il 17% di tempo in meno: il suo checksum viene calcolato mentre le righe vengono scritte, non in un secondo passaggio.",
+            "tr": "Bir taramayı geçmişe kaydetmek yaklaşık %17 daha kısa sürüyor: sağlama özeti ikinci bir geçişte değil, satırlar yazılırken hesaplanıyor."
           }
         }
       ],

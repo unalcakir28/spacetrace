@@ -131,7 +131,9 @@ Not phase-ordered, chosen based on demand.
 - [x] Prometheus `/metrics` on the agent
 - [x] Cushion-shaded treemap: surfaces from the core's layout, lit in the
   desktop
-- [ ] Incremental rescan via the USN journal (Windows)
+- [x] Incremental rescan on macOS (FSEvents): `scan --save` and the agent
+  reread only what changed — B7
+- [ ] Incremental rescan on Windows (USN journal) and Linux
 
 ---
 
