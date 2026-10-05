@@ -390,10 +390,11 @@ any file that is neither compressed nor sparse — CI settled it by reporting
 exactly 100001 bytes for a 100001-byte file. The name is the giveaway.
 
 That handle is the price of being correct here, and it is a real one: our own
-measurements put an extra syscall per entry at **+36%** wall clock. The fast
-path above removes it, because `NtQueryDirectoryFileEx` returns allocation and
-file id inside the listing itself — which is the strongest argument for
-building it. `FileIdentity::Skipped` saves the second query when a scan will
+measurements put an extra syscall per entry at **+36%** wall clock. An
+elevated scan of a whole NTFS volume avoids it by reading the master file
+table instead (`ntfs/`, TODO B4 — written, awaiting Windows CI); the
+unprivileged route in the table above, `NtQueryDirectoryFileEx` with
+allocation and file id inside the listing, is still unbuilt. `FileIdentity::Skipped` saves the second query when a scan will
 not use the identity, but not the open.
 
 Directories are queried like files, so `alloc` means the same thing on both

@@ -147,7 +147,7 @@ The layout engine stayed here (`crates/treemap`), because it is core and testabl
 - [x] Remote source flow: download a snapshot from the agent, browse it as if local
 - [x] Diff view (comparison table for two snapshots)
 - [x] Node ids tied to generation — an id belonging to an old tree is rejected
-- [ ] **Windows MFT fast path** (`usn-journal-rs`) — behind admin (→ **B4**)
+- [~] **Windows MFT fast path** — written, behind admin, awaiting Windows CI (→ **B4**)
 - [x] macOS Full Disk Access onboarding screen — banner on the welcome screen,
       button in the settings panel, six usage descriptions in `Info.plist`
 - [x] Timeline view (a target's full history) — **C3**, released in desktop
@@ -541,10 +541,37 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       have nothing for this case.
       *Competitor:* gdu `--sequential`; QDirStat sorts entries by inode
       before stat'ing them.
-- [ ] **B4 Windows MFT fast path** (`usn-journal-rs`) — needs
-      administrator, absent on ReFS and network/FAT → falling back to the
-      normal path is mandatory, and that path gets fixed in A1/A2.
-      **The order is therefore after A.**
+- [~] **B4 Windows MFT fast path** — written *(5 October 2026)*, **awaiting
+      Windows CI**; no changelog entry until it passes. Raw MFT, not USN (no
+      sizes). The parser in `scan-core/src/ntfs/` reads any `Read + Seek`
+      and is tested entry for entry against three ntfs-3g images
+      (`scripts/ntfs-fixtures.sh`, committed as `tests/fixtures/ntfs.tar.gz`)
+      and a 200k-file image: fixups (torn records re-read once), extension
+      records via base reference + sequence check (covers
+      `$ATTRIBUTE_LIST`), sizes only from the VCN-0 instance, DOS names
+      dropped, records < 16 hidden, a reparse tag read through the full run
+      list (one unreadable tag is one bad record, kept as a link, never a
+      failed table). 202,104 records parse in 19–20 ms and build in 5–6 ms
+      from page cache (M3 Max); disk speed unmeasured. Built through
+      `place()`, so dedupe, exclusion, depth and counters are the walk's;
+      records read move `rows_done`. Whole-volume roots only (record 5), as
+      administrator; everything else — no elevation, ReFS, FAT, network,
+      a geometry or serial mismatch, more than 1% bad records — walks.
+      `--no-mft` / `ScanOptions::read_mft`.
+      **Open:** the `volume.rs` differential test (the runner's C:, walk vs
+      table, field for field; CI sets `SPACETRACE_REQUIRE_MFT`) has to
+      pass — it settles directory `AllocationSize`, the 8-byte rounding of
+      in-record data and WOF. Then: speed on a real disk; subfolder roots
+      (the subtree code works, the cost is reading the whole table);
+      a fallback reason the user can see (today a fallback looks like the
+      table except in time taken); read-ahead (read and parse do not
+      overlap); the cost of the `FlushFileBuffers` before each read; name
+      text is indexed with `u32`, so past 4 GiB of names the read fails
+      late and falls back. The non-elevated tier (point 5 below) is
+      untouched.
+      *Original note:* needs administrator, absent on ReFS and
+      network/FAT → falling back to the normal path is mandatory, and that
+      path gets fixed in A1/A2. **The order is therefore after A.**
       *Competitor:* WizTree (raw MFT), TreeSize Free (administrator),
       WinDirStat 2.5.0.
 
