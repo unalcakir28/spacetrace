@@ -19,8 +19,8 @@ mod clones;
 mod extents;
 mod meta;
 mod mounts;
-// Nothing reads a volume yet; the parser runs in the tests.
-#[cfg_attr(not(test), allow(dead_code))]
+// Only Windows reads a volume; everywhere else the parser runs in the tests.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod ntfs;
 mod partial;
 mod scan;

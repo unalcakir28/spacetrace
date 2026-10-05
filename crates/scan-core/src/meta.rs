@@ -188,13 +188,14 @@ pub(crate) fn filetime_to_unix(filetime: u64) -> i64 {
 /// identity is read off the same one.
 ///
 /// The cost is one open per entry, and our own measurements put an extra
-/// syscall per entry at roughly +36% (COMPETITORS.md §1.1). TODO B4 removes it:
-/// `NtQueryDirectoryFileEx` returns allocation and file id inside the listing.
+/// syscall per entry at roughly +36% (COMPETITORS.md §1.1). A whole NTFS
+/// volume scanned as administrator avoids it by reading the volume's table
+/// instead (`ntfs/`, TODO B4); everywhere else it is still paid.
 ///
 /// Directories are queried too, so that `alloc` means the same thing on both
 /// platforms instead of quietly excluding directory overhead on one of them.
 #[cfg(windows)]
-fn query(path: &Path, identity: FileIdentity) -> std::io::Result<(u64, u64, u64, u64)> {
+pub(crate) fn query(path: &Path, identity: FileIdentity) -> std::io::Result<(u64, u64, u64, u64)> {
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{

@@ -1255,9 +1255,14 @@ fn waiting_on(paths: &[PathBuf]) -> String {
 /// A share as well as a count, because the count alone says nothing about how
 /// much is left — and the total is known here, unlike during the walk.
 fn rows_line(what: &str, progress: &ScanProgress) -> String {
+    rows_line_of(what, "entries", progress)
+}
+
+/// `rows_line`, counting something other than entries.
+fn rows_line_of(what: &str, unit: &str, progress: &ScanProgress) -> String {
     match progress.rows() {
         Some((done, total)) => format!(
-            "  {what}… {}% ({} of {} entries)",
+            "  {what}… {}% ({} of {} {unit})",
             done * 100 / total.max(1),
             fmt::count(done),
             fmt::count(total),
@@ -1371,6 +1376,12 @@ impl Ticker {
                                 fmt::count(counts.1),
                                 fmt::size(counts.2),
                             ),
+                            // On Windows a whole NTFS volume is first read as
+                            // one table, which counts records rather than
+                            // files; the files follow once it is in.
+                            Phase::Walking if progress.rows().is_some() => {
+                                rows_line_of("reading the master file table", "records", &progress)
+                            }
                             Phase::Walking => format!(
                                 "  scanning… {} files, {} dirs, {}",
                                 fmt::count(counts.0),

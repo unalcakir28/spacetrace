@@ -253,6 +253,11 @@ pub struct WalkArgs {
     /// forever
     #[arg(long, value_name = "SECONDS")]
     pub mount_timeout: Option<u64>,
+
+    /// Windows: walk the folders even when scanning a whole NTFS volume as
+    /// administrator, where its master file table would otherwise be read
+    #[arg(long)]
+    pub no_mft: bool,
 }
 
 #[derive(Args, Debug)]
@@ -468,6 +473,7 @@ impl WalkArgs {
             no_clone_dedupe,
             threads,
             mount_timeout,
+            no_mft,
         } = self;
         let mut args: Vec<String> = exclude.iter().map(|n| format!("--exclude={n}")).collect();
         if *one_file_system {
@@ -488,6 +494,9 @@ impl WalkArgs {
         if let Some(secs) = mount_timeout {
             args.push(format!("--mount-timeout={secs}"));
         }
+        if *no_mft {
+            args.push("--no-mft".into());
+        }
         args
     }
 
@@ -502,6 +511,7 @@ impl WalkArgs {
             (self.no_clone_dedupe, "--no-clone-dedupe"),
             (self.threads.is_some(), "--threads"),
             (self.mount_timeout.is_some(), "--mount-timeout"),
+            (self.no_mft, "--no-mft"),
         ]
         .into_iter()
         .find_map(|(given, name)| given.then_some(name))
@@ -528,6 +538,7 @@ impl WalkArgs {
             // it is the previous scan of this root, which the caller looks up
             // — see `entry_count_hint` in main.rs.
             expected_entries: None,
+            read_mft: !self.no_mft,
         }
     }
 }
@@ -594,6 +605,7 @@ mod tests {
             "2",
             "--mount-timeout",
             "0",
+            "--no-mft",
         ])
         .walk;
 

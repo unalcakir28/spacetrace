@@ -48,7 +48,7 @@ sha2 = "=0.10.9"
 # cleanup rather than in a dead process.
 libc = "=0.2.189"
 # scan-core's Windows metadata: allocation size and file identity per entry.
-windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Ioctl"] }
 # The host a snapshot is filed under.
 gethostname = "=0.5.0"
 

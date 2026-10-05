@@ -88,6 +88,19 @@ pub struct ScanOptions {
     /// agent and the desktop's "Rescan" — the two cases where this costs
     /// something — always have a previous scan to ask.
     pub expected_entries: Option<usize>,
+    /// On Windows, read an NTFS volume's master file table instead of walking
+    /// its directories, when the scan covers a whole volume and the process
+    /// may open the volume itself — which takes an administrator.
+    ///
+    /// The answer is meant to be the same either way; what changes is the
+    /// cost. The walk opens a handle per entry for the allocated size and the
+    /// file identity, and the table answers every entry from one sequential
+    /// read. Anything the table cannot serve — a folder below a volume's
+    /// root, ReFS, FAT, a network drive, no elevation, a table that will not
+    /// parse — walks, with nothing to tell the two apart but the time taken.
+    ///
+    /// `false` always walks. Ignored on other platforms.
+    pub read_mft: bool,
 }
 
 /// How long a mount point gets by default.
@@ -104,6 +117,7 @@ impl Default for ScanOptions {
             threads: None,
             mount_timeout: Some(MOUNT_TIMEOUT),
             expected_entries: None,
+            read_mft: true,
         }
     }
 }
@@ -1032,10 +1046,11 @@ pub fn scan(
 /// Where the entries below a directory root come from.
 pub(crate) enum Source {
     /// The volume's own table, where the platform has one and the root is a
-    /// whole volume; the walk everywhere else — which today is everywhere.
+    /// whole volume (`ntfs::volume`); the walk everywhere else.
     Volume,
     /// This table, starting at this file reference. The tests run the real
-    /// tree building over NTFS images through it.
+    /// tree building over NTFS images through it, and the Windows tests over
+    /// a table they read themselves.
     #[cfg(test)]
     Table(crate::ntfs::Table, u64),
 }
@@ -1212,7 +1227,25 @@ fn table_for(root: &Path, ctx: &Ctx, source: Source) -> Option<(Table, u64)> {
     }
 }
 
-/// The table of the volume `root` is on. No platform opens one yet.
+/// The table of the NTFS volume `root` is on, if this scan may use it.
+///
+/// Reading it counts records in `rows_done` of `rows_total` (`volume.rs`), so
+/// a watcher sees the work (invariant 8). `begin_rows` zeroes both again
+/// whichever way it went: a fallback must leave nothing behind for the walk's
+/// progress line to misreport, and a success hands over to the walk's own
+/// counters.
+#[cfg(windows)]
+fn volume_table(root: &Path, ctx: &Ctx) -> Option<(Table, u64)> {
+    if !ctx.opts.read_mft {
+        return None;
+    }
+    let found = crate::ntfs::volume::read(root, false, &ctx.progress);
+    ctx.progress.begin_rows(Phase::Walking, 0);
+    found
+}
+
+/// No other platform has a table to read.
+#[cfg(not(windows))]
 fn volume_table(_root: &Path, _ctx: &Ctx) -> Option<(Table, u64)> {
     None
 }

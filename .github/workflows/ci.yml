@@ -19,6 +19,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
+        env:
+          # GitHub's Windows runners are elevated, so the MFT fast path can
+          # open the volume there. This turns its tests' "skipped, not
+          # elevated" into a failure: a differential test that quietly
+          # compared nothing would pass forever.
+          SPACETRACE_REQUIRE_MFT: ${{ matrix.os == 'windows-latest' && '1' || '' }}
   # The reflink and compression tests in du_equivalence.rs only mean something
   # on btrfs and XFS, and the runner's disk is ext4, where the job above skips
   # them. Here they get both, as loop files, and SPACETRACE_REQUIRE_REFLINK

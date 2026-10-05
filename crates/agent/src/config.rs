@@ -279,6 +279,10 @@ impl RootConfig {
             // Not a config key. It is a memory hint whose only honest source
             // is the previous scan of this root, which the runner looks up.
             expected_entries: None,
+            // Not a config key either: the table is read only where it gives
+            // the walk's answer, and the agent, which runs as an
+            // administrator on Windows, is where it saves the most.
+            read_mft: true,
         }
     }
 }

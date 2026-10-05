@@ -25,6 +25,9 @@
 //! `FILE_STANDARD_INFO.AllocationSize` reports, the link count leaves out DOS
 //! names, and the NTFS metafiles below record 16 are not entries at all.
 
+#[cfg(windows)]
+pub(crate) mod volume;
+
 #[cfg(test)]
 mod tests;
 
