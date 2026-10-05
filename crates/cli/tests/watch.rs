@@ -232,6 +232,92 @@ fn a_hardlink_to_an_existing_file_adds_nothing() {
     assert!(wrong.is_empty(), "a frame counted the link: {wrong:?}");
 }
 
+/// A link made a few quiet seconds after its file was taken in, as cargo
+/// links an object it wrote a moment before. FSEvents names the file's
+/// folder when that happens; inotify names only the link's, so the watch
+/// lists again the folders it listed last instead of scanning everything.
+#[cfg(unix)]
+#[test]
+fn a_link_to_a_file_just_taken_in_costs_no_full_rescan() {
+    let (_dir, root) = root();
+    std::fs::create_dir_all(root.join("deps")).unwrap();
+    std::fs::create_dir_all(root.join("session")).unwrap();
+    let mut watch = Watch::start(&root, &[]);
+
+    write(&root.join("deps/obj.o"), 300_000);
+    watch.until_seen_by_events("the object", |f| delta(f) == 300_000);
+    std::thread::sleep(Duration::from_secs(1));
+    std::fs::hard_link(root.join("deps/obj.o"), root.join("session/obj.o")).unwrap();
+    write(&root.join("marker/m"), 1_000);
+
+    let frame = watch.until_seen_by_events("the marker", |f| row(f, "marker").is_some());
+    // A doubt asks for a full rescan two ticks on; give it ten.
+    let then = frame["elapsed_ms"].as_u64().unwrap();
+    let later = watch.until("two seconds more of ticks", |f| {
+        f["elapsed_ms"].as_u64().unwrap() >= then + 2_000
+    });
+    assert_eq!(delta(&later), 301_000, "the link is not growth: {later}");
+    let asked: Vec<_> = watch.seen.iter().filter(|f| full_rescan(f)).collect();
+    assert!(asked.is_empty(), "a full rescan was asked for: {asked:?}");
+    let wrong: Vec<_> = watch.seen.iter().filter(|f| delta(f) >= 600_000).collect();
+    assert!(
+        wrong.is_empty(),
+        "a frame counted the file twice: {wrong:?}"
+    );
+}
+
+/// The kernel's own queue overflowing — the watch too busy to read it, here
+/// because it is stopped — loses events anywhere under the root, and only a
+/// full rescan puts that right. IN_Q_OVERFLOW is how inotify says so.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_overflowed_kernel_queue_is_repaired_by_a_full_rescan() {
+    let limit: usize = std::fs::read_to_string("/proc/sys/fs/inotify/max_queued_events")
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    if limit > 100_000 {
+        eprintln!("fs.inotify.max_queued_events is {limit}: too many files to overflow it");
+        return;
+    }
+    let (_dir, root) = root();
+    std::fs::create_dir_all(root.join("spool")).unwrap();
+    let mut watch = Watch::start(&root, &[]);
+    let pid = watch.child.id().to_string();
+    let signal = |sig: &str| {
+        let status = Command::new("kill").args([sig, &pid]).status().unwrap();
+        assert!(status.success(), "kill {sig} {pid}");
+    };
+
+    signal("-STOP");
+    let files = limit + 1_000;
+    for i in 0..files {
+        std::fs::write(root.join(format!("spool/m{i}")), b"x").unwrap();
+    }
+    signal("-CONT");
+
+    watch.until("every file, counted by a full rescan after the loss", |f| {
+        delta(f) == files as i64
+            && f["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n.as_str().unwrap().ends_with(": events were dropped"))
+    });
+}
+
+/// Whether a frame waits for a full rescan or reports one done.
+#[cfg(unix)]
+fn full_rescan(frame: &Value) -> bool {
+    !frame["pending_rescan"].is_null()
+        || frame["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().starts_with("rescanned everything"))
+}
+
 /// Logical bytes under `root`, each file once however many names it has —
 /// what a scan counts (invariant 3), read here without the scanner.
 #[cfg(unix)]
@@ -294,22 +380,8 @@ fn a_build_tree_full_of_hardlinks_is_followed_without_a_full_rescan() {
             delta(f) == expected
         });
     }
-    let rescans: Vec<_> = watch
-        .seen
-        .iter()
-        .filter(|f| {
-            !f["pending_rescan"].is_null()
-                || f["notes"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|n| n.as_str().unwrap().starts_with("rescanned everything"))
-        })
-        .collect();
-    assert!(
-        rescans.is_empty(),
-        "a full rescan was asked for: {rescans:?}"
-    );
+    let asked: Vec<_> = watch.seen.iter().filter(|f| full_rescan(f)).collect();
+    assert!(asked.is_empty(), "a full rescan was asked for: {asked:?}");
 }
 
 #[test]

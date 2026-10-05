@@ -154,6 +154,17 @@ impl File {
     }
 }
 
+/// What the files charged to none ask of the watch at the end of a tick.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Doubts {
+    /// One became so this tick: its other names may be in a folder listed a
+    /// moment before the link was made, which a listing now would find.
+    pub fresh: bool,
+    /// A folder holding a name of one that has been so for two ticks: the
+    /// listings had their chance, and only a full scan finds the names.
+    pub long: Option<DirId>,
+}
+
 /// What one batch did to one file.
 struct Touch {
     /// The folder it was charged to before and the figures it was charged
@@ -340,17 +351,17 @@ impl Ledger {
         !self.touched.is_empty()
     }
 
-    /// End a tick. A folder holding a name of a file that has now ended two
-    /// ticks in a row charged to none, if there is one: the event that would
-    /// have brought its other names had a tick to arrive, and did not. The
-    /// first of them by `order`, so the message names the same folder every
-    /// run.
-    pub(crate) fn doubts<K: Ord>(&mut self, order: impl Fn(DirId) -> K) -> Option<DirId> {
+    /// End a tick: what the files charged to none ask of the watch. The
+    /// folder a lasting doubt names is the first by `order` of all such
+    /// files' folders, so the message names the same folder every run.
+    pub(crate) fn doubts<K: Ord>(&mut self, order: impl Fn(DirId) -> K) -> Doubts {
+        let mut fresh = false;
         let mut long: Option<(K, DirId)> = None;
         for &slot in &self.doubtful {
             let file = &mut self.files[slot as usize];
             file.doubted = file.doubted.saturating_add(1);
             if file.doubted < 2 {
+                fresh = true;
                 continue;
             }
             for &dir in file.names.as_slice() {
@@ -360,7 +371,10 @@ impl Ledger {
                 }
             }
         }
-        long.map(|(_, dir)| dir)
+        Doubts {
+            fresh,
+            long: long.map(|(_, dir)| dir),
+        }
     }
 
     /// What each folder is charged for the hardlinked files it carries, by

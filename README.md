@@ -278,9 +278,13 @@ losses nobody reported. Clones are counted at their full size
 (`--no-clone-dedupe`). The `filesystem … free` line is the filesystem's own
 count, to compare against.
 
-On Linux each watched folder takes one inotify watch. If
+On Linux each watched folder takes one inotify watch, asking for changes only:
+reading a folder, by `ls` or by the watch's own listings, queues nothing. If
 `fs.inotify.max_user_watches` is too low, `watch` stops and says so, with the
 `sysctl` to raise it; `--exclude` and `--depth` also reduce how many it needs.
+inotify does not report a new hardlink in the original's folder, so linking a
+file that has sat unchanged for a while costs one of those capped full
+rescans; a file linked moments after it was written (a build) does not.
 
 ### Common options
 

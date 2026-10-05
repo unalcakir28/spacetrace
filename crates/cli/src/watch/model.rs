@@ -938,14 +938,13 @@ impl Model {
         self.take_in(scanned, ROOT, true);
     }
 
-    /// End a tick for the ledger: the folder, below the root, of a hardlinked
-    /// file counted under none of its names for two ticks in a row — its
-    /// other names are not coming, and only a full scan finds them (see
-    /// `links.rs`).
-    pub(crate) fn doubted_link(&mut self) -> Option<String> {
+    /// End a tick for the ledger: whether a hardlinked file came to be
+    /// counted under none of its names this tick, and the folder, below the
+    /// root, of one that has been so for two (see `links.rs`).
+    pub(crate) fn doubted_links(&mut self) -> (bool, Option<String>) {
         let dirs = &self.dirs;
-        let dir = self.ledger.doubts(|dir| dir_order(dirs, dir))?;
-        Some(self.rel_path(dir))
+        let doubts = self.ledger.doubts(|dir| dir_order(dirs, dir));
+        (doubts.fresh, doubts.long.map(|dir| self.rel_path(dir)))
     }
 
     /// Whether a hardlinked file is counted under none of its names.
@@ -1524,8 +1523,9 @@ mod tests {
             touched(&mut model, &root.join(second));
             assert!(model.unsure_link(), "{first} first");
 
-            assert_eq!(model.doubted_link(), None);
-            assert_eq!(model.doubted_link().as_deref(), Some("c"), "{first} first");
+            assert_eq!(model.doubted_links(), (true, None));
+            let (_, long) = model.doubted_links();
+            assert_eq!(long.as_deref(), Some("c"), "{first} first");
         }
     }
 
@@ -1547,12 +1547,12 @@ mod tests {
             assert!(model.totals().delta() <= 0, "never twice ({first} first)");
             assert!(model.unsure_link(), "{first} first");
             // A tick's grace for the other folder's event; then a full scan.
-            assert_eq!(model.doubted_link(), None);
-            assert!(model.doubted_link().is_some(), "{first} first");
+            assert_eq!(model.doubted_links(), (true, None));
+            assert!(model.doubted_links().1.is_some(), "{first} first");
             let second = if first == "a/big" { "b/link" } else { "a/big" };
             touched(&mut model, &root.join(second));
             assert!(!model.unsure_link(), "{first} first");
-            assert_eq!(model.doubted_link(), None);
+            assert_eq!(model.doubted_links(), (false, None));
             assert_eq!(model.totals().delta(), 0, "one inode, counted once");
             assert_eq!(size_of(&model, "a"), 400_000, "{first} first");
             assert_agrees_with_a_fresh_scan(&model, &opts());

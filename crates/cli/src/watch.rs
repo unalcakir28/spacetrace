@@ -24,24 +24,26 @@
 //! each frame is one write. The default signal leaves the last frame standing,
 //! which is the picture worth keeping.
 
+mod events;
+#[cfg(target_os = "linux")]
+mod inotify;
 mod links;
 mod model;
 
 use std::collections::HashSet;
 use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use notify::event::ModifyKind;
-use notify::{EventKind, RecursiveMode, Watcher, WatcherKind};
-use spacetrace_scan_core::{capacity_of, ScanOptions, ScanProgress};
+use spacetrace_scan_core::{capacity_of, ScanProgress};
 
 use crate::args::WatchArgs;
 use crate::fmt;
+use events::{Change, Events, How};
 use model::{DirId, Model, Mover, MoverKind, Refusal, Scanned, ROOT};
 
 /// How often a full rescan checks the model when nothing asked for one, at
@@ -60,8 +62,6 @@ const NOTES_SHOWN: usize = 3;
 /// is a few megabytes at the most.
 const EVENT_QUEUE: usize = 1 << 16;
 
-type EventResult = notify::Result<notify::Event>;
-
 pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
     let root = a
         .path
@@ -77,10 +77,10 @@ pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
     // The watcher starts before the first scan, so that whatever changes while
     // the scan runs is reported rather than missed. It is reconciled with the
     // scan's result straight after.
-    let (tx, rx) = mpsc::sync_channel::<EventResult>(EVENT_QUEUE);
+    let (tx, rx) = mpsc::sync_channel::<Change>(EVENT_QUEUE);
     let overflowed = Arc::new(AtomicBool::new(false));
     let mut events = Events::start(&root, tx, Arc::clone(&overflowed))?;
-    let prewatched = match events.per_dir {
+    let prewatched = match events.per_dir() {
         true => events.watch_tree(&root, &opts)?,
         false => HashSet::new(),
     };
@@ -91,7 +91,7 @@ pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
     let first = Scanned::of(&root, opts.clone(), progress)
         .with_context(|| format!("cannot scan: {}", root.display()))?;
     drop(ticker);
-    let model = Model::new(&first, opts, events.per_dir);
+    let model = Model::new(&first, opts, events.per_dir());
     let files = first.stats.files;
     drop(first);
 
@@ -109,6 +109,7 @@ pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
         last_full_end: Instant::now(),
         last_verified: None,
         events_seen: 0,
+        watcher_failed: None,
         notes: Vec::new(),
         fresh_notes: Vec::new(),
         reread: 0,
@@ -119,7 +120,7 @@ pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
     // set up the watches; they get one now, and a listing, since anything
     // written into them before that is in no event.
     for (id, path) in session.model.take_new_dirs() {
-        if !session.events.per_dir || prewatched.contains(&path) {
+        if !session.events.per_dir() || prewatched.contains(&path) {
             continue;
         }
         let tracked = session.model.tracked();
@@ -129,157 +130,6 @@ pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
     drop(prewatched);
     session.intro(files)?;
     session.run()
-}
-
-// ------------------------------------------------------------------ events
-
-/// The platform's change notification, set up the way this command needs it.
-struct Events {
-    watcher: notify::RecommendedWatcher,
-    /// inotify watches one directory per watch, and notify's recursive mode
-    /// walks everything to set them up — excluded folders included, symlinks
-    /// followed, unreadable ones dropped without a word. So on inotify the
-    /// watch adds its own, exactly where the scanner descends: an excluded
-    /// `node_modules` costs no watches. FSEvents and Windows watch a whole
-    /// tree with one handle, and the events outside the scan are filtered.
-    per_dir: bool,
-    /// Directories that could not be watched, so changes in them are only
-    /// seen by the periodic rescan. Counted on screen, never dropped silently.
-    unwatched: u64,
-}
-
-impl Events {
-    fn start(
-        root: &Path,
-        tx: SyncSender<EventResult>,
-        overflowed: Arc<AtomicBool>,
-    ) -> Result<Events> {
-        let handler = move |event: EventResult| {
-            // Disconnected is the session ending; nothing left to tell.
-            if let Err(TrySendError::Full(_)) = tx.try_send(event) {
-                overflowed.store(true, Ordering::Relaxed);
-            }
-        };
-        let watcher = notify::recommended_watcher(handler).map_err(|e| explain(e, root, None))?;
-        let per_dir = <notify::RecommendedWatcher as Watcher>::kind() == WatcherKind::Inotify;
-        let mut events = Events {
-            watcher,
-            per_dir,
-            unwatched: 0,
-        };
-        if !per_dir {
-            events
-                .watcher
-                .watch(root, RecursiveMode::Recursive)
-                .map_err(|e| explain(e, root, None))?;
-        }
-        Ok(events)
-    }
-
-    /// Watch every directory the scanner will descend into, before it does.
-    ///
-    /// Watch first and scan second, so there is no moment at which a
-    /// directory is already read and not yet watched. Returns what was
-    /// watched, to compare against what the scan then found.
-    ///
-    /// It runs before the guarded first scan, so it approaches a mount point
-    /// the way the scanner does (invariant 7): through the mount table, on a
-    /// thread that can be abandoned. One that does not answer is neither
-    /// watched nor entered — `inotify_add_watch` looks the path up, and that
-    /// lookup is what hangs — and the scan reports it with the rest.
-    fn watch_tree(&mut self, root: &Path, opts: &ScanOptions) -> Result<HashSet<PathBuf>> {
-        let mounts = model::read_mounts(opts);
-        let root_dev = model::device_through(opts, &mounts, root);
-        let mut watched = HashSet::new();
-        let mut stack = vec![(root.to_path_buf(), 0usize)];
-        while let Some((dir, depth)) = stack.pop() {
-            self.watch_dir(&dir, watched.len() + stack.len() + 1)?;
-            // An unreadable directory is the scan's to report, with the rest.
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                watched.insert(dir);
-                continue;
-            };
-            for entry in entries.flatten() {
-                // `file_type` does not follow symlinks; neither does the scan.
-                if !entry.file_type().is_ok_and(|t| t.is_dir()) {
-                    continue;
-                }
-                let name = entry.file_name();
-                if !model::descends(opts, depth + 1, &name.to_string_lossy()) {
-                    continue;
-                }
-                let path = entry.path();
-                if mounts.contains(&path) && model::probe(opts, &mounts, &path).is_none() {
-                    continue;
-                }
-                if opts.one_filesystem && model::device_through(opts, &mounts, &path) != root_dev {
-                    continue;
-                }
-                stack.push((path, depth + 1));
-            }
-            watched.insert(dir);
-        }
-        Ok(watched)
-    }
-
-    /// Watch one directory, where the backend wants that. A directory that
-    /// cannot be watched is counted; running out of watches ends the command,
-    /// because carrying on would be reporting on a tree it can no longer see.
-    fn watch_dir(&mut self, path: &Path, dirs: usize) -> Result<()> {
-        if !self.per_dir {
-            return Ok(());
-        }
-        let Err(err) = self.watcher.watch(path, RecursiveMode::NonRecursive) else {
-            return Ok(());
-        };
-        match &err.kind {
-            notify::ErrorKind::MaxFilesWatch => Err(explain(err, path, Some(dirs))),
-            // Gone already; the event about that is on its way.
-            notify::ErrorKind::PathNotFound => Ok(()),
-            notify::ErrorKind::Io(io) if io.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            _ => {
-                self.unwatched += 1;
-                Ok(())
-            }
-        }
-    }
-}
-
-/// A watcher error, in words that say what to do about it.
-fn explain(err: notify::Error, path: &Path, dirs: Option<usize>) -> anyhow::Error {
-    match &err.kind {
-        notify::ErrorKind::MaxFilesWatch => {
-            let limit = std::fs::read_to_string("/proc/sys/fs/inotify/max_user_watches")
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
-            let needed = dirs.map_or(String::new(), |n| {
-                format!(
-                    " This tree needs one per folder, at least {}.",
-                    fmt::count(n as u64)
-                )
-            });
-            anyhow::anyhow!(
-                "cannot watch {}: the inotify watch limit is used up \
-                 (fs.inotify.max_user_watches = {limit}).{needed} Raise it with \
-                 `sudo sysctl fs.inotify.max_user_watches=524288` (and the same setting in \
-                 /etc/sysctl.d/ to keep it), or watch less with --exclude or --depth",
-                path.display()
-            )
-        }
-        // EMFILE from inotify_init: the per-user instance limit, or the
-        // process's descriptor limit — the kernel gives both the same number.
-        notify::ErrorKind::Io(io) if cfg!(target_os = "linux") && io.raw_os_error() == Some(24) => {
-            let limit = std::fs::read_to_string("/proc/sys/fs/inotify/max_user_instances")
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| "unknown".to_string());
-            anyhow::anyhow!(
-                "cannot start watching: no inotify instance left \
-                 (fs.inotify.max_user_instances = {limit}), or this process is out of file \
-                 descriptors. Raise it with `sudo sysctl fs.inotify.max_user_instances=1024`"
-            )
-        }
-        _ => anyhow::Error::new(err).context(format!("cannot watch {}", path.display())),
-    }
 }
 
 // ----------------------------------------------------------------- session
@@ -293,6 +143,24 @@ struct Pending {
     subtrees: HashSet<DirId>,
     /// Why only a full rescan will do, when that is the case.
     resync: Option<String>,
+    /// Directories listed in the last tick that listed any; see
+    /// `Session::doubt_links`.
+    recent: HashSet<DirId>,
+}
+
+impl Pending {
+    /// Follow every directory held by id to its new id after a compaction;
+    /// one dropped is a directory gone. The only place ids move: a full
+    /// rescan keeps every record's id, and starts `Pending` afresh anyway.
+    fn remap(&mut self, remap: &[DirId]) {
+        for ids in [&mut self.dirty, &mut self.subtrees, &mut self.recent] {
+            *ids = ids
+                .iter()
+                .filter_map(|&id| remap.get(id as usize).copied())
+                .filter(|&id| id != DirId::MAX)
+                .collect();
+        }
+    }
 }
 
 struct Note {
@@ -303,7 +171,7 @@ struct Note {
 struct Session {
     model: Model,
     events: Events,
-    rx: Receiver<EventResult>,
+    rx: Receiver<Change>,
     /// Set by the watcher when [`EVENT_QUEUE`] was full and an event dropped.
     overflowed: Arc<AtomicBool>,
     pending: Pending,
@@ -315,6 +183,8 @@ struct Session {
     last_full: Duration,
     last_full_end: Instant,
     last_verified: Option<Instant>,
+    /// The last error the watcher reported, said again if it then stops.
+    watcher_failed: Option<String>,
     events_seen: u64,
     notes: Vec<Note>,
     /// Notes from this tick, for the outputs that print each one once.
@@ -342,64 +212,62 @@ impl Session {
             match self.rx.recv_timeout(next_tick - now) {
                 Ok(event) => self.handle(event)?,
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    anyhow::bail!("the file watcher stopped; changes can no longer be seen")
-                }
+                Err(RecvTimeoutError::Disconnected) => match &self.watcher_failed {
+                    Some(why) => anyhow::bail!(
+                        "the file watcher stopped ({why}); changes can no longer be seen"
+                    ),
+                    None => {
+                        anyhow::bail!("the file watcher stopped; changes can no longer be seen")
+                    }
+                },
             }
         }
     }
 
     /// Turn one event into work for the next tick. Cheap on purpose: a busy
     /// disk sends thousands a second, and all this does is name a directory.
-    fn handle(&mut self, event: EventResult) -> Result<()> {
-        // Reads are no change, and the listings this command makes would
-        // otherwise report themselves: inotify sends an open per `opendir`.
-        let read =
-            matches!(&event, Ok(e) if matches!(e.kind, EventKind::Access(_)) && !e.need_rescan());
-        if read {
-            return Ok(());
-        }
+    fn handle(&mut self, change: Change) -> Result<()> {
         self.events_seen += 1;
-        let event = match event {
-            Ok(event) => event,
-            Err(err) if matches!(err.kind, notify::ErrorKind::MaxFilesWatch) => {
+        let (paths, how) = match change {
+            Change::At { paths, how } => (paths, how),
+            #[cfg(not(target_os = "linux"))]
+            Change::Exhausted => {
                 let tracked = self.model.tracked();
-                return Err(explain(err, self.model.root(), Some(tracked)));
+                return Err(events::exhausted(self.model.root(), Some(tracked)));
             }
-            Err(err) => {
+            Change::Failed(err) => {
                 self.pending.resync = Some(format!("the watcher reported an error: {err}"));
+                // Kept for the message if the watcher stops after it.
+                self.watcher_failed = Some(err);
+                return Ok(());
+            }
+            Change::Lost(paths) => {
+                // A loss with no path is a loss anywhere.
+                if paths.is_empty() {
+                    self.pending.resync = Some("events were dropped".to_string());
+                }
+                for path in &paths {
+                    if let Some(id) = self.model.locate(path, true) {
+                        self.pending.subtrees.insert(id);
+                    }
+                }
                 return Ok(());
             }
         };
-        if event.need_rescan() {
-            // A loss with no path is a loss anywhere.
-            if event.paths.is_empty() {
-                self.pending.resync = Some("events were dropped".to_string());
-            }
-            for path in &event.paths {
-                if let Some(id) = self.model.locate(path, true) {
-                    self.pending.subtrees.insert(id);
-                }
-            }
-            return Ok(());
-        }
         // A folder created, or renamed into place, under a name the model
         // already tracks is not the folder the model knows: deleted and made
         // again, swapped for another (`npm install`, most deploys), or renamed
         // away and back. Its parent's listing sees the same name and cannot
         // tell; and on inotify its watch, and every watch below it, went with
         // the old one. So the whole subtree is read again and watched again.
-        let replaced = matches!(
-            event.kind,
-            EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
-        );
+        let replaced = how == How::Made;
         // A new hardlink changes its original's link count, and the original
         // has to be listed for the ledger to know both names (`links.rs`).
         // FSEvents names the folder the original is in, as that folder's
         // metadata, so that folder is listed too. inotify does not report it
-        // at all; the doubt below ends in a full rescan instead.
-        let metadata = matches!(event.kind, EventKind::Modify(ModifyKind::Metadata(_)));
-        for path in &event.paths {
+        // at all; `doubt_links` covers it.
+        let metadata = how == How::Metadata;
+        for path in &paths {
             let Some((holder, at)) = self.model.event_dirs(path) else {
                 continue;
             };
@@ -445,6 +313,7 @@ impl Session {
                 Some("events arrived faster than they could be read, and some were dropped".into());
         }
 
+        let mut listed = HashSet::new();
         if self.pending.resync.is_some() && since_full >= self.resync_gap() {
             let reason = self.pending.resync.clone().unwrap_or_default();
             self.resync(Some(reason))?;
@@ -454,21 +323,22 @@ impl Session {
             // — the losses nobody flagged would stay wrong all session.
             self.resync(None)?;
         } else {
-            self.apply_pending()?;
+            listed = self.apply_pending()?;
             if self.pending.resync.is_some() && since_full >= self.resync_gap() {
                 let reason = self.pending.resync.clone().unwrap_or_default();
                 self.resync(Some(reason))?;
+                listed.clear();
             }
         }
 
-        self.doubt_links();
+        self.doubt_links(listed);
         self.model.aggregate();
         self.model.roll_marks(Instant::now());
         for (id, path) in self.model.take_new_dirs() {
             let tracked = self.model.tracked();
             self.events.watch_dir(&path, tracked)?;
             // Watched only now: whatever landed in it before is in no event.
-            if self.events.per_dir {
+            if self.events.per_dir() {
                 self.pending.dirty.insert(id);
             }
         }
@@ -476,25 +346,37 @@ impl Session {
         // steady writes the folders that come and go would pile up otherwise.
         // What is pending is held by id, and ids move.
         if let Some(remap) = self.model.compact_if_worth_it() {
-            let moved = |ids: &mut HashSet<DirId>| {
-                *ids = ids
-                    .iter()
-                    .filter_map(|&id| remap.get(id as usize).copied())
-                    .filter(|&id| id != DirId::MAX)
-                    .collect();
-            };
-            moved(&mut self.pending.dirty);
-            moved(&mut self.pending.subtrees);
+            self.pending.remap(&remap);
         }
         Ok(())
     }
 
     /// A hardlinked file with names no listing has met is counted under none
-    /// of them (`links.rs`). The usual reason is a folder whose event is still
-    /// to come — on FSEvents a link names both folders — so it gets until the
-    /// end of the next tick; after that, only a full scan finds the names.
-    fn doubt_links(&mut self) {
-        let Some(rel) = self.model.doubted_link() else {
+    /// of them (`links.rs`), and gets until the end of the next tick before a
+    /// full scan is asked to find them.
+    ///
+    /// Most often its other name is a file just written — cargo writes an
+    /// object into `deps` and links it into an incremental session moments
+    /// later — whose folder a tick listed in between, while it had one link,
+    /// and counted as an ordinary file. FSEvents names that folder when the
+    /// link is made; inotify does not, because a link count is the file's
+    /// metadata and only a watch on the file itself hears of it. So on
+    /// inotify the folders listed this tick and in the last tick that listed
+    /// any are listed again next tick: one of them is usually where the other
+    /// name is. Idle ticks in between do not count, or a link made a few quiet
+    /// seconds after its file would always cost a full scan.
+    fn doubt_links(&mut self, listed: HashSet<DirId>) {
+        let (fresh, long) = self.model.doubted_links();
+        if !self.events.hears_link_originals() {
+            if fresh {
+                let again = self.pending.recent.iter().chain(&listed);
+                self.pending.dirty.extend(again);
+            }
+            if !listed.is_empty() {
+                self.pending.recent = listed;
+            }
+        }
+        let Some(rel) = long else {
             return;
         };
         if self.pending.resync.is_some() {
@@ -508,8 +390,9 @@ impl Session {
 
     /// Lost subtrees first, then every directory an event named, shallowest
     /// first — so a directory that went away is found missing by its parent
-    /// before anything tries to list it.
-    fn apply_pending(&mut self) -> Result<()> {
+    /// before anything tries to list it. Returns the directories listed, the
+    /// tops of the subtrees rescanned among them.
+    fn apply_pending(&mut self) -> Result<HashSet<DirId>> {
         let mut subtrees: Vec<DirId> = self.pending.subtrees.drain().collect();
         subtrees.sort_by_key(|&id| self.model.depth(id));
         let mut rescanned: Vec<DirId> = Vec::new();
@@ -568,7 +451,8 @@ impl Session {
                 Err(e) => self.relist_failed(id, e)?,
             }
         }
-        Ok(())
+        done.extend(rescanned);
+        Ok(done)
     }
 
     fn relist_failed(&mut self, id: DirId, err: std::io::Error) -> Result<()> {
@@ -1106,5 +990,29 @@ fn refusal_text(refusal: &Refusal, root: &Path) -> String {
                  fits it: only a full scan counts it"
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// After a compaction every id the session holds names the same folder
+    /// as before — the folders kept for the hardlink relisting too, or that
+    /// relisting would list folders that are not the ones it remembered.
+    #[test]
+    fn a_compaction_moves_every_id_the_session_holds() {
+        let mut pending = Pending {
+            dirty: HashSet::from([1, 4]),
+            subtrees: HashSet::from([4]),
+            recent: HashSet::from([2, 4]),
+            ..Pending::default()
+        };
+        // 0 stays, 1 and 3 were dropped, 2 and 4 move down.
+        pending.remap(&[0, DirId::MAX, 1, DirId::MAX, 2]);
+
+        assert_eq!(pending.dirty, HashSet::from([2]));
+        assert_eq!(pending.subtrees, HashSet::from([2]));
+        assert_eq!(pending.recent, HashSet::from([1, 2]));
     }
 }

@@ -29,10 +29,15 @@ reqwest.workspace = true
 toml.workspace = true
 zstd.workspace = true
 tempfile.workspace = true
-notify.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
+
+# `spacetrace watch` talks to inotify itself on Linux (`src/watch/inotify.rs`):
+# notify's inotify backend asks for IN_OPEN, so every directory read is an
+# event. FSEvents and Windows go through notify.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+notify.workspace = true
 
 [dev-dependencies]
 # Not a new crate: the store builds it. The tests reach past the API with it

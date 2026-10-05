@@ -52,7 +52,8 @@ windows-sys = { version = "=0.61.2", features = ["Win32_Storage_FileSystem", "Wi
 # The host a snapshot is filed under.
 gethostname = "=0.5.0"
 
-# `spacetrace watch`, CLI only — never the agent, store or scan-core. A watcher's
+# `spacetrace watch`, CLI only — never the agent, store or scan-core — and not
+# on Linux, where the watch uses inotify through libc. A watcher's
 # guarantees live in its backends (which events are delivered, how loss is
 # flagged) and a minor release may move them, so this pin is read before any
 # bump, not just moved. The default
