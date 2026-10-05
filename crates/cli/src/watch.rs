@@ -91,7 +91,7 @@ pub(crate) fn cmd_watch(a: &WatchArgs, json: bool) -> Result<()> {
     let first = Scanned::of(&root, opts.clone(), progress)
         .with_context(|| format!("cannot scan: {}", root.display()))?;
     drop(ticker);
-    let model = Model::new(&first, opts, events.per_dir());
+    let model = Model::new(&first, opts, events.per_dir(), Instant::now());
     let files = first.stats.files;
     drop(first);
 

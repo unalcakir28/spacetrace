@@ -404,11 +404,12 @@ fn hardlinked(tree: &Tree, id: NodeId) -> bool {
 }
 
 impl Model {
-    /// The model of a finished scan of the root, which becomes the baseline.
-    pub(crate) fn new(scanned: &Scanned, opts: ScanOptions, announce: bool) -> Model {
+    /// The model of a finished scan of the root, which becomes the baseline
+    /// as of `now`. The clock is the caller's, as for every other method that
+    /// measures a rate, so a test can say when things happened.
+    pub(crate) fn new(scanned: &Scanned, opts: ScanOptions, announce: bool, now: Instant) -> Model {
         let root = scanned.tree.root_path().to_path_buf();
         let root_dev = device_of(&root).unwrap_or(0);
-        let now = Instant::now();
         let mut model = Model {
             root,
             mounts: read_mounts(&opts),
@@ -1286,8 +1287,13 @@ mod tests {
     }
 
     fn start(root: &Path, opts: ScanOptions) -> (Model, Tree) {
+        start_at(root, opts, Instant::now())
+    }
+
+    /// [`start`], with the baseline taken as of `at`.
+    fn start_at(root: &Path, opts: ScanOptions, at: Instant) -> (Model, Tree) {
         let first = scanned(root, &opts);
-        let model = Model::new(&first, opts, true);
+        let model = Model::new(&first, opts, true, at);
         (model, first.tree)
     }
 
@@ -2045,16 +2051,16 @@ mod tests {
         let root = &dir.path().canonicalize().unwrap();
         write(&root.join("a/f"), 0);
         let opened = Instant::now();
-        let (mut model, _) = start(root, opts());
+        let (mut model, _) = start_at(root, opts(), opened);
 
         write(&root.join("a/f"), 20_000);
         touched(&mut model, &root.join("a/f"));
         let a = model.locate(&root.join("a"), true).unwrap();
 
-        // Measured from the moment the model was built, at or just after
-        // `opened`: twenty seconds on, 1000/s or a hair over.
+        // Measured from the moment the model was built: twenty seconds on,
+        // 20,000 bytes are 1000/s exactly.
         let rate = model.rate(a, opened + Duration::from_secs(20));
-        assert!((1_000.0..1_001.0).contains(&rate), "{rate}");
+        assert_eq!(rate, 1_000.0);
         // Two windows with no growth and the rate is back to nothing.
         let later = opened + RATE_WINDOW * 3;
         model.roll_marks(later);
