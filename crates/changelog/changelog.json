@@ -722,6 +722,16 @@
             "it": "Colorare la mappa per Età non mostrava alcuna età per uno snapshot aperto dal database o da un agent, e il suo profilo di età riportava 0 B in ogni banda; solo una scansione nuova le aveva. Ora uno snapshot viene colorato e profilato come la scansione da cui è stato salvato.",
             "tr": "Haritayı Yaş'a göre renklendirmek, veritabanından ya da bir agent'tan açılan bir snapshot için hiç yaş göstermiyordu ve yaş profili her bantta 0 B okuyordu; bunlar yalnızca yeni bir taramada vardı. Artık bir snapshot, kaydedildiği taramayla aynı biçimde renkleniyor ve aynı profili veriyor."
           }
+        },
+        {
+          "kind": "fixed",
+          "text": {
+            "de": "Auf der Karte lagen die Beschriftungen eines Ordners und seines ersten Unterordners übereinander: Beide landeten in derselben Ecke, nur einen Pixel versetzt, sodass ein `dist/` mit einem großen `cache/` darin als „dist/ache/“ zu lesen war. Eine Beschriftung, die eine andere verdecken würde, rückt jetzt innerhalb ihrer eigenen Kachel darunter und entfällt, wenn dort kein Platz mehr ist; zwei Beschriftungen überlappen sich nicht mehr.",
+            "en": "On the map, a folder's label and its first subfolder's were drawn on top of each other: both went in the same corner, one pixel apart, so a `dist/` holding a large `cache/` read \"dist/ache/\". A label that would cover another now moves down below it, inside its own tile, and is left out when there is no room there; no two labels overlap any more.",
+            "fr": "Sur la carte, l'étiquette d'un dossier et celle de son premier sous-dossier se superposaient : toutes deux allaient dans le même coin, à un pixel d'écart, si bien qu'un `dist/` contenant un gros `cache/` se lisait « dist/ache/ ». Une étiquette qui en masquerait une autre descend désormais juste en dessous, à l'intérieur de sa propre tuile, et est omise s'il n'y a plus de place ; deux étiquettes ne se chevauchent plus.",
+            "it": "Sulla mappa, l'etichetta di una cartella e quella della sua prima sottocartella venivano disegnate una sopra l'altra: finivano nello stesso angolo, a un pixel di distanza, così un `dist/` con dentro un grande `cache/` si leggeva \"dist/ache/\". Ora un'etichetta che ne coprirebbe un'altra scende subito sotto, all'interno del proprio tassello, e viene omessa se lì non c'è più spazio; due etichette non si sovrappongono più.",
+            "tr": "Haritada bir klasörün etiketi ile ilk alt klasörünün etiketi üst üste çiziliyordu: ikisi de aynı köşeye, bir piksel arayla yerleşiyordu; bu yüzden içinde büyük bir `cache/` olan bir `dist/` \"dist/ache/\" diye okunuyordu. Artık başka bir etiketi örtecek bir etiket, kendi karosunun içinde onun altına iniyor; orada yer kalmadıysa hiç çizilmiyor. İki etiket artık üst üste binmiyor."
+          }
         }
       ],
       "releases": [
