@@ -17,11 +17,11 @@ serde_json.workspace = true
 # Already in the workspace for `spacetrace update`'s download check; reused
 # here so a snapshot carries a digest without a second hash implementation.
 sha2.workspace = true
-gethostname = "0.5"
+gethostname.workspace = true
 
 [dev-dependencies]
 rusqlite.workspace = true
-tempfile = "3"
+tempfile.workspace = true
 
 [features]
 default = []

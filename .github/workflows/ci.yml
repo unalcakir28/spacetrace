@@ -76,6 +76,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Every external version exact and in [workspace.dependencies] only, so
+      # a lock regenerated from scratch resolves to what was reviewed. Path
+      # entries (the workspace crates) carry their own version and are skipped.
+      - name: Dependencies are pinned
+        run: scripts/check-pins.sh
       # CHANGELOG.md is generated, so it can silently fall behind its source.
       # `diff` rather than regenerate-and-commit: a bot commit racing a human
       # push is a worse failure than a red build with an obvious fix.

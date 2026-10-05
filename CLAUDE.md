@@ -52,7 +52,7 @@ These break silent, go unnoticed outside test.
 - **One exception, two place: desktop GUI and changelog text in five locale** (`en tr it fr de`). That narrow K1, no repeal it; see DECISIONS K10. Terminal and server surface stay English.
 - Comment explain **why done this way**, not what code do.
 - Be stingy with dependency: agent must install on NAS as one static binary. Cron parser and calendar math hand-written instead of chrono (~200 line), because only need was "next matching minute". axum + tokio deliberate exception (DECISIONS K3).
-- New dependency versioned in `[workspace.dependencies]`; crate take them with `foo.workspace = true`.
+- New dependency versioned in `[workspace.dependencies]`, **exact `=x.y.z`, never range**; crate take them with `foo.workspace = true`. `scripts/check-pins.sh` (CI lint) refuse range and crate-local version.
 - Commit body explain **why**. See `git log`; older entry Turkish.
 - **User-visible change need changelog entry**: `crates/changelog/changelog.json`, component `unreleased` list, five locale. No replace commit message — commit tell code what done, changelog tell user what changed (K11). `CHANGELOG.md` generated; hand edit break CI. Rule: [crates/changelog/README.md](crates/changelog/README.md).
 - Leave no clippy warning; CI run `-D warnings`.

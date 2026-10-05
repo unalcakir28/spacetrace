@@ -12,4 +12,4 @@ spacetrace-scan-core.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

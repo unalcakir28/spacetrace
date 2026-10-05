@@ -21,6 +21,14 @@ cargo fmt --all --check
 
 Seconds. Fails its own CI job. If it fails, run `cargo fmt --all` and continue.
 
+```bash
+scripts/check-pins.sh
+```
+
+Instant, same CI job. It names any external dependency that is a range or is
+versioned in a crate instead of `[workspace.dependencies]`; pin it there to the
+version `Cargo.lock` already resolves.
+
 ## 2. Clippy
 
 ```bash
