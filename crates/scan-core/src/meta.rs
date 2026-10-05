@@ -157,9 +157,7 @@ fn platform_fields(
 ) -> (PlatformFields, Option<std::io::Error>) {
     use std::os::windows::fs::MetadataExt;
 
-    // FILETIME counts 100-nanosecond ticks from 1601; Unix time counts seconds
-    // from 1970.
-    let mtime = (md.last_write_time() as i64 / 10_000_000) - 11_644_473_600;
+    let mtime = filetime_to_unix(md.last_write_time());
 
     match query(path, identity) {
         Ok((alloc, nlink, ino, dev)) => ((alloc, mtime, nlink, ino, dev), None),
@@ -168,6 +166,15 @@ fn platform_fields(
         // lie: the name and the length are already in hand.
         Err(e) => ((md.file_size(), mtime, 1, 0, 0), Some(e)),
     }
+}
+
+/// FILETIME — 100-nanosecond ticks from 1601 — to Unix seconds.
+///
+/// Not gated on Windows: the NTFS parser converts the times it reads off the
+/// table with it too, on every platform its tests run on, and the walk and the
+/// table must not disagree by a rounding.
+pub(crate) fn filetime_to_unix(filetime: u64) -> i64 {
+    (filetime as i64 / 10_000_000) - 11_644_473_600
 }
 
 /// `(alloc, nlink, file id, volume)` — everything a directory listing on

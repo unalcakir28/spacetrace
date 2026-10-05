@@ -19,6 +19,9 @@ mod clones;
 mod extents;
 mod meta;
 mod mounts;
+// Nothing reads a volume yet; the parser runs in the tests.
+#[cfg_attr(not(test), allow(dead_code))]
+mod ntfs;
 mod partial;
 mod scan;
 mod timeout;

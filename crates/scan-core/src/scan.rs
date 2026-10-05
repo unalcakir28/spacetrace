@@ -11,11 +11,12 @@ use crate::clones::Families;
 use crate::extents::{Claims, Deferred, FsKind, Mapped, Volume, Volumes};
 use crate::meta::{display_name, EntryKind, FileIdentity, NamedMeta, RawMeta};
 use crate::mounts::Mounts;
+use crate::ntfs::Table;
 use crate::partial::PartialTree;
 use crate::tree::{NewNode, NodeId, Tree, TreeBuilder};
 
 /// How many failing paths we keep for the report before we only count them.
-const MAX_REPORTED_ERRORS: usize = 64;
+pub(crate) const MAX_REPORTED_ERRORS: usize = 64;
 
 /// Stack for each walk thread.
 ///
@@ -572,11 +573,36 @@ impl Ctx {
         );
     }
 
+    /// Records of the volume's table that were in use and could not be read.
+    /// Each is a file missing from the scan, so each is an error (invariant
+    /// 7); with no path to name, the record number stands in for one.
+    fn note_unreadable_records(&self, root: &Path, table: &Table) {
+        for record in &table.bad_records {
+            self.note_error(
+                &root.join(format!("<MFT record {record}>")),
+                &std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "unreadable MFT record; the file it describes is not in the scan",
+                ),
+            );
+        }
+        // The table kept only as many numbers as a report holds; the rest
+        // are counted without a sample, as `note_error` does past its cap.
+        self.count_errors(table.bad_count - table.bad_records.len() as u64);
+    }
+
     fn note_error(&self, path: &Path, err: &std::io::Error) {
-        self.progress.errors.fetch_add(1, Ordering::Relaxed);
+        self.count_errors(1);
         let mut guard = self.errors.lock().unwrap();
         if guard.len() < MAX_REPORTED_ERRORS {
             guard.push((path.to_path_buf(), err.to_string()));
+        }
+    }
+
+    /// The one place the error counter moves.
+    fn count_errors(&self, count: u64) {
+        if count > 0 {
+            self.progress.errors.fetch_add(count, Ordering::Relaxed);
         }
     }
 
@@ -890,12 +916,15 @@ impl Charge {
 ///
 /// The name is carried rather than a full path, because a `PathBuf` per entry
 /// is an allocation per entry and only the subdirectories the walk descends
-/// into ever need one — a tenth of the entries on a real disk. The raw
-/// `OsString` and not a slice of the shared name buffer: that buffer holds
-/// `to_string_lossy` output, and rebuilding a path from a lossily converted
-/// name would name a file that does not exist.
+/// into ever need one — a tenth of the entries on a real disk.
 struct Pending {
-    name: std::ffi::OsString,
+    /// The raw name, where it can differ from its slice of the shared name
+    /// buffer. That buffer holds `to_string_lossy` output, and rebuilding a
+    /// path from a lossily converted name would name a file that does not
+    /// exist — so the walk carries every name it listed. `None` when the
+    /// slice is the name: the NTFS table decodes its names once, already
+    /// lossily, and has nothing better to carry.
+    name: Option<std::ffi::OsString>,
     name_off: u32,
     name_len: u16,
     meta: RawMeta,
@@ -997,19 +1026,45 @@ pub fn scan(
         Some(_) => Mounts::read(),
         None => Mounts::none(),
     };
-    scan_with(root, opts, progress, mounts, probe_mount)
+    scan_with(root, opts, progress, mounts, probe_mount, Source::Volume)
 }
 
-/// `scan`, with the mount table and the probe supplied.
+/// Where the entries below a directory root come from.
+pub(crate) enum Source {
+    /// The volume's own table, where the platform has one and the root is a
+    /// whole volume; the walk everywhere else — which today is everywhere.
+    Volume,
+    /// This table, starting at this file reference. The tests run the real
+    /// tree building over NTFS images through it.
+    #[cfg(test)]
+    Table(crate::ntfs::Table, u64),
+}
+
+/// A scan from `source` with fresh progress, no mount table and the real
+/// probe: what every test that picks the source needs.
+#[cfg(test)]
+pub(crate) fn scan_source(
+    root: impl AsRef<Path>,
+    opts: ScanOptions,
+    source: Source,
+) -> std::io::Result<(Tree, ScanStats)> {
+    let progress = Arc::new(ScanProgress::default());
+    scan_with(root, opts, progress, Mounts::none(), probe_mount, source)
+}
+
+/// `scan`, with the mount table, the probe and the source of entries
+/// supplied.
 ///
-/// Private: the two extra arguments exist so the tests can build a filesystem
-/// boundary that is not one and a probe that never answers.
-fn scan_with(
+/// Private: the extra arguments exist so the tests can build a filesystem
+/// boundary that is not one, a probe that never answers, and a tree from an
+/// NTFS table.
+pub(crate) fn scan_with(
     root: impl AsRef<Path>,
     opts: ScanOptions,
     progress: Arc<ScanProgress>,
     mounts: Mounts,
     probe: Probe,
+    source: Source,
 ) -> std::io::Result<(Tree, ScanStats)> {
     let started = std::time::Instant::now();
     let root = root.as_ref();
@@ -1074,7 +1129,13 @@ fn scan_with(
 
     if root_meta.kind == EntryKind::Dir {
         progress.dirs.fetch_add(1, Ordering::Relaxed);
-        pool.install(|| walk(&root_path, root_id, 1, root_meta.dev, None, &ctx));
+        match table_for(&root_path, &ctx, source) {
+            Some((table, root)) => {
+                ctx.note_unreadable_records(&root_path, &table);
+                from_table(&table, root, &root_path, root_id, &ctx);
+            }
+            None => pool.install(|| walk(&root_path, root_id, 1, root_meta.dev, None, &ctx)),
+        }
     } else {
         progress.files.fetch_add(1, Ordering::Relaxed);
         progress.bytes.fetch_add(root_meta.alloc, Ordering::Relaxed);
@@ -1142,6 +1203,80 @@ fn identity_needed(opts: &ScanOptions, is_dir: bool) -> FileIdentity {
     FileIdentity::Needed
 }
 
+/// The table to build this scan from, or `None` to walk.
+fn table_for(root: &Path, ctx: &Ctx, source: Source) -> Option<(Table, u64)> {
+    match source {
+        Source::Volume => volume_table(root, ctx),
+        #[cfg(test)]
+        Source::Table(table, root) => Some((table, root)),
+    }
+}
+
+/// The table of the volume `root` is on. No platform opens one yet.
+fn volume_table(_root: &Path, _ctx: &Ctx) -> Option<(Table, u64)> {
+    None
+}
+
+/// Build the tree from a volume's table rather than by walking (TODO B4).
+///
+/// Every directory's entries go through `place`, exactly as a listed
+/// directory's do, so exclusion, the depth limits, hardlink accounting and
+/// the counters are the walk's own code, and the arena is filled by
+/// `push_block` alone (invariant 2). Only the order directories are entered
+/// in belongs to this function. One thread, because nothing here touches the
+/// disk any more; cancellation is checked once per directory, as in the walk
+/// (invariant 5).
+fn from_table(table: &Table, root: u64, root_path: &Path, root_id: NodeId, ctx: &Ctx) {
+    let top = Subdir {
+        id: root_id,
+        path: root_path.to_path_buf(),
+        dev: ctx.root_dev,
+        ino: root,
+    };
+    let mut stack = vec![(top, 1usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        if ctx.progress.is_cancelled() {
+            return;
+        }
+        let mut names = String::with_capacity(table.names_len(dir.ino));
+        let pending: Vec<Pending> = table
+            .children(dir.ino)
+            .map(|child| pending_from(&child, &mut names, ctx))
+            .collect();
+        let subdirs = place(&dir.path, dir.id, depth, ctx, &names, pending);
+        stack.extend(subdirs.into_iter().map(|sub| (sub, depth + 1)));
+    }
+}
+
+/// One table entry as `place` takes it, its name appended to `names`.
+fn pending_from(child: &crate::ntfs::Child<'_>, names: &mut String, ctx: &Ctx) -> Pending {
+    let (name_off, name_len) = push_name(names, child.name);
+    // The walk reads the link count only where it will use it
+    // (`identity_needed`) and reports 1 elsewhere; the same rule here, or the
+    // two paths would store different trees.
+    let nlink = match identity_needed(&ctx.opts, child.kind == EntryKind::Dir) {
+        FileIdentity::Needed => u64::from(child.links),
+        FileIdentity::Skipped => 1,
+    };
+    Pending {
+        name: None,
+        name_off,
+        name_len,
+        meta: RawMeta {
+            kind: child.kind,
+            size: child.size,
+            alloc: child.alloc,
+            mtime: child.mtime,
+            nlink,
+            ino: child.reference,
+            // One table is one volume.
+            dev: ctx.root_dev,
+        },
+        share: None,
+        extents: None,
+    }
+}
+
 /// Read one directory, write its children into the arena, and recurse into the
 /// subdirectories among them.
 ///
@@ -1193,7 +1328,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
             for item in entries {
                 let (name_off, name_len) = push_name(&mut names, &item.name.to_string_lossy());
                 pending.push(Pending {
-                    name: item.name,
+                    name: Some(item.name),
                     name_off,
                     name_len,
                     meta: item.meta,
@@ -1202,7 +1337,8 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
                 });
             }
             drop(listing);
-            return place(dir, parent_id, depth, volume, ctx, &names, pending);
+            let subdirs = place(dir, parent_id, depth, ctx, &names, pending);
+            return descend(subdirs, depth, volume, ctx);
         }
     }
 
@@ -1272,7 +1408,7 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
         let raw_name = entry.file_name();
         let (name_off, name_len) = push_name(&mut names, &raw_name.to_string_lossy());
         pending.push(Pending {
-            name: raw_name,
+            name: Some(raw_name),
             name_off,
             name_len,
             meta,
@@ -1284,14 +1420,37 @@ fn walk(dir: &Path, parent_id: NodeId, depth: usize, dev: u64, parent: Option<Vo
     // Listing done; the recursion that follows is not what hangs.
     drop(listing);
 
-    place(dir, parent_id, depth, volume, ctx, &names, pending)
+    let subdirs = place(dir, parent_id, depth, ctx, &names, pending);
+    descend(subdirs, depth, volume, ctx);
+}
+
+/// Walk the subdirectories `place` handed back, in parallel.
+fn descend(subdirs: Vec<Subdir>, depth: usize, volume: Volume, ctx: &Ctx) {
+    if subdirs.is_empty() {
+        return;
+    }
+    subdirs.into_par_iter().for_each(|sub| {
+        walk(&sub.path, sub.id, depth + 1, sub.dev, Some(volume), ctx);
+    });
+}
+
+/// A subdirectory `place` put in the arena and the walk should enter.
+struct Subdir {
+    id: NodeId,
+    path: PathBuf,
+    dev: u64,
+    /// Its file identity, which is how the table source finds its entries.
+    ino: u64,
 }
 
 /// Account for one directory's entries, write them into the arena as a block,
-/// and fan out over the subdirectories among them.
+/// and return the subdirectories among them that the scan should enter.
 ///
-/// Shared by both listing paths so that whichever produced the metadata, what
-/// happens to it afterwards is the same code.
+/// Shared by every source of entries — both listing paths and the NTFS table —
+/// so that whichever produced the metadata, what happens to it afterwards is
+/// the same code: hardlink and clone accounting, exclusion, depth limits, the
+/// counters. Entering the subdirectories is the caller's, because that is the
+/// one step the sources do differently.
 ///
 /// **The accounting runs on the thread that did the listing.** It used to run
 /// one entry per rayon task, which bought nothing — none of it touches the
@@ -1302,13 +1461,13 @@ fn place(
     dir: &Path,
     parent_id: NodeId,
     depth: usize,
-    volume: Volume,
     ctx: &Ctx,
     names: &str,
     pending: Vec<Pending>,
-) {
+) -> Vec<Subdir> {
     let mut children: Vec<NewNode<'_>> = Vec::with_capacity(pending.len());
-    let mut subdirs: Vec<(NodeId, PathBuf, u64)> = Vec::new();
+    // By index in this block until the block is in the arena.
+    let mut subdirs: Vec<Subdir> = Vec::new();
     // Counted up here and published once per directory rather than once per
     // entry. The watcher only needs the numbers to be moving (`StallWatch`),
     // and they move thousands of times a second either way.
@@ -1334,6 +1493,11 @@ fn place(
             share,
             extents,
         } = entry;
+        let from = name_off as usize;
+        let stored = names
+            .get(from..from + name_len as usize)
+            .unwrap_or_default();
+        let name = name.as_deref().unwrap_or(std::ffi::OsStr::new(stored));
         let is_dir = meta.kind == EntryKind::Dir;
         if is_dir {
             dirs += 1;
@@ -1385,7 +1549,7 @@ fn place(
         let too_deep = is_dir && depth >= MAX_WALK_DEPTH;
         if too_deep {
             ctx.note_error(
-                &dir.join(&name),
+                &dir.join(name),
                 &std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("nested deeper than {MAX_WALK_DEPTH} levels; not descended"),
@@ -1396,19 +1560,21 @@ fn place(
             && !too_deep
             && ctx.opts.max_depth.is_none_or(|max| depth < max)
             && (!ctx.opts.one_filesystem || meta.dev == ctx.root_dev)
-            && !is_excluded(&name, &ctx.opts.exclude_names);
+            && !is_excluded(name, &ctx.opts.exclude_names);
         // The only entries that get a path of their own: the walk needs one to
         // recurse with, and building one for every entry was an allocation per
         // entry for the nine in ten that are not directories.
         if descend {
-            subdirs.push((index as NodeId, dir.join(&name), meta.dev));
+            subdirs.push(Subdir {
+                id: index as NodeId,
+                path: dir.join(name),
+                dev: meta.dev,
+                ino: meta.ino,
+            });
         }
 
-        let from = name_off as usize;
         children.push(NewNode {
-            name: names
-                .get(from..from + name_len as usize)
-                .unwrap_or_default(),
+            name: stored,
             kind: meta.kind,
             size,
             alloc,
@@ -1451,12 +1617,10 @@ fn place(
         families.append_block(members, start);
     }
 
-    if subdirs.is_empty() {
-        return;
+    for sub in &mut subdirs {
+        sub.id += start;
     }
-    subdirs.into_par_iter().for_each(|(index, path, dev)| {
-        walk(&path, start + index, depth + 1, dev, Some(volume), ctx);
-    });
+    subdirs
 }
 
 /// The platform's one-call directory listing, where there is one.
@@ -1638,6 +1802,7 @@ mod thread_tests {
             Arc::new(ScanProgress::default()),
             mounts,
             never_answers,
+            Source::Volume,
         )
         .unwrap();
 
@@ -1672,6 +1837,7 @@ mod thread_tests {
             Arc::new(ScanProgress::default()),
             Mounts::from_paths([root.join("mnt")]),
             never_answers,
+            Source::Volume,
         )
         .unwrap();
         let (whole, _) = scan_with(
@@ -1680,6 +1846,7 @@ mod thread_tests {
             Arc::new(ScanProgress::default()),
             Mounts::none(),
             never_answers,
+            Source::Volume,
         )
         .unwrap();
 
@@ -1704,6 +1871,7 @@ mod thread_tests {
             Arc::new(ScanProgress::default()),
             Mounts::from_paths([root.join("mnt")]),
             answers_normally,
+            Source::Volume,
         )
         .unwrap();
         let (plain, _) = scan_with(
@@ -1712,6 +1880,7 @@ mod thread_tests {
             Arc::new(ScanProgress::default()),
             Mounts::none(),
             never_answers,
+            Source::Volume,
         )
         .unwrap();
 
@@ -1737,6 +1906,7 @@ mod thread_tests {
             Arc::new(ScanProgress::default()),
             Mounts::from_paths([root.join("mnt")]),
             never_answers,
+            Source::Volume,
         )
         .unwrap();
 
