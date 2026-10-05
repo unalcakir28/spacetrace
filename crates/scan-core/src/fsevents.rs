@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::journal::{Change, ChangeKind, Journal, NoAnswer};
+use crate::journal::{Barrier, Change, ChangeKind, Journal, NoAnswer};
 use crate::meta::RawMeta;
 use crate::scan::ScanProgress;
 
@@ -44,14 +44,25 @@ impl Journal for FsEvents {
         current_event_id()
     }
 
+    /// A [`Marker`] in the temporary directory, where that is on `root`'s
+    /// volume.
+    fn barrier(&self, root: &Path) -> Result<Barrier, NoAnswer> {
+        Ok(Barrier(Box::new(Marker::new(root)?)))
+    }
+
     fn replay(
         &self,
         root: &Path,
         since: u64,
         budget: Duration,
+        barrier: Barrier,
         progress: &ScanProgress,
     ) -> Result<Vec<Change>, NoAnswer> {
-        replay(root, since, budget, progress)
+        let marker = barrier
+            .0
+            .downcast::<Marker>()
+            .map_err(|_| NoAnswer::Failed)?;
+        replay(root, since, budget, MAX_CHANGES, *marker, progress)
     }
 }
 
@@ -109,7 +120,6 @@ extern "C" {
     ) -> *mut c_void;
     fn FSEventStreamSetDispatchQueue(stream: *mut c_void, queue: *mut c_void);
     fn FSEventStreamStart(stream: *mut c_void) -> u8;
-    fn FSEventStreamFlushSync(stream: *mut c_void);
     fn FSEventStreamStop(stream: *mut c_void);
     fn FSEventStreamInvalidate(stream: *mut c_void);
     fn FSEventStreamRelease(stream: *mut c_void);
@@ -251,18 +261,27 @@ fn change(path: Vec<u8>, flags: u32) -> Change {
 /// all of `/.fseventsd` reports the condition by not finishing rather than
 /// by a flag, which is what `budget` is for.
 ///
-/// The history is over when FSEvents says so (`HistoryDone`). A flush after
-/// that hands over anything it had buffered but not yet sent, so nothing
-/// issued before the caller took its new cursor is left in flight when the
-/// stream stops. What arrives after that point is extra, never missing:
-/// the next scan replays it again from its own cursor. Measured on this
-/// Mac: 200 files each written and replayed at once, none missed — with the
-/// flush and without it, so the flush is a guard and not the mechanism.
+/// **The answer ends at `marker`, not at `HistoryDone`.** `HistoryDone`
+/// marks the end of what fseventsd had numbered when the stream started, and
+/// a change finished just before that can still be on its way to it. The
+/// caller wrote `marker` before asking; the replay waits for both
+/// `HistoryDone` and the marker, and whatever finished before the marker
+/// was written is then in the answer (the marker's doc says why). What
+/// arrives after it is extra, never missing: the next scan replays it again
+/// from its own cursor. No flush is needed for the same reason — the marker
+/// is what proves the records in flight have arrived.
 ///
-/// `progress.journal_ms` counts the wait — for the turn below and for
+/// **What the budget covers.** The history has `budget` from the moment the
+/// stream is started; the marker has the same, but never less than
+/// [`MARKER_FLOOR`], because its trip is fseventsd's own latency and says
+/// nothing about how long the history is. Starting the stream is in neither
+/// (see [`start`]) and has an allowance of its own: the same length, but
+/// never under [`START_FLOOR`].
+///
+/// `progress.journal_ms` counts the wait — for the turn below, the start and
 /// FSEvents — so a watcher sees a counter move while FSEvents works through a
 /// log that holds nothing under this root (invariant 8). Cancellation is
-/// checked as often, in the queue as well (invariant 5).
+/// checked as often, in the queue and during the start as well (invariant 5).
 ///
 /// **One replay at a time per process, and the budget starts with this
 /// one's turn.** Concurrent history reads queue behind each other: 22 run at
@@ -271,40 +290,30 @@ fn change(path: Vec<u8>, flags: u32) -> Change {
 /// after another. A budget that measured the queue would turn a busy agent's
 /// rescans into full scans for no reason about the journal. Waiting for the
 /// turn is bounded by the other replay's own budget.
+///
+/// At most `cap` distinct changes are held; past that there is no answer.
 fn replay(
     root: &Path,
     since: EventId,
     budget: Duration,
-    progress: &ScanProgress,
-) -> Result<Vec<Change>, NoAnswer> {
-    replay_capped(root, since, budget, MAX_CHANGES, progress)
-}
-
-/// [`replay`], holding at most `cap` distinct changes.
-fn replay_capped(
-    root: &Path,
-    since: EventId,
-    budget: Duration,
     cap: usize,
+    marker: Marker,
     progress: &ScanProgress,
 ) -> Result<Vec<Change>, NoAnswer> {
     use std::os::unix::ffi::OsStrExt;
 
     let asked = Instant::now();
     let _turn = take_turn(asked, progress)?;
-    let barrier_marker = Marker::new().ok_or(NoAnswer::Failed)?;
-    // The marker's directory is watched beside the root, and its records are
-    // not changes under the root — unless it is under the root, when they
-    // are, and are left in like any other.
-    let skip = (!barrier_marker.dir.starts_with(root))
-        .then(|| barrier_marker.dir.as_os_str().as_bytes().to_vec());
-    let sink = Arc::new(Sink::new(
-        cap,
-        barrier_marker.path.as_os_str().as_bytes().to_vec(),
-        skip,
-    ));
+    // Read on this thread, which a test sets, and handed to the one that
+    // starts the stream.
+    #[cfg(test)]
+    let slow_start = SLOW_START.get();
+    #[cfg(not(test))]
+    let slow_start = Duration::ZERO;
+
+    let sink = Arc::new(Sink::new(cap, root, &marker));
     let bytes = root.as_os_str().as_bytes();
-    let marker_dir = barrier_marker.dir.as_os_str().as_bytes();
+    let marker_dir = marker.dir.as_os_str().as_bytes();
 
     // SAFETY: every CF object created here is released on every path out.
     // The callback reaches `sink` through the context's `info`, and the
@@ -312,9 +321,9 @@ fn replay_capped(
     // FSEvents gives back only when it will not call the callback again — so
     // a callback still queued when this gives up finds the sink alive
     // whatever this function has dropped by then. The barrier on the queue
-    // before returning is the second guard: nothing of this stream is
+    // in `Stream::close` is the second guard: nothing of this stream is
     // running there afterwards.
-    unsafe {
+    let stream = unsafe {
         let cf_path = CFStringCreateWithBytes(
             std::ptr::null(),
             bytes.as_ptr(),
@@ -374,55 +383,177 @@ fn replay_capped(
             return Err(NoAnswer::Failed);
         }
         FSEventStreamSetDispatchQueue(stream, queue);
-        #[cfg(test)]
-        std::thread::sleep(SLOW_START.get());
-        if FSEventStreamStart(stream) == 0 {
-            FSEventStreamInvalidate(stream);
-            FSEventStreamRelease(stream);
-            dispatch_release(queue);
-            return Err(NoAnswer::Failed);
-        }
-        // The budget is for the journal's answer, and starts once the stream
-        // is asking. Starting it is not that: `FSEventStreamStart` took 0.45
-        // to 1.9 s per call for a binary sitting in a directory of 320,000
-        // entries (a busy `target/debug/deps`), against 0.3 ms anywhere
-        // else — measured, same binary, same minute — and counted in the
-        // budget it turned every rescan from there into a deadline fallback.
-        // `journal_ms` still counts it, from `asked`.
-        let started = Instant::now();
+        Stream { stream, queue }
+    };
 
-        // The history first, then the barrier: written only now, the marker
-        // reaches the stream live, behind everything fseventsd had queued.
-        let outcome = sink
-            .wait(asked, started, budget, progress, |s| s.history_done)
-            .and_then(|()| barrier_marker.write())
-            .and_then(|()| sink.wait(asked, started, budget, progress, |s| s.synced));
-        if outcome.is_ok() {
-            FSEventStreamFlushSync(stream);
+    let outcome = start(stream, asked, budget, slow_start, progress).and_then(|started| {
+        let answer = sink.wait(asked, started, budget, progress);
+        // SAFETY: a stream `start` reports started is this thread's again.
+        unsafe { stream.close(true) };
+        answer
+    });
+    progress
+        .journal_ms
+        .store(asked.elapsed().as_millis() as u64, Ordering::Relaxed);
+    outcome?;
+    Ok(sink.take())
+}
+
+/// A created stream and the queue it delivers on, as one value that can
+/// cross to the thread that starts it. Whoever holds it last closes it, once.
+#[derive(Clone, Copy)]
+struct Stream {
+    stream: *mut c_void,
+    queue: *mut c_void,
+}
+
+// SAFETY: FSEvents and libdispatch objects may be used from any thread; the
+// one rule, no two calls on a stream at once, is kept by handing it over
+// whole — `start` and its thread never touch it at the same time.
+unsafe impl Send for Stream {}
+
+impl Stream {
+    /// Stop (if `started`), invalidate and release the stream, then wait out
+    /// any callback still queued and release the queue.
+    ///
+    /// # Safety
+    /// Called once, by the stream's only holder.
+    unsafe fn close(self, started: bool) {
+        if started {
+            FSEventStreamStop(self.stream);
         }
-        FSEventStreamStop(stream);
-        FSEventStreamInvalidate(stream);
-        FSEventStreamRelease(stream);
+        FSEventStreamInvalidate(self.stream);
+        FSEventStreamRelease(self.stream);
         // A serial queue runs its blocks in order, so an empty one submitted
         // now returns only once every callback already queued has finished.
-        dispatch_sync_f(queue, std::ptr::null_mut(), barrier);
-        dispatch_release(queue);
+        dispatch_sync_f(self.queue, std::ptr::null_mut(), barrier);
+        dispatch_release(self.queue);
+    }
+}
+
+/// Where a stream start handed to its own thread has got to.
+enum Starting {
+    Running,
+    Done(bool),
+    /// The replay stopped waiting; the starting thread closes the stream.
+    Abandoned,
+}
+
+/// Start `stream` on a thread of its own and wait for it as for anything
+/// else FSEvents does: cancellable, `journal_ms` moving, and for at most
+/// `budget` or [`START_FLOOR`], whichever is longer. The instant it started,
+/// or why not.
+///
+/// **Why its own allowance and not the answer's budget.**
+/// `FSEventStreamStart` took 0.45 to 1.9 s per call for a binary sitting in
+/// a directory of 320,000 entries (a busy `target/debug/deps`), against
+/// 0.3 ms anywhere else — measured, same binary, same minute. Counted in the
+/// budget, it turned every rescan from there into a deadline fallback; the
+/// budget's own floor is 500 ms.
+///
+/// **Why a thread.** The call blocks, and nothing can interrupt it. A start
+/// that never returns would otherwise hold a scan nobody can stop, with
+/// every counter still. Past its allowance or on cancel the replay walks
+/// away, and the thread closes the stream whenever the call does return.
+/// The turn is given up with it: the next replay may run beside a start
+/// still hanging, which costs it time and nothing else.
+///
+/// `Err` only after the stream has been taken care of: closed here when the
+/// start failed, or left to the thread when abandoned.
+fn start(
+    stream: Stream,
+    asked: Instant,
+    budget: Duration,
+    slow_start: Duration,
+    progress: &ScanProgress,
+) -> Result<Instant, NoAnswer> {
+    let shared = Arc::new((Mutex::new(Starting::Running), Condvar::new()));
+    let theirs = Arc::clone(&shared);
+    let spawned = std::thread::Builder::new()
+        .name("spacetrace-fsevents-start".into())
+        .spawn(move || {
+            std::thread::sleep(slow_start);
+            // SAFETY: the replay does not touch the stream until this has
+            // reported back, and not at all once it has abandoned it.
+            let ok = unsafe { FSEventStreamStart(stream.stream) } != 0;
+            let (state, done) = &*theirs;
+            let mut state = state.lock().unwrap_or_else(|p| p.into_inner());
+            if matches!(*state, Starting::Abandoned) {
+                drop(state);
+                // SAFETY: abandoned, so this thread is the last holder.
+                unsafe { stream.close(ok) };
+                return;
+            }
+            *state = Starting::Done(ok);
+            done.notify_all();
+        });
+    if spawned.is_err() {
+        // SAFETY: no thread took it; never started.
+        unsafe { stream.close(false) };
+        return Err(NoAnswer::Failed);
+    }
+
+    let handed = Instant::now();
+    let (state, done) = &*shared;
+    let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
+    loop {
+        match *guard {
+            Starting::Done(true) => return Ok(Instant::now()),
+            Starting::Done(false) => {
+                drop(guard);
+                // SAFETY: the thread has finished with it; it never started.
+                unsafe { stream.close(false) };
+                return Err(NoAnswer::Failed);
+            }
+            Starting::Running | Starting::Abandoned => {}
+        }
         progress
             .journal_ms
             .store(asked.elapsed().as_millis() as u64, Ordering::Relaxed);
-        outcome?;
+        let why = if progress.is_cancelled() {
+            Some(NoAnswer::Cancelled)
+        } else if handed.elapsed() >= budget.max(START_FLOOR) {
+            Some(NoAnswer::Deadline)
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            *guard = Starting::Abandoned;
+            return Err(why);
+        }
+        guard = done
+            .wait_timeout(guard, TICK)
+            .unwrap_or_else(|p| p.into_inner())
+            .0;
     }
-    Ok(sink.take())
 }
+
+/// The least time the marker is waited for: its live trip through fseventsd
+/// took 5 to 492 ms (median 287 ms) over 30 replays at a load average of
+/// 4.5, measured, against a budget whose floor is 500 ms. Four times the
+/// slowest, so that only an fseventsd that is stuck runs out of it.
+const MARKER_FLOOR: Duration = Duration::from_secs(2);
+
+/// The least time a stream start is waited for: well past the slowest start
+/// measured (1.9 s), so that only a start that is stuck runs out of it.
+const START_FLOOR: Duration = Duration::from_secs(5);
 
 /// One replay at a time per process; see [`replay`].
 static TURN: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 thread_local! {
-    /// Time added before `FSEventStreamStart` on this thread: how a test
-    /// plays the slow start measured for a binary in a crowded directory.
+    /// Time added before `FSEventStreamStart` for the replays this thread
+    /// asks for: how a test plays the slow start measured for a binary in a
+    /// crowded directory, or one that hangs. Read by the asking thread and
+    /// handed to the one that starts the stream.
     static SLOW_START: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
+
+    /// Where this thread's [`Marker::new`] makes its directory, in place of
+    /// the temporary directory: how a test reaches a rescan whose marker
+    /// cannot be written.
+    pub(crate) static MARKER_BASE: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Wait for [`TURN`] without becoming a scan that cannot be stopped or that
@@ -502,11 +633,14 @@ struct Sink {
     state: Mutex<SinkState>,
     done: Condvar,
     cap: usize,
-    /// This replay's [`Marker`] path: seeing it is the barrier.
+    /// This replay's [`Marker`] file: seeing it is the barrier.
     marker: Vec<u8>,
-    /// The marker directory, where it is not under the root: its records are
-    /// the barrier's, not changes.
-    skip: Option<Vec<u8>>,
+    /// The marker's directory. Nothing in it is a change under the root.
+    marker_dir: Vec<u8>,
+    /// Whether the marker directory is outside the root, when its own
+    /// records are not changes under the root either. Under it, they are:
+    /// making and removing it changes its parent, which a full scan sees.
+    marker_dir_outside: bool,
 }
 
 #[derive(Default)]
@@ -515,19 +649,33 @@ struct SinkState {
     /// and a rescan acts on each distinct one once.
     events: HashSet<Change>,
     history_done: bool,
-    /// The marker written after `HistoryDone` has come back.
+    /// The marker has come back.
     synced: bool,
+    /// FSEvents said it lost track of the marker's directory: whether the
+    /// marker came back can no longer be told.
+    barrier_lost: bool,
     overflowed: bool,
 }
 
+impl SinkState {
+    /// Whether the answer is complete: the history is over and the marker
+    /// is in, in either order — the marker can be numbered inside the
+    /// history or after it (see [`Marker`]).
+    fn answered(&self) -> bool {
+        self.history_done && self.synced
+    }
+}
+
 impl Sink {
-    fn new(cap: usize, marker: Vec<u8>, skip: Option<Vec<u8>>) -> Sink {
+    fn new(cap: usize, root: &Path, marker: &Marker) -> Sink {
+        use std::os::unix::ffi::OsStrExt;
         Sink {
             state: Mutex::new(SinkState::default()),
             done: Condvar::new(),
             cap,
-            marker,
-            skip,
+            marker: marker.path.as_os_str().as_bytes().to_vec(),
+            marker_dir: marker.dir.as_os_str().as_bytes().to_vec(),
+            marker_dir_outside: !marker.dir.starts_with(root),
         }
     }
 
@@ -539,8 +687,43 @@ impl Sink {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Block until `reached` holds, the budget — counted from `started`,
-    /// when this replay got its turn — is spent, or the scan is cancelled.
+    /// One record, as the callback hands it over.
+    fn record(&self, state: &mut SinkState, path: &[u8], flags: u32) {
+        if flags & flag::HISTORY_DONE != 0 {
+            state.history_done = true;
+            return;
+        }
+        let in_marker_dir = under(path, &self.marker_dir);
+        if path == self.marker.as_slice() {
+            state.synced = true;
+        }
+        // A record that covers the marker without naming it — a drop, a
+        // directory FSEvents says to rescan, a record that does not say what
+        // changed — leaves "has it come back?" without an answer, and the
+        // replay without its barrier.
+        let covers_marker = in_marker_dir || under(&self.marker_dir, path);
+        if covers_marker
+            && (flags & (LOST | flag::MUST_SCAN_SUB_DIRS) != 0
+                || (in_marker_dir && flags & KINDS == 0))
+        {
+            state.barrier_lost = true;
+        }
+        if in_marker_dir && (path != self.marker_dir.as_slice() || self.marker_dir_outside) {
+            return;
+        }
+        if state.overflowed {
+            return;
+        }
+        state.events.insert(change(path.to_vec(), flags));
+        if state.events.len() > self.cap {
+            state.overflowed = true;
+            state.events = HashSet::new();
+        }
+    }
+
+    /// Block until the answer is complete, its time — counted from
+    /// `started`, when the stream started; see [`replay`] — is spent, or the
+    /// scan is cancelled.
     /// `journal_ms` counts from `asked`, the queue included, so it never runs
     /// backwards.
     fn wait(
@@ -549,14 +732,16 @@ impl Sink {
         started: Instant,
         budget: Duration,
         progress: &ScanProgress,
-        reached: impl Fn(&SinkState) -> bool,
     ) -> Result<(), NoAnswer> {
         let mut guard = self.lock();
         loop {
             if guard.overflowed {
                 return Err(NoAnswer::TooMany);
             }
-            if reached(&guard) {
+            if guard.barrier_lost {
+                return Err(NoAnswer::Lost);
+            }
+            if guard.answered() {
                 return Ok(());
             }
             let waited = started.elapsed();
@@ -566,7 +751,12 @@ impl Sink {
             if progress.is_cancelled() {
                 return Err(NoAnswer::Cancelled);
             }
-            let Some(left) = budget.checked_sub(waited).filter(|d| !d.is_zero()) else {
+            let limit = if guard.history_done {
+                budget.max(MARKER_FLOOR)
+            } else {
+                budget
+            };
+            let Some(left) = limit.checked_sub(waited).filter(|d| !d.is_zero()) else {
                 return Err(NoAnswer::Deadline);
             };
             guard = self
@@ -593,47 +783,29 @@ extern "C" fn on_events(
     flags: *const u32,
     _ids: *const EventId,
 ) {
-    // SAFETY: `info` is the `Sink` the replay keeps alive until the stream
-    // has been stopped; without `UseCFTypes` the paths are an array of
-    // `count` NUL-terminated C strings, beside `count` flag words.
+    // SAFETY: `info` is the `Sink` the stream holds a reference to; without
+    // `UseCFTypes` the paths are an array of `count` NUL-terminated C
+    // strings, beside `count` flag words.
     let sink = unsafe { &*(info as *const Sink) };
     let paths = paths as *const *const c_char;
     let mut state = sink.lock();
     for i in 0..count {
         let flags = unsafe { *flags.add(i) };
-        if flags & flag::HISTORY_DONE != 0 {
-            state.history_done = true;
-            continue;
-        }
         let path = unsafe { std::ffi::CStr::from_ptr(*paths.add(i)) }.to_bytes();
-        if path == sink.marker.as_slice() {
-            state.synced = true;
-        }
-        if sink.skip.as_deref().is_some_and(|dir| under(path, dir)) {
-            continue;
-        }
-        if state.overflowed {
-            continue;
-        }
-        state.events.insert(change(path.to_vec(), flags));
-        if state.events.len() > sink.cap {
-            state.overflowed = true;
-            state.events = HashSet::new();
-        }
+        sink.record(&mut state, path, flags);
     }
-    if state.history_done || state.synced || state.overflowed {
-        sink.done.notify_all();
-    }
+    sink.done.notify_all();
 }
 
 /// Whether `path` is `dir` or below it.
 fn under(path: &[u8], dir: &[u8]) -> bool {
     path.strip_prefix(dir)
-        .is_some_and(|rest| rest.is_empty() || rest[0] == b'/')
+        .is_some_and(|rest| rest.is_empty() || rest[0] == b'/' || dir.ends_with(b"/"))
 }
 
-/// A file this process writes after the history is over, and waits to see
-/// come back: the barrier that makes a replay cover everything up to now.
+/// A file this process writes before it asks for a replay, and waits to see
+/// come back: the barrier that makes a replay cover everything up to the
+/// moment it was written.
 ///
 /// **Why it is needed.** fseventsd numbers a record when it takes it from
 /// the kernel, and `HistoryDone` means the end of what it has numbered — not
@@ -646,45 +818,89 @@ fn under(path: &[u8], dir: &[u8]) -> bool {
 /// of the 20. How long fseventsd takes to answer depends on the client, then,
 /// and nothing about it can be relied on.
 ///
-/// **Why it works.** The kernel hands fseventsd its records in the order
-/// they happen, through one queue for every volume, and a stream delivers
-/// live records in the order fseventsd takes them. So once a marker written
-/// after `HistoryDone` has come back, every change finished before the
-/// replay began has come back before it. In a directory of this program's
-/// own under the temporary directory, never in the root: a scan writes
-/// nothing where it reads. Removed again when the replay ends.
+/// **Why writing it before the replay is enough.** The kernel hands
+/// fseventsd its records through one queue, in the order the changes
+/// happen, and fseventsd numbers them in that order. A change finished
+/// before the marker was written is therefore numbered before it. The
+/// stream reports every record numbered after the cursor: those numbered
+/// before it started as history, ending with `HistoryDone`, and the rest
+/// live, in order. Wherever the marker falls, then — in the history or after
+/// it — every earlier change has been delivered once both the marker and
+/// `HistoryDone` have.
+///
+/// **Why it is written before the base is loaded.** Its live trip through
+/// fseventsd takes about 300 ms ([`MARKER_FLOOR`] has the numbers), which
+/// on `/Applications` was most of what an incremental rescan cost. Written
+/// 120 ms or more before the stream starts, it is already numbered, comes
+/// back inside the history, and the replay took 4 to 27 ms (measured). The
+/// rescan has that time anyway: loading its base takes 240 ms there.
+///
+/// **Where.** In a private directory of its own — mode 0700, a random name,
+/// made fresh for each replay under the temporary directory, never in the
+/// root: a scan writes nothing where it reads. The file is created with
+/// `O_EXCL | O_NOFOLLOW`. A fresh directory also means its history since
+/// any cursor holds nothing but this replay's own records. Both are removed
+/// when the replay ends; a process killed mid-replay leaves one empty
+/// directory in the per-user temporary directory, which macOS clears.
+///
+/// **Only on the root's volume.** The order the argument above rests on was
+/// measured not to hold across volumes: with the marker on the Data volume
+/// and the root on an APFS disk image, 1 to 3 of 20 changes written on the
+/// image just before the replay were missing from it, in 3 of 5 runs; on one
+/// volume, none in 200. A root anywhere else would need the marker written
+/// on its own volume, which means into somebody's disk, so a rescan of it
+/// falls back instead (`Fallback::MarkerVolume`) — every external disk,
+/// until a marker that needs no write is found.
 struct Marker {
+    /// Removes the directory, the marker with it, when dropped.
+    _owner: tempfile::TempDir,
+    /// The directory, canonical, because FSEvents reports real paths.
     dir: std::path::PathBuf,
     path: std::path::PathBuf,
 }
 
 impl Marker {
-    /// A fresh name in the marker directory, which is made if missing.
-    /// Canonical, because FSEvents reports real paths.
-    fn new() -> Option<Marker> {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let dir = std::env::temp_dir().join("spacetrace-fsevents");
-        std::fs::create_dir_all(&dir).ok()?;
-        let dir = dir.canonicalize().ok()?;
-        let name = format!(
-            "sync-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
+    /// [`Marker::write_in`] the temporary directory, for a replay of
+    /// `root` — which must be on the same volume.
+    fn new(root: &Path) -> Result<Marker, NoAnswer> {
+        use std::os::unix::fs::MetadataExt;
+        #[cfg(test)]
+        let base = MARKER_BASE
+            .with_borrow(Clone::clone)
+            .unwrap_or_else(std::env::temp_dir);
+        #[cfg(not(test))]
+        let base = std::env::temp_dir();
+        let dev = |path: &Path| std::fs::metadata(path).map(|m| m.dev());
+        let root_dev = dev(root).map_err(|_| NoAnswer::Failed)?;
+        let base_dev = dev(&base).map_err(|_| NoAnswer::NoBarrier)?;
+        if root_dev != base_dev {
+            return Err(NoAnswer::MarkerVolume);
+        }
+        Marker::write_in(&base).ok_or(NoAnswer::NoBarrier)
+    }
+
+    /// A fresh private directory in `base`, with the marker written in it.
+    fn write_in(base: &Path) -> Option<Marker> {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let owner = tempfile::Builder::new()
+            .prefix("spacetrace-fsevents-")
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir_in(base)
+            .ok()?;
+        let dir = owner.path().canonicalize().ok()?;
+        let path = dir.join("sync");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .mode(0o600)
+            .open(&path)
+            .ok()?;
         Some(Marker {
-            path: dir.join(name),
+            _owner: owner,
             dir,
+            path,
         })
-    }
-
-    fn write(&self) -> Result<(), NoAnswer> {
-        std::fs::write(&self.path, b"").map_err(|_| NoAnswer::Failed)
-    }
-}
-
-impl Drop for Marker {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -709,6 +925,24 @@ fn on_apfs(path: &Path) -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A replay as a rescan asks for one, its marker written at once — with
+    /// no head start, the case where the marker's trip matters most.
+    fn ask(
+        root: &Path,
+        since: EventId,
+        budget: Duration,
+        progress: &ScanProgress,
+    ) -> Result<Vec<Change>, NoAnswer> {
+        replay(
+            root,
+            since,
+            budget,
+            MAX_CHANGES,
+            Marker::new(root)?,
+            progress,
+        )
+    }
 
     /// The ids only grow: a cursor taken later is never behind one taken
     /// earlier, which is what makes "replay from here" mean "since then".
@@ -750,7 +984,7 @@ pub(crate) mod tests {
 
         let progress = ScanProgress::default();
         let started = Instant::now();
-        let events = replay(&root, since, Duration::from_secs(30), &progress).unwrap();
+        let events = ask(&root, since, Duration::from_secs(30), &progress).unwrap();
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "the history ended; the budget is not a wait"
@@ -775,7 +1009,7 @@ pub(crate) mod tests {
         let root = dir.path().canonicalize().unwrap();
         let progress = ScanProgress::default();
         SLOW_START.set(Duration::from_millis(800));
-        let got = replay(
+        let got = ask(
             &root,
             current_event_id(),
             Duration::from_millis(500),
@@ -790,6 +1024,13 @@ pub(crate) mod tests {
     /// replay asked from before it has already been told the history is
     /// over — so `HistoryDone` alone is not "everything up to now". Twenty
     /// rounds, each writing a file and replaying at once, with no settling.
+    ///
+    /// **A probabilistic guard.** Whether the race shows depends on how fast
+    /// fseventsd answers this client, which a test cannot set: without the
+    /// marker, 17 of 20 rounds missed from one build and none from another.
+    /// What the barrier does is held exactly by
+    /// `the_answer_waits_for_the_marker_as_well_as_the_history`; this test is
+    /// the real filesystem saying the barrier is enough.
     #[test]
     fn a_change_made_just_before_the_replay_is_in_it() {
         use std::os::unix::ffi::OsStrExt;
@@ -801,7 +1042,7 @@ pub(crate) mod tests {
             let since = current_event_id();
             let file = root.join(format!("just-now-{round}"));
             std::fs::write(&file, b"x").unwrap();
-            let events = replay(&root, since, Duration::from_secs(10), &progress).unwrap();
+            let events = ask(&root, since, Duration::from_secs(10), &progress).unwrap();
             if !events.iter().any(|e| e.path == file.as_os_str().as_bytes()) {
                 missed.push(round);
             }
@@ -809,6 +1050,285 @@ pub(crate) mod tests {
         assert!(
             missed.is_empty(),
             "rounds whose change the replay missed: {missed:?}"
+        );
+    }
+
+    /// A sink for a marker at `marker_dir/sync`, without a stream: the
+    /// records are handed to it by the test, exactly as FSEvents would.
+    fn sink_for(marker_dir: &str, outside_root: bool) -> Sink {
+        Sink {
+            state: Mutex::new(SinkState::default()),
+            done: Condvar::new(),
+            cap: 1000,
+            marker: format!("{marker_dir}/sync").into_bytes(),
+            marker_dir: marker_dir.as_bytes().to_vec(),
+            marker_dir_outside: outside_root,
+        }
+    }
+
+    /// Hand `sink` one record and wait at most 50 ms for an answer.
+    fn after(sink: &Sink, path: &str, flags: u32) -> Result<(), NoAnswer> {
+        sink.record(&mut sink.lock(), path.as_bytes(), flags);
+        let now = Instant::now();
+        sink.wait(
+            now,
+            now,
+            Duration::from_millis(50),
+            &ScanProgress::default(),
+        )
+    }
+
+    const CREATED_FILE: u32 = flag::ITEM_CREATED | flag::ITEM_IS_FILE;
+
+    /// The answer is complete only once both the history and the marker are
+    /// in, in either order: the marker can be numbered inside the history or
+    /// after it. Exact, where the real-filesystem test is a probability.
+    #[test]
+    fn the_answer_waits_for_the_marker_as_well_as_the_history() {
+        let sink = sink_for("/t/m", true);
+        assert_eq!(
+            after(&sink, "", flag::HISTORY_DONE),
+            Err(NoAnswer::Deadline),
+            "the history alone is not an answer"
+        );
+        assert_eq!(after(&sink, "/t/m/sync", CREATED_FILE), Ok(()));
+
+        let sink = sink_for("/t/m", true);
+        assert_eq!(
+            after(&sink, "/t/m/sync", CREATED_FILE),
+            Err(NoAnswer::Deadline),
+            "the marker alone is not an answer"
+        );
+        assert_eq!(after(&sink, "", flag::HISTORY_DONE), Ok(()));
+    }
+
+    /// Once the history is over, the marker has [`MARKER_FLOOR`] however
+    /// small the budget: its trip is fseventsd's latency, not the history's
+    /// length. Played with a 50 ms budget and a marker 300 ms late.
+    #[test]
+    fn the_marker_is_waited_for_past_a_small_budget() {
+        let sink = Arc::new(sink_for("/t/m", true));
+        sink.record(&mut sink.lock(), b"", flag::HISTORY_DONE);
+        let late = Arc::clone(&sink);
+        let marker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            late.record(&mut late.lock(), b"/t/m/sync", CREATED_FILE);
+            late.done.notify_all();
+        });
+        let now = Instant::now();
+        let got = sink.wait(
+            now,
+            now,
+            Duration::from_millis(50),
+            &ScanProgress::default(),
+        );
+        marker.join().unwrap();
+        assert_eq!(got, Ok(()));
+    }
+
+    /// A record that covers the marker without naming it — dropped events,
+    /// a directory to rescan, a record that does not say what changed —
+    /// means the marker may never be seen. That is a lost answer, said at
+    /// once, not a deadline after the whole budget.
+    #[test]
+    fn a_record_that_loses_the_marker_is_a_lost_answer() {
+        for (path, flags) in [
+            ("/t/m", flag::MUST_SCAN_SUB_DIRS | flag::USER_DROPPED),
+            ("/t/m", flag::MUST_SCAN_SUB_DIRS | flag::ITEM_IS_DIR),
+            ("/t/m/sync", 0),
+            ("/", flag::MUST_SCAN_SUB_DIRS | flag::KERNEL_DROPPED),
+        ] {
+            let sink = sink_for("/t/m", true);
+            assert_eq!(
+                after(&sink, path, flags),
+                Err(NoAnswer::Lost),
+                "{path} {flags:#x}"
+            );
+        }
+        // Next to it is not over it.
+        let sink = sink_for("/t/m", true);
+        assert_eq!(
+            after(
+                &sink,
+                "/t/mm",
+                flag::MUST_SCAN_SUB_DIRS | flag::USER_DROPPED
+            ),
+            Err(NoAnswer::Deadline)
+        );
+    }
+
+    /// The marker's records are the barrier's, never changes under the root
+    /// — not even where the temporary directory is under it. Its directory's
+    /// own records are kept there, though: making and removing it changes
+    /// its parent, which a full scan would see.
+    #[test]
+    fn the_marker_s_records_are_never_changes() {
+        let paths = |sink: &Sink| -> Vec<String> {
+            sink.lock()
+                .events
+                .iter()
+                .map(|e| String::from_utf8(e.path.clone()).unwrap())
+                .collect()
+        };
+        for outside in [true, false] {
+            let sink = sink_for("/r/tmp/m", outside);
+            let mut state = sink.lock();
+            sink.record(
+                &mut state,
+                b"/r/tmp/m",
+                flag::ITEM_CREATED | flag::ITEM_IS_DIR,
+            );
+            sink.record(&mut state, b"/r/tmp/m/sync", CREATED_FILE);
+            sink.record(&mut state, b"/r/tmp/other", CREATED_FILE);
+            drop(state);
+            let mut got = paths(&sink);
+            got.sort();
+            let want: &[&str] = if outside {
+                &["/r/tmp/other"]
+            } else {
+                &["/r/tmp/m", "/r/tmp/other"]
+            };
+            assert_eq!(got, want, "outside the root: {outside}");
+        }
+    }
+
+    /// The same, through a real replay whose marker directory is made under
+    /// the root.
+    #[test]
+    fn a_marker_made_under_the_root_is_not_in_the_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let base = root.join("tmp");
+        std::fs::create_dir(&base).unwrap();
+        settle(&root);
+        let progress = ScanProgress::default();
+        let since = current_event_id();
+        let events = replay(
+            &root,
+            since,
+            Duration::from_secs(10),
+            MAX_CHANGES,
+            Marker::write_in(&base).unwrap(),
+            &progress,
+        )
+        .unwrap();
+        let marker = events
+            .iter()
+            .find(|e| e.path.ends_with(b"/sync"))
+            .map(|e| String::from_utf8_lossy(&e.path).into_owned());
+        assert_eq!(marker, None, "{events:?}");
+    }
+
+    /// Where the marker cannot be written, there is no barrier, and the
+    /// reason is its own — not a journal that could not be read.
+    #[test]
+    fn a_barrier_that_cannot_be_written_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        MARKER_BASE.set(Some(dir.path().join("no-such-directory")));
+        let got = FsEvents.barrier(dir.path());
+        MARKER_BASE.set(None);
+        assert_eq!(got.err(), Some(NoAnswer::NoBarrier));
+    }
+
+    /// A root on another volume than the temporary directory has no barrier:
+    /// the marker's order against its changes was measured not to hold (see
+    /// [`Marker`]). `/dev` is another volume everywhere.
+    #[test]
+    fn a_root_on_another_volume_than_the_marker_has_no_barrier() {
+        let got = FsEvents.barrier(Path::new("/dev"));
+        assert_eq!(got.err(), Some(NoAnswer::MarkerVolume));
+    }
+
+    /// The marker's directory is the replay's alone: mode 0700, made fresh,
+    /// gone when the replay is.
+    #[test]
+    fn the_marker_directory_is_private_and_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::tempdir().unwrap();
+        let marker = Marker::write_in(base.path()).unwrap();
+        let mode = std::fs::metadata(&marker.dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+        assert!(marker.path.is_file());
+        let other = Marker::write_in(base.path()).unwrap();
+        assert_ne!(marker.dir, other.dir, "one directory per replay");
+        let dir = marker.dir.clone();
+        drop(marker);
+        assert!(!dir.exists());
+    }
+
+    /// The marker directory is compared as FSEvents spells it — the real
+    /// path — even when the temporary directory is reached through a
+    /// symlink, as `/tmp` and `/var` are on macOS.
+    #[test]
+    fn a_marker_base_reached_through_a_symlink_still_closes_the_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap().join("root");
+        let real = dir.path().canonicalize().unwrap().join("real");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let progress = ScanProgress::default();
+        let got = replay(
+            &root,
+            current_event_id(),
+            Duration::from_secs(10),
+            MAX_CHANGES,
+            Marker::write_in(&link).unwrap(),
+            &progress,
+        );
+        assert!(got.is_ok(), "{got:?}");
+    }
+
+    /// A start that does not return is walked away from at its allowance,
+    /// with the counter moving meanwhile (invariant 8). Played with a start
+    /// held for 60 s; the upper bound leaves room for the turn, which other
+    /// replays in this test binary hold.
+    #[test]
+    fn a_start_that_hangs_is_abandoned_at_its_allowance() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let progress = ScanProgress::default();
+        SLOW_START.set(Duration::from_secs(60));
+        let asked = Instant::now();
+        let got = ask(
+            &root,
+            current_event_id(),
+            Duration::from_millis(300),
+            &progress,
+        );
+        SLOW_START.set(Duration::ZERO);
+        let waited = asked.elapsed();
+        assert_eq!(got.unwrap_err(), NoAnswer::Deadline);
+        assert!(
+            waited >= START_FLOOR && waited < Duration::from_secs(40),
+            "{waited:?}"
+        );
+        assert!(progress.journal_ms.load(Ordering::Relaxed) >= START_FLOOR.as_millis() as u64);
+    }
+
+    /// A scan cancelled while the stream is starting stops then, not when
+    /// the start returns (invariant 5).
+    #[test]
+    fn a_scan_cancelled_during_the_start_stops_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let progress = ScanProgress::default();
+        progress.cancel();
+        SLOW_START.set(Duration::from_secs(20));
+        let asked = Instant::now();
+        let got = ask(
+            &root,
+            current_event_id(),
+            Duration::from_secs(30),
+            &progress,
+        );
+        SLOW_START.set(Duration::ZERO);
+        assert_eq!(got.unwrap_err(), NoAnswer::Cancelled);
+        assert!(
+            asked.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            asked.elapsed()
         );
     }
 
@@ -823,15 +1343,40 @@ pub(crate) mod tests {
             std::fs::write(root.join(format!("f{i}")), b"x").unwrap();
         }
         settle(&root);
-        let progress = ScanProgress::default();
-        let started = Instant::now();
+        let progress = Arc::new(ScanProgress::default());
         // A budget far beyond anything the test waits for, so "at once" can
         // be told from "at the deadline" with room for the other replays this
-        // one queues behind (one at a time per process).
-        let got = replay_capped(&root, since, Duration::from_secs(300), 10, &progress);
+        // one queues behind (one at a time per process). A watchdog cancels
+        // the replay at 60 s, so a regression fails the test then, as
+        // `Cancelled`, rather than holding it for the whole budget.
+        let watched = Arc::clone(&progress);
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if stopped.recv_timeout(Duration::from_secs(60)).is_err() {
+                watched.cancel();
+            }
+        });
+        let got = replay(
+            &root,
+            since,
+            Duration::from_secs(300),
+            10,
+            Marker::new(&root).unwrap(),
+            &progress,
+        );
+        let _ = stop.send(());
+        watchdog.join().unwrap();
         assert_eq!(got.unwrap_err(), NoAnswer::TooMany);
-        assert!(started.elapsed() < Duration::from_secs(60));
-        let all = replay_capped(&root, since, Duration::from_secs(30), 1000, &progress).unwrap();
+        let progress = ScanProgress::default();
+        let all = replay(
+            &root,
+            since,
+            Duration::from_secs(30),
+            1000,
+            Marker::new(&root).unwrap(),
+            &progress,
+        )
+        .unwrap();
         assert!(
             all.len() >= 50,
             "under the cap, every change: {}",
@@ -846,7 +1391,7 @@ pub(crate) mod tests {
         let progress = ScanProgress::default();
         let since = current_event_id().saturating_sub(1_000_000);
         assert_eq!(
-            replay(dir.path(), since, Duration::ZERO, &progress).unwrap_err(),
+            ask(dir.path(), since, Duration::ZERO, &progress).unwrap_err(),
             NoAnswer::Deadline
         );
     }
@@ -859,7 +1404,7 @@ pub(crate) mod tests {
         progress.cancel();
         let started = Instant::now();
         assert_eq!(
-            replay(dir.path(), 1, Duration::from_secs(60), &progress).unwrap_err(),
+            ask(dir.path(), 1, Duration::from_secs(60), &progress).unwrap_err(),
             NoAnswer::Cancelled
         );
         assert!(started.elapsed() < Duration::from_secs(5));
@@ -887,7 +1432,7 @@ pub(crate) mod tests {
         let since = current_event_id();
         let asker = std::thread::spawn(move || {
             let started = Instant::now();
-            let got = replay(&root, since, Duration::from_secs(30), &waiting);
+            let got = ask(&root, since, Duration::from_secs(30), &waiting);
             (got, started.elapsed())
         });
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -917,7 +1462,7 @@ pub(crate) mod tests {
         let root = dir.path().canonicalize().unwrap();
         let before = SINK_RETAINS.load(Ordering::SeqCst);
         let progress = ScanProgress::default();
-        replay(
+        ask(
             &root,
             current_event_id(),
             Duration::from_secs(10),
@@ -951,10 +1496,20 @@ pub(crate) mod tests {
         let progress = ScanProgress::default();
         let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
-            let seen = replay(root, since, Duration::from_secs(10), &progress)
-                .unwrap_or_default()
-                .iter()
-                .any(|e| e.path == marker.as_os_str().as_bytes());
+            // Not `Marker::new`: a test may have pointed that thread's
+            // markers somewhere unwritable on purpose.
+            let marker_now = Marker::write_in(&std::env::temp_dir()).unwrap();
+            let seen = replay(
+                root,
+                since,
+                Duration::from_secs(10),
+                MAX_CHANGES,
+                marker_now,
+                &progress,
+            )
+            .unwrap_or_default()
+            .iter()
+            .any(|e| e.path == marker.as_os_str().as_bytes());
             if seen {
                 std::fs::remove_file(&marker).unwrap();
                 return;

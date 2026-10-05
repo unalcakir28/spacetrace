@@ -45,9 +45,11 @@ pub struct Base<'a> {
     /// wrote it — or why it cannot be a base whatever the journal says (an
     /// imported snapshot, one dated in the future, one with no cursor).
     pub journal: Result<String, Fallback>,
-    /// Loads its tree, flags included, and checks it. Called only once the
-    /// journal has answered, so a scan that falls back never pays for
-    /// reading a snapshot it will not use.
+    /// Loads its tree, flags included, and checks it. Called once the stored
+    /// cursor has passed every check and before the journal is asked, while
+    /// the journal's barrier makes its way (see `Journal::barrier`): a scan
+    /// whose replay then falls back has paid for reading a snapshot it does
+    /// not use, and every incremental scan saves the barrier's wait.
     pub load: LoadBase<'a>,
 }
 
@@ -146,19 +148,11 @@ fn try_plan(
         return Err(Refusal::Cancelled);
     }
 
-    let asked = std::time::Instant::now();
-    let budget = budget_for(&old);
-    let changes = journal
-        .replay(root, old.position, budget, progress)
-        .map_err(|why| match why {
-            NoAnswer::Deadline => Refusal::Fallback(Fallback::Deadline),
-            NoAnswer::Failed => Refusal::Fallback(Fallback::ReplayFailed),
-            NoAnswer::TooMany => Refusal::Fallback(Fallback::TooManyChanges),
-            NoAnswer::Cancelled => Refusal::Cancelled,
-        })?;
-    let replay_ms = asked.elapsed().as_millis() as u64;
-    let mut dirty = Dirty::from_changes(root, &changes)?;
-    dirty.mark_mounted(root, mounted);
+    // Marked before the base is loaded: the mark takes fseventsd about
+    // 300 ms to pass on live, and the load is time the rescan spends anyway
+    // (see `fsevents::Marker`). The price is a load paid for by a scan whose
+    // replay then falls back.
+    let barrier = journal.barrier(root).map_err(refusal)?;
 
     let loading = std::time::Instant::now();
     let mut tree = (base.load)(progress)?;
@@ -172,6 +166,15 @@ fn try_plan(
     }
     tree.prepare_as_base();
     let load_ms = loading.elapsed().as_millis() as u64;
+
+    let asked = std::time::Instant::now();
+    let budget = budget_for(&old);
+    let changes = journal
+        .replay(root, old.position, budget, barrier, progress)
+        .map_err(refusal)?;
+    let replay_ms = asked.elapsed().as_millis() as u64;
+    let mut dirty = Dirty::from_changes(root, &changes)?;
+    dirty.mark_mounted(root, mounted);
 
     Ok(Plan::Incremental {
         report: Incremental {
@@ -191,6 +194,19 @@ fn try_plan(
             dirs_listed: AtomicU64::new(0),
         }),
     })
+}
+
+/// Why the journal gave no answer, as the rescan acts on it.
+fn refusal(why: NoAnswer) -> Refusal {
+    match why {
+        NoAnswer::Deadline => Refusal::Fallback(Fallback::Deadline),
+        NoAnswer::Failed => Refusal::Fallback(Fallback::ReplayFailed),
+        NoAnswer::TooMany => Refusal::Fallback(Fallback::TooManyChanges),
+        NoAnswer::Lost => Refusal::Fallback(Fallback::EventsLost),
+        NoAnswer::NoBarrier => Refusal::Fallback(Fallback::NoBarrier),
+        NoAnswer::MarkerVolume => Refusal::Fallback(Fallback::MarkerVolume),
+        NoAnswer::Cancelled => Refusal::Cancelled,
+    }
 }
 
 /// The least a replay may spend, however quick the last full scan was.
@@ -1080,6 +1096,22 @@ mod tests {
     fn a_cursor_for_another_volume_or_a_recreated_journal() {
         let got = rescan_with_cursor(|c| c.volume = "00000000-0000-0000-0000-000000000000".into());
         assert_eq!(got, Rescan::Fallback(Fallback::OtherVolume));
+    }
+
+    /// A replay that cannot write its marker cannot know its answer reaches
+    /// the present, and the snapshot says that was why it walked.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_replay_without_its_marker_is_a_named_fallback() {
+        let nowhere = tempfile::tempdir().unwrap().path().join("gone");
+        crate::fsevents::MARKER_BASE.set(Some(nowhere));
+        let got = rescan_with_cursor(|_| ());
+        crate::fsevents::MARKER_BASE.set(None);
+        assert_eq!(got, Rescan::Fallback(Fallback::NoBarrier));
+        assert_eq!(
+            crate::RescanKind::parse(&crate::RescanKind::Fallback(Fallback::NoBarrier).record()),
+            Some(crate::RescanKind::Fallback(Fallback::NoBarrier))
+        );
     }
 
     /// No budget left, no answer: the scan walks instead.

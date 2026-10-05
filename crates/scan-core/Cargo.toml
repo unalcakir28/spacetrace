@@ -17,5 +17,9 @@ tempfile.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
+# The FSEvents replay's private marker directory (`fsevents::Marker`).
+[target.'cfg(target_os = "macos")'.dependencies]
+tempfile.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

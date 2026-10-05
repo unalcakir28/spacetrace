@@ -442,20 +442,22 @@ fn an_apfs_clone_made_across_the_boundary() {
     bench.rescan_matches_full();
 }
 
-/// The two sharing cases above, end to end on a fresh APFS volume of the
-/// test's own, rather than on whatever the Data volume's history holds.
+/// A root on a volume of its own — an APFS image here, an external disk in
+/// use — is not rescanned incrementally: the replay's marker sits in the
+/// temporary directory, on the Data volume, and its order against changes
+/// on another volume was measured not to hold (`fsevents::Marker` in
+/// scan-core). The rescan says so, and is still the full scan.
 ///
-/// Whether either is right rests on FSEvents reporting the *source* of the
-/// new name, which nothing documents. Measured, on the Data volume and on
-/// such an image alike: `ln a/f b/f2` reports `b/f2` (created, hardlink)
-/// and the directory `a` (created, inode metadata, xattr), so `a` is read
-/// in full and `f`'s new link count is seen; `cp -c c/g b/g2` reports
-/// `b/g2` and `c/g` itself as `ItemCloned`, so `c` is read and `g` joins
-/// the family. Without either report the copied side would keep its old
-/// charge and the new name claim the bytes again — counted twice. This test
-/// is what would notice FSEvents stop saying so.
+/// The two sharing cases above are the fixture, because this image is where
+/// they were once checked end to end. Both rest on FSEvents reporting the
+/// *source* of the new name, which nothing documents. Measured, on the
+/// Data volume and on such an image alike:
+/// `ln a/f b/f2` reports `b/f2` (created, hardlink) and the directory `a`
+/// (created, inode metadata, xattr); `cp -c c/g b/g2` reports `b/g2` and
+/// `c/g` itself as `ItemCloned`. The tests above hold that on the Data
+/// volume.
 #[test]
-fn sharing_made_across_the_boundary_on_a_fresh_apfs_volume() {
+fn a_root_on_another_volume_than_the_marker_falls_back() {
     let scratch = tempfile::tempdir().unwrap();
     let mountpoint = scratch.path().join("mnt");
     fs::create_dir_all(&mountpoint).unwrap();
@@ -505,8 +507,7 @@ fn sharing_made_across_the_boundary_on_a_fresh_apfs_volume() {
         &bench.root.join("alpha/m2/leaf/big.bin"),
         &bench.root.join("delta/m0/leaf/copy.bin"),
     );
-    let report = bench.rescan_matches_full();
-    assert!(report.entries_reused > 0, "{report:?}");
+    falls_back(&bench, Fallback::MarkerVolume);
     let (_, stats) = bench.full();
     assert_eq!(stats.hardlinks_deduped, 1, "the fixture is what it claims");
     assert_eq!(stats.clones_deduped, 1, "the fixture is what it claims");

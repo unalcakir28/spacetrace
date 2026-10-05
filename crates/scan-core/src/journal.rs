@@ -159,11 +159,17 @@ pub enum Fallback {
     /// The previous scan is older than the journal can be trusted to cover
     /// (`rescan::MAX_CURSOR_AGE`).
     TooOld,
+    /// The replay could not write the marker that proves its answer reaches
+    /// the present — an unwritable temporary directory, say.
+    NoBarrier,
+    /// The root is on another volume than the replay's marker, where the
+    /// marker cannot vouch for the order of its changes — an external disk.
+    MarkerVolume,
 }
 
 impl Fallback {
     /// Every reason, for reading a code back.
-    const ALL: [Fallback; 14] = [
+    const ALL: [Fallback; 16] = [
         Fallback::NoCursor,
         Fallback::ImportedBase,
         Fallback::FutureBase,
@@ -178,6 +184,8 @@ impl Fallback {
         Fallback::ReplayFailed,
         Fallback::TooManyChanges,
         Fallback::TooOld,
+        Fallback::NoBarrier,
+        Fallback::MarkerVolume,
     ];
 
     /// The one table: each reason's stable code and the sentence a person
@@ -221,6 +229,14 @@ impl Fallback {
             Fallback::TooOld => (
                 "too-old",
                 "the previous scan is older than the journal is trusted to cover",
+            ),
+            Fallback::NoBarrier => (
+                "no-barrier",
+                "the replay could not write the marker that closes it",
+            ),
+            Fallback::MarkerVolume => (
+                "marker-volume",
+                "the root is on another volume than the replay's marker",
             ),
         }
     }
@@ -285,6 +301,11 @@ pub(crate) enum ChangeKind {
     Lost,
 }
 
+/// What [`Journal::barrier`] hands to [`Journal::replay`]: the journal's own,
+/// opaque to the rescan.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) struct Barrier(pub(crate) Box<dyn std::any::Any>);
+
 /// Why a journal produced no answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -297,6 +318,13 @@ pub(crate) enum NoAnswer {
     Failed,
     /// More changed paths than an incremental scan is worth holding.
     TooMany,
+    /// The journal said it lost track of the stretch the answer needs.
+    Lost,
+    /// The marker that closes a replay could not be written, so the answer
+    /// could not be known to reach the present.
+    NoBarrier,
+    /// The root is on another volume than the marker could be written on.
+    MarkerVolume,
 }
 
 /// A volume change journal, as a rescan uses one.
@@ -328,14 +356,22 @@ pub(crate) trait Journal: Sync {
     /// The newest position the journal has issued.
     fn position(&self) -> u64;
 
-    /// Everything that changed under `root` after position `since`, or why
-    /// there is no answer within `budget`. Counts the wait in
-    /// `progress.journal_ms` (invariant 8) and stops when cancelled.
+    /// Mark the present, for [`Journal::replay`] of `root` to wait for: its
+    /// answer then holds every change finished before this call. Asked for
+    /// before the base is loaded, so that the mark's way through the journal
+    /// runs while the base loads rather than after it.
+    fn barrier(&self, root: &Path) -> Result<Barrier, NoAnswer>;
+
+    /// Everything that changed under `root` after position `since` and up
+    /// to `barrier` at least, or why there is no answer within `budget`.
+    /// Counts the wait in `progress.journal_ms` (invariant 8) and stops when
+    /// cancelled.
     fn replay(
         &self,
         root: &Path,
         since: u64,
         budget: Duration,
+        barrier: Barrier,
         progress: &ScanProgress,
     ) -> Result<Vec<Change>, NoAnswer>;
 }

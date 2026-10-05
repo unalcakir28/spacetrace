@@ -80,7 +80,10 @@ reports the stall and the directory it is waiting on.
 On macOS, a scheduled scan starts from the root's last snapshot and rereads
 only what FSEvents says changed since (`incremental`, on by default). Any doubt
 — a lost journal, changed options, a replay that would take longer than the
-last full scan did — means a full scan instead. Each snapshot records which it
+last full scan did — means a full scan instead. So does a root on another
+volume than the agent's temporary directory, such as an external disk: the
+replay proves it is complete with a marker file written there, and that
+proof was measured not to hold across volumes. Each snapshot records which it
 was in a side table, `rescan_state`, that stays on the agent: `full`,
 `incremental`, or `fallback:<reason>`. The schema version does not change, and
 a pushed snapshot carries none of it.
@@ -132,7 +135,7 @@ failing silently.
 | `roots[].mount_timeout` | `60` | Seconds a mounted filesystem under this root gets to answer before it is recorded as unreadable; `0` waits forever |
 | `roots[].disk` | `"auto"` | `"hdd"` walks with one thread and, on Linux, asks for entries in inode order; `"ssd"` walks at the default pace; `"auto"` detects spinning disks on Linux and walks everything else as `"ssd"`. An explicit `threads` still wins. The CLI's `--disk` |
 | `roots[].keep` | — | Snapshots of this root to retain; unset keeps all |
-| `roots[].incremental` | `true` | Start from this root's last snapshot and reread only what the filesystem journal says changed. macOS (APFS) only; elsewhere every scan is full. `spacetrace-agent scan --full` overrides it for one run |
+| `roots[].incremental` | `true` | Start from this root's last snapshot and reread only what the filesystem journal says changed. macOS (APFS) only, and only on the volume of the temporary directory; elsewhere every scan is full. `spacetrace-agent scan --full` overrides it for one run |
 
 The token is resolved in this order: `server.token`, `server.token_file`, then
 the `SPACETRACE_TOKEN` environment variable. `serve` refuses to start without
