@@ -1320,10 +1320,16 @@ mod tests {
         every_name.dedupe_hardlinks = false;
         let mut tree = fresh(model.root(), &every_name);
         let mut charged = model.charged_dirs();
-        let names: Vec<NodeId> = tree.iter().filter(|&n| hardlinked(&tree, n)).collect();
-        for n in names {
+        // Which names are hardlinked comes from the deduplicating scan, not
+        // from the link count in this one: on Windows a scan that does not
+        // deduplicate reads no link count at all (`FileIdentity::Skipped`),
+        // and every name in it says 1.
+        let names: Vec<(NodeId, Inode)> = tree
+            .iter()
+            .filter_map(|n| Some((n, *inode_at.get(&tree.path(n))?)))
+            .collect();
+        for (n, inode) in names {
             let path = tree.path(n);
-            let inode = inode_at[&path];
             if charged.get(&inode).map(PathBuf::as_path) == path.parent() {
                 charged.remove(&inode);
                 continue;
