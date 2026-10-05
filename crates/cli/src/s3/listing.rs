@@ -354,6 +354,22 @@ struct Job<'a> {
     requests: &'a AtomicU64,
 }
 
+/// Take `n` from `budget` unless that would go below zero. `fetch_update`
+/// spelled out: newer toolchains deprecate it, and its replacement
+/// `try_update` is newer than the workspace's `rust-version`.
+fn take_from(budget: &AtomicUsize, n: usize) -> bool {
+    let mut left = budget.load(Ordering::Relaxed);
+    loop {
+        let Some(after) = left.checked_sub(n) else {
+            return false;
+        };
+        match budget.compare_exchange_weak(left, after, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return true,
+            Err(now) => left = now,
+        }
+    }
+}
+
 impl Job<'_> {
     /// Expand folders level by level until there are enough to share out.
     fn discover(&self, client: &Client) -> Result<Vec<Item>> {
@@ -446,11 +462,7 @@ impl Job<'_> {
                     }
                 }
                 let own = page.objects.len();
-                let within_budget = budget
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                        left.checked_sub(own)
-                    })
-                    .is_ok();
+                let within_budget = take_from(budget, own);
                 merge_page(&mut items, page);
                 taken += own;
                 if !within_budget || taken > MAX_DISCOVERED_OBJECTS {
