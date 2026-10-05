@@ -312,7 +312,13 @@ fn replay(
     #[cfg(not(test))]
     let slow_start = Duration::ZERO;
 
-    let sink = Arc::new(Sink::new(cap, root, &marker));
+    #[allow(unused_mut)]
+    let mut sink = Sink::new(cap, root, &marker);
+    #[cfg(test)]
+    {
+        sink.withhold_history_done = WITHHOLD_HISTORY_DONE.get();
+    }
+    let sink = Arc::new(sink);
     #[cfg(test)]
     LAST_REFS.set(Some(Arc::clone(&sink.refs)));
     let bytes = root.as_os_str().as_bytes();
@@ -573,6 +579,13 @@ thread_local! {
     /// handed to the one that starts the stream.
     static SLOW_START: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
 
+    /// Whether this thread's replays ignore `HistoryDone`, so that they run
+    /// to their budget whatever the history holds: how a test reaches a
+    /// deadline on any machine. A cursor far back does not — a fresh VM has
+    /// issued too few ids to go far back from, and reads all of its history
+    /// inside the budget. Read by the asking thread, which is the rescan's.
+    pub(crate) static WITHHOLD_HISTORY_DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
     /// The reference counts of the last sink a replay on this thread made.
     static LAST_REFS: std::cell::RefCell<Option<Arc<Refs>>> = const { std::cell::RefCell::new(None) };
 
@@ -684,6 +697,9 @@ struct Sink {
     marker_dir_outside: bool,
     #[cfg(test)]
     refs: Arc<Refs>,
+    /// The test hook [`WITHHOLD_HISTORY_DONE`], as the asking thread had it.
+    #[cfg(test)]
+    withhold_history_done: bool,
 }
 
 #[derive(Default)]
@@ -725,6 +741,8 @@ impl Sink {
                 .starts_with(root.canonicalize().as_deref().unwrap_or(root)),
             #[cfg(test)]
             refs: Arc::default(),
+            #[cfg(test)]
+            withhold_history_done: false,
         }
     }
 
@@ -739,6 +757,10 @@ impl Sink {
     /// One record, as the callback hands it over.
     fn record(&self, state: &mut SinkState, path: &[u8], flags: u32) {
         if flags & flag::HISTORY_DONE != 0 {
+            #[cfg(test)]
+            if self.withhold_history_done {
+                return;
+            }
             state.history_done = true;
             return;
         }
@@ -1123,6 +1145,7 @@ pub(crate) mod tests {
             marker_dir: marker_dir.as_bytes().to_vec(),
             marker_dir_outside: outside_root,
             refs: Arc::default(),
+            withhold_history_done: false,
         }
     }
 
@@ -1565,30 +1588,34 @@ pub(crate) mod tests {
         );
     }
 
-    /// No budget, no answer: the caller falls back to walking.
+    /// No budget, no answer: the caller falls back to walking. The history
+    /// is withheld, so the answer cannot come before the first look at the
+    /// clock however little history this machine has.
     #[test]
     fn a_replay_with_no_budget_has_no_answer() {
         let dir = tempfile::tempdir().unwrap();
         let progress = ScanProgress::default();
-        let since = current_event_id().saturating_sub(1_000_000);
-        assert_eq!(
-            ask(dir.path(), since, Duration::ZERO, &progress).unwrap_err(),
-            NoAnswer::Deadline
-        );
+        WITHHOLD_HISTORY_DONE.set(true);
+        let got = ask(dir.path(), current_event_id(), Duration::ZERO, &progress);
+        WITHHOLD_HISTORY_DONE.set(false);
+        assert_eq!(got.unwrap_err(), NoAnswer::Deadline);
     }
 
-    /// A cancelled scan does not sit out the replay's budget.
+    /// A cancelled scan does not sit out the replay's budget waiting for
+    /// the answer. On the sink, without a stream: a real replay cancelled
+    /// before it starts walks away from its stream's start, and the start
+    /// left running would refuse every other test's replay meanwhile
+    /// (`HANGING`) — that case runs in a process of its own
+    /// (`a_scan_cancelled_during_the_start_stops_at_once`).
     #[test]
     fn a_cancelled_scan_stops_waiting_for_the_journal() {
-        let dir = tempfile::tempdir().unwrap();
+        let sink = sink_for("/t/m", true);
         let progress = ScanProgress::default();
         progress.cancel();
-        let started = Instant::now();
-        assert_eq!(
-            ask(dir.path(), 1, Duration::from_secs(60), &progress).unwrap_err(),
-            NoAnswer::Cancelled
-        );
-        assert!(started.elapsed() < Duration::from_secs(5));
+        let now = Instant::now();
+        let got = sink.wait(now, now, Duration::from_secs(60), &progress);
+        assert_eq!(got, Err(NoAnswer::Cancelled));
+        assert!(now.elapsed() < Duration::from_secs(1));
     }
 
     /// A scan queued behind another root's replay is still a scan the user
@@ -1676,6 +1703,8 @@ pub(crate) mod tests {
         let marker = root.join(format!(".settle-{since}"));
         std::fs::write(&marker, b"").unwrap();
         let progress = ScanProgress::default();
+        // Whatever this thread's test hooks say: settling is not under test.
+        let withheld = WITHHOLD_HISTORY_DONE.replace(false);
         let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
             // Not `Marker::new`: a test may have pointed that thread's
@@ -1694,6 +1723,7 @@ pub(crate) mod tests {
             .any(|e| e.path == marker.as_os_str().as_bytes());
             if seen {
                 std::fs::remove_file(&marker).unwrap();
+                WITHHOLD_HISTORY_DONE.set(withheld);
                 return;
             }
             std::thread::sleep(Duration::from_millis(20));

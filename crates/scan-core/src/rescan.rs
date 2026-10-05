@@ -998,8 +998,10 @@ mod tests {
     fn a_fallback_hands_on_the_walk_s_time_not_the_wait_s() {
         const BUDGET: Duration = Duration::from_millis(400);
         BUDGET_OVERRIDE.set(Some(BUDGET));
-        // Far enough back that no replay finishes inside the budget.
-        let stats = rescan_stats_with_cursor(|c| c.position -= 30_000_000);
+        // No replay finishes inside the budget, on any machine.
+        crate::fsevents::WITHHOLD_HISTORY_DONE.set(true);
+        let stats = rescan_stats_with_cursor(|_| ());
+        crate::fsevents::WITHHOLD_HISTORY_DONE.set(false);
         BUDGET_OVERRIDE.set(None);
         assert_eq!(stats.rescan, Rescan::Fallback(Fallback::Deadline));
         assert!(stats.duration_ms >= BUDGET.as_millis() as u64);
@@ -1120,7 +1122,11 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn a_replay_past_its_budget_is_abandoned() {
         BUDGET_OVERRIDE.set(Some(Duration::ZERO));
+        // An answer quicker than the first look at the clock is possible
+        // where the history is short; withheld, it cannot come.
+        crate::fsevents::WITHHOLD_HISTORY_DONE.set(true);
         let got = rescan_with_cursor(|_| ());
+        crate::fsevents::WITHHOLD_HISTORY_DONE.set(false);
         BUDGET_OVERRIDE.set(None);
         assert_eq!(got, Rescan::Fallback(Fallback::Deadline));
     }
