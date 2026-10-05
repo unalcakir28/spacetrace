@@ -147,7 +147,7 @@ The layout engine stayed here (`crates/treemap`), because it is core and testabl
 - [x] Remote source flow: download a snapshot from the agent, browse it as if local
 - [x] Diff view (comparison table for two snapshots)
 - [x] Node ids tied to generation — an id belonging to an old tree is rejected
-- [~] **Windows MFT fast path** — written, behind admin, awaiting Windows CI (→ **B4**)
+- [x] **Windows MFT fast path** — elevated whole-volume NTFS; Windows CI's differential test passes (→ **B4**)
 - [x] macOS Full Disk Access onboarding screen — banner on the welcome screen,
       button in the settings panel, six usage descriptions in `Info.plist`
 - [x] Timeline view (a target's full history) — **C3**, released in desktop
@@ -563,8 +563,9 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       - [ ] Verify on a real HDD and on btrfs over a spinning disk.
       *Competitor:* gdu `--sequential`; QDirStat sorts entries by inode
       before stat'ing them.
-- [~] **B4 Windows MFT fast path** — written *(5 October 2026)*, **awaiting
-      Windows CI**; no changelog entry until it passes. Raw MFT, not USN (no
+- [x] **B4 Windows MFT fast path** — done *(5 October 2026)*: Windows CI's
+      differential test passes (`the_table_and_the_walk_agree_entry_for_entry`
+      on the runner's C:, `SPACETRACE_REQUIRE_MFT`). Raw MFT, not USN (no
       sizes). The parser in `scan-core/src/ntfs/` reads any `Read + Seek`
       and is tested entry for entry against three ntfs-3g images
       (`scripts/ntfs-fixtures.sh`, committed as `tests/fixtures/ntfs.tar.gz`)
@@ -580,10 +581,7 @@ shortfall is a competitive disadvantage; a wrong number refutes the product itse
       administrator; everything else — no elevation, ReFS, FAT, network,
       a geometry or serial mismatch, more than 1% bad records — walks.
       `--no-mft` / `ScanOptions::read_mft`.
-      **Open:** the `volume.rs` differential test (the runner's C:, walk vs
-      table, field for field; CI sets `SPACETRACE_REQUIRE_MFT`) has to
-      pass — it settles directory `AllocationSize`, the 8-byte rounding of
-      in-record data and WOF. Then: speed on a real disk; subfolder roots
+      **Open:** speed on a real disk; subfolder roots
       (the subtree code works, the cost is reading the whole table);
       a fallback reason the user can see (today a fallback looks like the
       table except in time taken); read-ahead (read and parse do not

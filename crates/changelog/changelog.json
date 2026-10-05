@@ -172,6 +172,16 @@
             "it": "`spacetrace scan --disk auto|ssd|hdd` regola il ritmo della scansione sul disco sottostante. `hdd` usa un solo thread e, su Linux, chiede le voci di ogni cartella nell'ordine in cui si trovano sul disco; `auto`, il valore predefinito, riconosce i dischi rotanti su Linux e scansiona tutto il resto come prima. Su un disco rotante simulato una scansione a freddo ha richiesto 0,9 s invece di 11,5 s. `--json` riporta il ritmo (`disk`, `threads`, `disk_decided`). L'agente accetta la stessa impostazione per radice come `disk`.",
             "tr": "`spacetrace scan --disk auto|ssd|hdd` taramanın hızını alttaki diske göre ayarlıyor. `hdd` tek thread'le tarıyor ve Linux'ta her klasörün girdilerini diskteki sıralarıyla istiyor; varsayılan `auto`, Linux'ta dönen diskleri algılıyor ve geri kalan her şeyi eskisi gibi tarıyor. Simüle edilmiş bir dönen diskte soğuk bir tarama 11,5 s yerine 0,9 s sürdü. `--json` hızı bildiriyor (`disk`, `threads`, `disk_decided`). Ajan aynı ayarı kök başına `disk` olarak alıyor."
           }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Unter Windows liest ein Scan eines ganzen NTFS-Volumes, der als Administrator läuft, die Master File Table des Volumes in einem einzigen sequenziellen Durchgang, statt jede Datei zu öffnen. Das Ergebnis ist Eintrag für Eintrag dasselbe, was die CI auf einem echten Volume prüft. Alles andere — ein Ordner unterhalb der Wurzel des Volumes, keine Administratorrechte, ReFS, FAT, ein Netzlaufwerk — wird wie bisher durchlaufen. `--no-mft` durchläuft immer.",
+            "en": "On Windows, a scan of a whole NTFS volume run as administrator reads the volume's master file table in one sequential pass instead of opening every file. The answer is the same entry for entry, which CI checks on a real volume. Anything else — a folder below the volume's root, no elevation, ReFS, FAT, a network drive — walks as before. `--no-mft` always walks.",
+            "fr": "Sous Windows, l'analyse d'un volume NTFS entier lancée en administrateur lit la table de fichiers maître (MFT) du volume en une seule passe séquentielle, au lieu d'ouvrir chaque fichier. Le résultat est identique entrée par entrée, ce que la CI vérifie sur un vrai volume. Tout le reste — un dossier sous la racine du volume, sans droits d'administrateur, ReFS, FAT, un lecteur réseau — est parcouru comme avant. `--no-mft` parcourt toujours.",
+            "it": "Su Windows, la scansione di un intero volume NTFS eseguita come amministratore legge la master file table (MFT) del volume in un solo passaggio sequenziale, invece di aprire ogni file. Il risultato è identico voce per voce, cosa che la CI verifica su un volume reale. Tutto il resto — una cartella sotto la radice del volume, senza privilegi di amministratore, ReFS, FAT, un'unità di rete — viene percorso come prima. `--no-mft` percorre sempre.",
+            "tr": "Windows'ta yönetici olarak çalıştırılan tüm bir NTFS biriminin taraması, her dosyayı açmak yerine birimin ana dosya tablosunu (MFT) tek bir sıralı geçişte okuyor. Sonuç girdi girdi aynı; CI bunu gerçek bir birimde denetliyor. Geri kalan her şey — birimin kökünün altındaki bir klasör, yönetici yetkisi yokken, ReFS, FAT, ağ sürücüsü — eskisi gibi taranıyor. `--no-mft` her zaman eski yolla tarıyor."
+          }
         }
       ],
       "releases": [
@@ -821,6 +831,16 @@
             "fr": "Sous Linux, les disques rotatifs sont détectés et analysés avec un seul thread, les entrées de chaque dossier dans l'ordre où elles se trouvent sur le disque : une analyse à froid d'un disque rotatif simulé a pris 0,9 s au lieu de 11,5 s.",
             "it": "Su Linux i dischi rotanti vengono riconosciuti e scansionati con un solo thread, le voci di ogni cartella nell'ordine in cui si trovano sul disco: una scansione a freddo di un disco rotante simulato ha richiesto 0,9 s invece di 11,5 s.",
             "tr": "Linux'ta dönen diskler algılanıyor ve tek thread'le, her klasörün girdileri diskteki sıralarıyla taranıyor: simüle edilmiş bir dönen diskin soğuk taraması 11,5 s yerine 0,9 s sürdü."
+          }
+        },
+        {
+          "kind": "performance",
+          "text": {
+            "de": "Unter Windows liest ein Scan eines ganzen NTFS-Volumes, wenn die App als Administrator läuft, die Master File Table des Volumes, statt jede Datei zu öffnen, mit demselben Ergebnis. Jeder andere Scan läuft wie bisher.",
+            "en": "On Windows, when the app runs as administrator, a scan of a whole NTFS volume reads the volume's master file table instead of opening every file, with the same answer. Every other scan walks as before.",
+            "fr": "Sous Windows, quand l'application tourne en administrateur, l'analyse d'un volume NTFS entier lit la table de fichiers maître (MFT) du volume au lieu d'ouvrir chaque fichier, avec le même résultat. Toute autre analyse se fait comme avant.",
+            "it": "Su Windows, quando l'app è eseguita come amministratore, la scansione di un intero volume NTFS legge la master file table (MFT) del volume invece di aprire ogni file, con lo stesso risultato. Ogni altra scansione procede come prima.",
+            "tr": "Windows'ta uygulama yönetici olarak çalışırken tüm bir NTFS biriminin taraması, her dosyayı açmak yerine birimin ana dosya tablosunu (MFT) okuyor; sonuç aynı. Diğer bütün taramalar eskisi gibi."
           }
         }
       ],

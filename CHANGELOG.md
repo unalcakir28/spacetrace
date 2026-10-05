@@ -32,6 +32,7 @@ because anyone can install them.
 - Saving a snapshot takes about 17% less time: the content hash is computed while the rows are written, not in a second pass. The agent's `/status` no longer reports a `checksumming` phase.
 - Scans on Linux are faster: directories are read in large batches and each entry is asked relative to its directory, without per-entry allocations. The static build the agent ships as gains the most — 1.3 to 3.4 times faster on the trees measured — and glibc builds 6 to 14%.
 - On XFS filesystems holding reflinked files, scans with several threads are no longer slower than with one: the filesystem is asked about shared blocks one thread at a time, in runs. A tree of 100,000 reflinked files took 200 ms instead of 855 ms warm, and 248 ms instead of 971 ms cold. XFS without reflinked files, btrfs and ext4 are unchanged.
+- On Windows, a scan of a whole NTFS volume run as administrator reads the volume's master file table in one sequential pass instead of opening every file. The answer is the same entry for entry, which CI checks on a real volume. Anything else — a folder below the volume's root, no elevation, ReFS, FAT, a network drive — walks as before. `--no-mft` always walks.
 
 ### Fixed
 
